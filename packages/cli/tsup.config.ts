@@ -6,7 +6,7 @@ import { defineConfig } from "tsup";
 // installed from the package.json `dependencies`. tsup preserves the entry's `#!/usr/bin/env node`
 // shebang and marks the output executable.
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/cli.ts"],
   format: ["esm"],
   platform: "node",
   target: "node22",

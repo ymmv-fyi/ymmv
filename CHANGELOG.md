@@ -2,6 +2,14 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [0.1.1] - 2026-06-29
+
+### Fixed
+- **`ymmv` did nothing on Linux, macOS, and WSL.** A global install (`npm i -g ymmv-cli`) and
+  `npx ymmv-cli` install the binary as a symlink, which tripped a faulty "am I being run directly?"
+  check and made the command exit silently. It now runs no matter how it's installed or invoked.
+  Windows was unaffected.
+
 ## [0.1.0] - 2026-06-29
 
 ### Added
@@ -20,4 +28,5 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.1.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.0
