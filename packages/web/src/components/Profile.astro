@@ -22,7 +22,7 @@ const HandleTag = example ? "p" : "h1";
 const GroupTag = example ? "p" : "h2";
 ---
 
-<div class="url">ymmv.fyi/<b>{handle}</b></div>
+<div class="url">{example ? "ymmv.fyi" : <a href="/">ymmv.fyi</a>}/<b>{handle}</b></div>
 <HandleTag class="handle">{handle}</HandleTag>
 
 {
@@ -90,3 +90,8 @@ const GroupTag = example ? "p" : "h2";
 {!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
 
 <div class="foot">$ <b>npx ymmv-cli {handle}</b></div>
+{!example && (
+  <p class="cta">
+    make yours → <b>npx ymmv-cli</b>
+  </p>
+)}

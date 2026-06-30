@@ -1,5 +1,6 @@
 ---
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import InstallCommand from "../components/InstallCommand.astro";
 import Layout from "../components/Layout.astro";
 import ProfileExample from "../components/Profile.astro";
 
@@ -35,11 +36,13 @@ const exampleProfile: Profile = {
       CLI, then{" "}
       <b>diff it against anyone's</b>.
     </p>
-    <div class="install"><span class="prompt">$ </span>npx ymmv-cli</div>
+    <InstallCommand />
   </section>
 
   <h2 class="example-label">A profile looks like this</h2>
-  <ProfileExample profile={exampleProfile} example />
+  <div class="sample">
+    <ProfileExample profile={exampleProfile} example />
+  </div>
 
   <footer class="site-foot">
     <div class="fg">
@@ -67,6 +70,8 @@ const exampleProfile: Profile = {
     <div class="fg">
       <span class="g">data</span>
       <div class="fl"><code>GET /api/v1/u/&lt;handle&gt;</code></div>
+    </div>
+    <div class="fg">
       <span class="g">source</span>
       <div class="fl">
         <a href="https://github.com/ymmv-fyi/ymmv">github.com/ymmv-fyi/ymmv</a>
