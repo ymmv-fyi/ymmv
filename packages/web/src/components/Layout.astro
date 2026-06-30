@@ -1,0 +1,94 @@
+---
+// The page shell: head + design-system CSS + self-hosted fonts + the dark-primary theme system.
+// Every page renders inside this. User-controlled text is passed through Astro's auto-escaping
+// {expression} interpolation — NEVER set:html on a profile field.
+import "../styles/fonts.css";
+import "../styles/ymmv.css";
+
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = "Terminal-native developer tool-stack profiles. Your mileage may vary." } =
+  Astro.props;
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {/* Set the theme before first paint (stored choice > system > dark) to avoid a flash. */}
+    <script is:inline>
+      (function () {
+        try {
+          var stored = localStorage.getItem("ymmv-theme");
+          var theme =
+            stored || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {}
+      })();
+    </script>
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {/* Preload the fonts used above the fold so the typeset readout paints fast. */}
+    <link
+      rel="preload"
+      href="/fonts/cabinet-grotesk-800.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/general-sans-500.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link rel="preload" href="/fonts/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+  </head>
+  <body>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark or light theme">
+      ◐ theme
+    </button>
+    <main class="page">
+      <slot />
+    </main>
+    <script is:inline>
+      (function () {
+        var btn = document.getElementById("theme-toggle");
+        if (!btn) return;
+        function current() {
+          return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+        }
+        function syncPressed() {
+          // aria-pressed=true ⇒ the non-default (light) theme is active
+          btn.setAttribute("aria-pressed", String(current() === "light"));
+        }
+        syncPressed(); // expose the toggle state at load, not only after the first click
+        btn.addEventListener("click", function () {
+          var next = current() === "dark" ? "light" : "dark";
+          document.documentElement.dataset.theme = next;
+          try {
+            localStorage.setItem("ymmv-theme", next);
+          } catch (e) {}
+          syncPressed();
+        });
+        try {
+          var mq = matchMedia("(prefers-color-scheme: light)");
+          mq.addEventListener("change", function (e) {
+            if (!localStorage.getItem("ymmv-theme")) {
+              document.documentElement.dataset.theme = e.matches ? "light" : "dark";
+              syncPressed();
+            }
+          });
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>

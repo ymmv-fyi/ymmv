@@ -1,0 +1,85 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ymmv-dev",
+  // account_id is intentionally NOT committed - it's supplied at deploy via the CLOUDFLARE_ACCOUNT_ID
+  // secret (CI). Local `wrangler dev` is local-only and needs no account; remote ops read the env.
+  "compatibility_date": "2026-06-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // Real D1, created via `wrangler d1 create ymmv` (region WNAM). The top-level config
+  // is the DEV/TEST/local surface: local `wrangler dev`, the Playwright e2e harness, and Vitest all
+  // use miniflare's throwaway SQLite, so this id is inert there. A bare deploy goes to a SEPARATE
+  // `ymmv-dev` Worker (name above) — NOT the prod Worker. Prod + staging go through `CLOUDFLARE_ENV`
+  // + `--env` (CI bakes them). CAVEAT: a bare `wrangler deploy`/`--remote` still BINDS this shared
+  // prod D1, so always pass `CLOUDFLARE_ENV=...` for remote work — never bare-deploy against prod.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ymmv",
+      "database_id": "343e52cd-ab28-4ab1-9516-fb949ad71e1a"
+    }
+  ],
+  // Cloudflare built-in rate limiting (Workers binding half; the WAF rule is zone config, see
+  // infra/waf-ratelimit.sh). RL_WRITE caps writes (POST/DELETE /api/v1/profile) per github_id; the
+  // handler keys on the authenticated identity (src/lib/rate-limit.ts). period must be 10 or 60.
+  // Bindings are NOT inherited by named environments, so each env below redefines DB + RL_WRITE.
+  "ratelimits": [
+    {
+      "name": "RL_WRITE",
+      "namespace_id": "1001",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
+  "env": {
+    // Production — the live ymmv.fyi Worker. Build + deploy: `CLOUDFLARE_ENV=production astro build`
+    // then `wrangler deploy` (env baked at build, no --env). Migrations read THIS source config:
+    // `wrangler d1 migrations apply ymmv --env production --remote`.
+    "production": {
+      "name": "ymmv",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ymmv",
+          "database_id": "343e52cd-ab28-4ab1-9516-fb949ad71e1a"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "RL_WRITE",
+          "namespace_id": "1001",
+          "simple": { "limit": 60, "period": 60 }
+        }
+      ],
+      // Root URLs: apex + www served from the Worker via Cloudflare custom domains. Wrangler
+      // provisions these on deploy (the zone ymmv.fyi is already active), so this declaratively
+      // wires the web DNS. Needs an API token with DNS edit.
+      "routes": [
+        { "pattern": "ymmv.fyi", "custom_domain": true },
+        { "pattern": "www.ymmv.fyi", "custom_domain": true }
+      ]
+    },
+    // Staging — the pre-prod rehearsal target (the tagged-release dry-run deploys here first). Lives
+    // on workers.dev (no custom routes): https://ymmv-staging.<account-subdomain>.workers.dev.
+    // D1 provisioned via `wrangler d1 create ymmv-staging` (id below). Separate ratelimit namespace
+    // from prod so staging traffic doesn't share prod's counter.
+    "staging": {
+      "name": "ymmv-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ymmv-staging",
+          "database_id": "c8d74a48-2fc0-47d3-b8b0-eaacf856e5f6"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "RL_WRITE",
+          "namespace_id": "1002",
+          "simple": { "limit": 60, "period": 60 }
+        }
+      ]
+    }
+  }
+}

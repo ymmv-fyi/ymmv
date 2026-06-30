@@ -1,0 +1,70 @@
+---
+import { diff, type DiffResult } from "@ymmv/shared";
+import { env } from "cloudflare:workers";
+import Diff from "../../../components/Diff.astro";
+import Layout from "../../../components/Layout.astro";
+import NotFound from "../../../components/NotFound.astro";
+import Profile from "../../../components/Profile.astro";
+import { readCacheControl, resolveProfile } from "../../../lib/profile-read.ts";
+
+// The web diff: /<handle>/vs/<viewer> — "how <handle> differs from <viewer>". Shareable; runs the
+// shared diff(). theirs = the [handle] being viewed; mine = the [viewer] ("you").
+const theirsRaw = String(Astro.params.handle ?? "");
+const mineRaw = String(Astro.params.viewer ?? "");
+
+const [theirs, mine] = await Promise.all([
+  resolveProfile(env.DB, theirsRaw),
+  resolveProfile(env.DB, mineRaw),
+]);
+
+// Keep the diff URL canonical: follow either side's rename to the current handle.
+if (theirs.kind === "renamed") {
+  return new Response(null, {
+    status: 301,
+    headers: {
+      location: `/${theirs.handle}/vs/${encodeURIComponent(mineRaw)}`,
+      "cache-control": readCacheControl("renamed"),
+    },
+  });
+}
+if (theirs.kind === "live" && mine.kind === "renamed") {
+  return new Response(null, {
+    status: 301,
+    headers: {
+      location: `/${theirs.profile.handle}/vs/${mine.handle}`,
+      "cache-control": readCacheControl("renamed"),
+    },
+  });
+}
+
+Astro.response.headers.set("cache-control", readCacheControl(theirs.kind === "live" ? "live" : "notfound"));
+if (theirs.kind !== "live") {
+  Astro.response.status = 404;
+}
+
+const theirsProfile = theirs.kind === "live" ? theirs.profile : null;
+const diffResult: DiffResult | null =
+  theirs.kind === "live" && mine.kind === "live" ? diff(mine.profile, theirs.profile) : null;
+const mineHandle = mine.kind === "live" ? mine.profile.handle : mineRaw;
+
+const title = theirsProfile
+  ? diffResult
+    ? `${theirsProfile.handle} vs ${mineHandle} — ymmv.fyi`
+    : `${theirsProfile.handle} — ymmv.fyi`
+  : `${theirsRaw} — ymmv.fyi`;
+---
+
+<Layout title={title}>
+  {
+    !theirsProfile ? (
+      <NotFound handle={theirsRaw} />
+    ) : diffResult ? (
+      <Diff result={diffResult} theirs={theirsProfile.handle} mine={mineHandle} />
+    ) : (
+      <>
+        <Profile profile={theirsProfile} />
+        <p class="nudge">no ymmv profile for {mineRaw} yet — publish yours to diff →</p>
+      </>
+    )
+  }
+</Layout>

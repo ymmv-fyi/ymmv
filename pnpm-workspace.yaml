@@ -1,0 +1,15 @@
+packages:
+  - "packages/*"
+
+# Allow these dependencies to run their install/build scripts (pnpm 10+ gates them
+# by default). workerd backs @cloudflare/vitest-pool-workers; esbuild backs Vite/Vitest;
+# sharp backs Astro's image service.
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd

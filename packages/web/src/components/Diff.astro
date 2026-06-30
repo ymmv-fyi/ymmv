@@ -1,0 +1,50 @@
+---
+// The 3-column diff (label | theirs | yours), per DESIGN.md + docs/preview.html.
+// Amber is scarce: it marks ONLY a real difference (the yours value + the label dot). Same rows
+// recede to --faint. Extras don't diff (free labels), so they're intentionally omitted here.
+// Values are user-controlled → rendered via Astro auto-escaping.
+//
+// a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
+// only on differing rows (presence, not just hue), and each row carries a visually-hidden
+// "differs:"/"same:" prefix for screen readers. Header + row-label cells are real <th>.
+import type { DiffResult } from "@ymmv/shared";
+
+interface Props {
+  result: DiffResult;
+  theirs: string; // the profile being viewed (the [handle])
+  mine: string; // the viewer ("you")
+}
+const { result, theirs, mine } = Astro.props;
+---
+
+<h1 class="url">how <b>{theirs}</b> differs from <b>{mine}</b></h1>
+
+<table class="diff">
+  <thead>
+    <tr>
+      <td></td>
+      <th scope="col">{theirs}</th>
+      <th scope="col">{mine}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {
+      result.rows.map((row) => {
+        const differs = row.status !== "same";
+        return (
+          <tr class={differs ? "changed" : "same"}>
+            <th scope="row" class="k">
+              <span class="dot" aria-hidden="true" />
+              <span class="sr-only">{differs ? "differs: " : "same: "}</span>
+              {row.label}
+            </th>
+            <td class="theirs">{row.theirs ?? <span class="missing">—</span>}</td>
+            <td class="yours">{row.mine ?? <span class="missing">—</span>}</td>
+          </tr>
+        );
+      })
+    }
+  </tbody>
+</table>
+
+<div class="foot">{result.differ} differ · {result.shared} shared — <b>your mileage may vary</b></div>

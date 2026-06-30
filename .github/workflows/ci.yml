@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Test the engines floor (>=22) AND the dev version (26).
+        node: [22, 26]
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm BEFORE setup-node: setup-node's pnpm cache needs the pnpm store path.
+      - uses: pnpm/action-setup@v6
+        # version read from the root package.json "packageManager" field.
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      # build before typecheck: cross-package type resolution needs each
+      # workspace dep's built dist/ (shared → cli/web).
+      - run: pnpm -r build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # Playwright E2E for the SSR profile/diff (the social artifact). The web package's webServer
+  # builds the Worker, applies migrations + the seed to a local D1, and runs `wrangler dev` — so
+  # these hit the real deployed artifact. Separate job: keeps unit/lint signal fast + independent.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # shared must be built (web imports its dist) before the e2e webServer runs `astro build`.
+      - run: pnpm --filter @ymmv/shared build
+      - run: pnpm --filter @ymmv/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @ymmv/web test:e2e

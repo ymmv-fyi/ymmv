@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.astro/
+.output/
+*.tsbuildinfo
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+worker-configuration.d.ts
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+coverage/
+.vitest/
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# gstack local tooling state
+.gstack/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

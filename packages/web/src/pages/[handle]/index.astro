@@ -1,0 +1,35 @@
+---
+import { env } from "cloudflare:workers";
+import Layout from "../../components/Layout.astro";
+import NotFound from "../../components/NotFound.astro";
+import Profile from "../../components/Profile.astro";
+import { readCacheControl, resolveProfile } from "../../lib/profile-read.ts";
+
+// SSR profile page. Shares the resolver with the JSON endpoint, so HTML + JSON agree on
+// live / renamed (301) / not-found. A D1 throw bubbles → Astro 500 (error honesty), never a fake 404.
+const raw = String(Astro.params.handle ?? "");
+const result = await resolveProfile(env.DB, raw);
+
+// Renamed away → 301 to the owner's current root URL, with the edge-cache policy attached.
+if (result.kind === "renamed") {
+  return new Response(null, {
+    status: 301,
+    headers: { location: `/${result.handle}`, "cache-control": readCacheControl("renamed") },
+  });
+}
+
+Astro.response.headers.set("cache-control", readCacheControl(result.kind));
+if (result.kind === "notfound") {
+  Astro.response.status = 404;
+}
+
+const title = result.kind === "live" ? `${result.profile.handle} — ymmv.fyi` : `${raw} — ymmv.fyi`;
+const description =
+  result.kind === "live"
+    ? `${result.profile.handle}'s developer tool stack on ymmv.fyi.`
+    : `No ymmv profile for ${raw} yet — publish yours with npx ymmv-cli.`;
+---
+
+<Layout title={title} description={description}>
+  {result.kind === "live" ? <Profile profile={result.profile} /> : <NotFound handle={raw} />}
+</Layout>

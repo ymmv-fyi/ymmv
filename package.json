@@ -1,0 +1,24 @@
+{
+  "name": "ymmv",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "dev": "pnpm --filter @ymmv/web dev"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5",
+    "@types/node": "^22",
+    "typescript": "^5",
+    "vitest": "^4.1"
+  }
+}

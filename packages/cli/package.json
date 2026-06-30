@@ -1,0 +1,53 @@
+{
+  "name": "ymmv-cli",
+  "version": "0.0.0",
+  "description": "Publish and diff terminal-native developer tool-stack profiles at ymmv.fyi.",
+  "type": "module",
+  "bin": {
+    "ymmv": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "author": "the ymmv.fyi authors",
+  "homepage": "https://ymmv.fyi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ymmv-fyi/ymmv.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ymmv-fyi/ymmv/issues"
+  },
+  "keywords": [
+    "ymmv",
+    "uses",
+    "dotfiles",
+    "developer-tools",
+    "profile",
+    "diff",
+    "cli",
+    "terminal"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "env-paths": "^3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@ymmv/shared": "workspace:*",
+    "tsup": "^8"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

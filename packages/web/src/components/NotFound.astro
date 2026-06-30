@@ -1,0 +1,28 @@
+---
+// Empty / 404 state (DESIGN.md → Components & States): friendly "no ymmv profile for <handle>"
+// + the one-line install. With no handle it's a generic 404.
+// `handle` is the raw (unresolved) URL segment — user-controlled, so it renders auto-escaped.
+interface Props {
+  handle?: string;
+}
+const { handle } = Astro.props;
+---
+
+<div class="empty">
+  {
+    handle ? (
+      <>
+        <h1 class="handle">{handle}</h1>
+        <p class="empty-msg">
+          no ymmv profile for <span class="h">{handle}</span> — yet.
+        </p>
+      </>
+    ) : (
+      <>
+        <h1 class="handle">404</h1>
+        <p class="empty-msg">no page here.</p>
+      </>
+    )
+  }
+  <div class="install"><span class="prompt">$ </span>npx ymmv-cli</div>
+</div>

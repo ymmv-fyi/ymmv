@@ -1,0 +1,76 @@
+---
+import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import Layout from "../components/Layout.astro";
+import ProfileExample from "../components/Profile.astro";
+
+// Landing: the pitch + the one-line install + a representative example of what a profile looks like.
+// The example is static (clearly labelled) so the landing always renders, independent of the DB.
+const exampleProfile: Profile = {
+  schema_version: SCHEMA_VERSION,
+  handle: "octocat",
+  entries: [
+    { key: "editor", value: "Neovim" },
+    { key: "os", value: "macOS 15.2" },
+    { key: "shell", value: "fish" },
+    { key: "terminal", value: "Ghostty" },
+    { key: "browser", value: "Zen" },
+    { key: "window-manager", value: "Aerospace" },
+    { key: "font", value: "Berkeley Mono" },
+    { key: "multiplexer", value: "tmux" },
+    { key: "ai-tool", value: "Claude Code" },
+  ],
+  extras: [
+    { label: "Keyboard", value: "HHKB Pro 2" },
+    { label: "Dotfiles", value: "https://github.com/octocat/dotfiles" },
+  ],
+  updated_at: "2026-06-28T00:00:00.000Z",
+};
+---
+
+<Layout title="ymmv.fyi — your stack, in the terminal">
+  <section class="hero">
+    <h1 class="wordmark">ymmv<span class="dim">.fyi</span></h1>
+    <p class="tagline">
+      Terminal-native developer tool-stack profiles. Publish your stack from the
+      CLI, then{" "}
+      <b>diff it against anyone's</b>.
+    </p>
+    <div class="install"><span class="prompt">$ </span>npx ymmv-cli</div>
+  </section>
+
+  <h2 class="example-label">A profile looks like this</h2>
+  <ProfileExample profile={exampleProfile} example />
+
+  <footer class="site-foot">
+    <div class="fg">
+      <span class="g">terminal</span>
+      <div class="fl">
+        <code>npx ymmv-cli</code>
+        <span class="n">publish your stack</span>
+      </div>
+      <div class="fl">
+        <code>npx ymmv-cli &lt;handle&gt;</code>
+        <span class="n">view, or diff vs yours</span>
+      </div>
+    </div>
+    <div class="fg">
+      <span class="g">web</span>
+      <div class="fl">
+        <code>ymmv.fyi/&lt;handle&gt;</code>
+        <span class="n">a profile</span>
+      </div>
+      <div class="fl">
+        <code>ymmv.fyi/&lt;handle&gt;/vs/&lt;you&gt;</code>
+        <span class="n">the diff</span>
+      </div>
+    </div>
+    <div class="fg">
+      <span class="g">data</span>
+      <div class="fl"><code>GET /api/v1/u/&lt;handle&gt;</code></div>
+      <span class="g">source</span>
+      <div class="fl">
+        <a href="https://github.com/ymmv-fyi/ymmv">github.com/ymmv-fyi/ymmv</a>
+      </div>
+    </div>
+  </footer>
+</Layout>

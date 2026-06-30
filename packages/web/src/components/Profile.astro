@@ -1,0 +1,92 @@
+---
+// The profile spec sheet — handle + key->value stack + extras + footer, per DESIGN.md.
+// All values are user-controlled: Astro auto-escapes every {value}; URL values are gated through
+// safeHref before becoming an href (escaping does not neutralize a javascript: scheme).
+//
+// `example`: when this is the landing-page sample (not the page's own profile), render the handle
+// and group headers as non-headings so they don't pollute the document outline / emit a 2nd <h1>.
+// Row labels are real <th scope="row"> for screen-reader header association.
+import { KEY_LABELS, type Profile } from "@ymmv/shared";
+import { safeHref } from "../lib/safe-href.ts";
+
+interface Props {
+  profile: Profile;
+  example?: boolean;
+}
+const { profile, example = false } = Astro.props;
+const { handle, entries, extras } = profile;
+const hasStack = entries.length > 0;
+const hasExtras = extras.length > 0;
+
+const HandleTag = example ? "p" : "h1";
+const GroupTag = example ? "p" : "h2";
+---
+
+<div class="url">ymmv.fyi/<b>{handle}</b></div>
+<HandleTag class="handle">{handle}</HandleTag>
+
+{
+  hasStack && (
+    <>
+      <GroupTag class="group-h">Stack</GroupTag>
+      <table class="spec">
+        <tbody>
+          {entries.map((e) => {
+            const href = safeHref(e.value);
+            return (
+              <tr>
+                <th scope="row" class="k">
+                  {KEY_LABELS[e.key]}
+                </th>
+                <td class="v">
+                  {href ? (
+                    <a href={href} rel="nofollow ugc noopener" target="_blank">
+                      {e.value}
+                    </a>
+                  ) : (
+                    e.value
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
+{
+  hasExtras && (
+    <>
+      <GroupTag class="group-h">Extras</GroupTag>
+      <table class="spec">
+        <tbody>
+          {extras.map((x) => {
+            const href = safeHref(x.value);
+            return (
+              <tr>
+                <th scope="row" class="k">
+                  {x.label}
+                </th>
+                <td class="v">
+                  {href ? (
+                    <a href={href} rel="nofollow ugc noopener" target="_blank">
+                      {x.value}
+                    </a>
+                  ) : (
+                    x.value
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  )
+}
+
+{!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
+
+<div class="foot">$ <b>npx ymmv-cli {handle}</b></div>

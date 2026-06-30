@@ -1,0 +1,172 @@
+name: Release
+
+# Two entry points:
+#   • push a tag `vX.Y.Z`  → REAL production release: npm publish (provenance) + deploy the Worker.
+#   • workflow_dispatch    → rehearsal/ops: pick an environment + dry-run (default: staging, dry-run).
+#                            The "tagged-release dry-run hits staging" check is this, with defaults.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Cloudflare environment to target
+        type: choice
+        options: [staging, production]
+        default: staging
+      dry_run:
+        description: "Dry run: no npm publish, no deploy (config + bundle validated only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Don't cancel an in-flight release; serialize per ref instead.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve what this run does, in one place. Tag push is always a real production release;
+  # dispatch honors its inputs.
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.x.outputs.environment }}
+      dry_run: ${{ steps.x.outputs.dry_run }}
+      version: ${{ steps.x.outputs.version }}
+      db_name: ${{ steps.x.outputs.db_name }}
+    steps:
+      - id: x
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            env_name=production
+            dry=false
+            version="${GITHUB_REF_NAME#v}"
+            # npm provenance (publishConfig.provenance) requires a PUBLIC repo. A tag publishes the CLI,
+            # so fail early + clearly if the repo is still private — the dispatch dry-run can't catch it.
+            vis=$(gh repo view "$GITHUB_REPOSITORY" --json visibility -q .visibility 2>/dev/null || echo UNKNOWN)
+            if [ "$vis" != "PUBLIC" ]; then
+              echo "::error::Repo is $vis — npm provenance needs a PUBLIC repo. Flip it public before tagging (README launch checklist)."
+              exit 1
+            fi
+          else
+            env_name="${{ inputs.environment }}"
+            dry="${{ inputs.dry_run }}"
+            version="0.0.0-dispatch.${GITHUB_RUN_NUMBER}"
+            # Real production changes go through a version tag (which also publishes the CLI + provenance).
+            # A dispatch may rehearse prod (dry-run) and really-deploy STAGING, but never really-deploy prod.
+            if [ "$env_name" = "production" ] && [ "$dry" != "true" ]; then
+              echo "Forcing dry_run=true: production deploys go through a version tag, not workflow_dispatch."
+              dry=true
+            fi
+          fi
+          if [ "$env_name" = "production" ]; then db=ymmv; else db=ymmv-staging; fi
+          {
+            echo "environment=$env_name"
+            echo "dry_run=$dry"
+            echo "version=$version"
+            echo "db_name=$db"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release: env=$env_name dry_run=$dry version=$version db=$db"
+
+  # Pre-flight gate — the same checks CI runs, on the LTS floor. Nothing publishes/deploys if red.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm -r build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # Publish the CLI to npm with provenance. Real publish ONLY on a tag push (one npm registry, no
+  # "staging npm"); every dispatch is --dry-run regardless of environment. Runs AFTER deploy-worker so
+  # a tag release is sequenced (deploy the worker first, then publish the CLI) — no half-release if the
+  # deploy fails, and the brief in-between window is the backward-compatible one (new worker, old CLI).
+  publish-cli:
+    needs: [prep, gate, deploy-worker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance (OIDC)
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      # Build the bundle (inlines the private @ymmv/shared) and stamp the release version.
+      - run: pnpm --filter @ymmv/shared build
+      - run: pnpm --filter ymmv-cli build
+      - name: Stamp version
+        # Pass via env, never inline ${{ }} into the script: a tag name is attacker-influenced and
+        # would otherwise be shell-injected on the runner holding NPM_TOKEN.
+        env:
+          VERSION: ${{ needs.prep.outputs.version }}
+        run: npm pkg set version="$VERSION"
+        working-directory: packages/cli
+      - name: Publish to npm (provenance)
+        if: github.event_name == 'push' && needs.prep.outputs.dry_run == 'false'
+        run: npm publish
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish (dry run)
+        if: github.event_name != 'push' || needs.prep.outputs.dry_run != 'false'
+        run: npm publish --dry-run
+        working-directory: packages/cli
+
+  # Deploy the unified Worker. Per-env CLOUDFLARE_ENV build bakes the right bindings/routes into the
+  # adapter's generated config, then wrangler deploys THAT (no --env). D1 migrations run against the
+  # source config (--env). Dry-run validates config + bundle offline (no Cloudflare secrets needed).
+  deploy-worker:
+    needs: [prep, gate]
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ENV: ${{ needs.prep.outputs.environment }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ymmv/shared build
+      # Astro 7 bakes env at build time (CLOUDFLARE_ENV) — one build per environment.
+      - name: Build Worker for ${{ needs.prep.outputs.environment }}
+        run: pnpm --filter @ymmv/web build
+      # Guard against a silent rate-limit fail-open: RL_WRITE MUST be in the env-baked config, or the
+      # handler's `if (!limiter) return null` would disable write rate limiting in production.
+      - name: Assert RL_WRITE is bound
+        run: grep -q "RL_WRITE" dist/server/wrangler.json || { echo "::error::RL_WRITE missing from generated config — rate limiting would silently fail open"; exit 1; }
+        working-directory: packages/web
+      # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
+      - name: Apply D1 migrations
+        if: needs.prep.outputs.dry_run == 'false'
+        run: pnpm exec wrangler d1 migrations apply ${{ needs.prep.outputs.db_name }} --env ${{ needs.prep.outputs.environment }} --remote
+        working-directory: packages/web
+      - name: Deploy
+        if: needs.prep.outputs.dry_run == 'false'
+        run: pnpm exec wrangler deploy -c dist/server/wrangler.json
+        working-directory: packages/web
+      # DRY RUN: validate the env-baked config + bundle without uploading (no secrets required).
+      - name: Deploy (dry run)
+        if: needs.prep.outputs.dry_run != 'false'
+        run: pnpm exec wrangler deploy -c dist/server/wrangler.json --dry-run
+        working-directory: packages/web
