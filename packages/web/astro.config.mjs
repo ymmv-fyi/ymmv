@@ -6,6 +6,9 @@ import { defineConfig, sessionDrivers } from "astro/config";
 // assets, one D1 binding. The real /[handle] profile + 3-column diff UI (per DESIGN.md) lives here.
 export default defineConfig({
   output: "server",
+  // Bearer-token API, no cookies = no CSRF surface. Astro's default checkOrigin 403s the CLI
+  // (it sends no Origin header), so turn it off.
+  security: { checkOrigin: false },
   // We use no Astro sessions. The adapter otherwise defaults sessions to a Cloudflare KV binding
   // ("SESSION") and auto-provisions it on deploy — which our scoped API token can't do (no KV perms).
   // A non-KV (in-memory) driver suppresses that binding. `sessionDrivers.memory()` is the Astro 7
