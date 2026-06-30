@@ -39,20 +39,11 @@ jobs:
       db_name: ${{ steps.x.outputs.db_name }}
     steps:
       - id: x
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             env_name=production
             dry=false
             version="${GITHUB_REF_NAME#v}"
-            # npm provenance (publishConfig.provenance) requires a PUBLIC repo. A tag publishes the CLI,
-            # so fail early + clearly if the repo is still private — the dispatch dry-run can't catch it.
-            vis=$(gh repo view "$GITHUB_REPOSITORY" --json visibility -q .visibility 2>/dev/null || echo UNKNOWN)
-            if [ "$vis" != "PUBLIC" ]; then
-              echo "::error::Repo is $vis — npm provenance needs a PUBLIC repo. Flip it public before tagging (README launch checklist)."
-              exit 1
-            fi
           else
             env_name="${{ inputs.environment }}"
             dry="${{ inputs.dry_run }}"
@@ -98,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance (OIDC)
+      id-token: write # OIDC: Trusted Publishing auth + provenance
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -107,23 +98,25 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.x.
+      - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       # Build the bundle (inlines the private @ymmv/shared) and stamp the release version.
       - run: pnpm --filter @ymmv/shared build
       - run: pnpm --filter ymmv-cli build
       - name: Stamp version
         # Pass via env, never inline ${{ }} into the script: a tag name is attacker-influenced and
-        # would otherwise be shell-injected on the runner holding NPM_TOKEN.
+        # would otherwise be shell-injected on the runner that holds OIDC npm-publish rights.
         env:
           VERSION: ${{ needs.prep.outputs.version }}
         run: npm pkg set version="$VERSION"
         working-directory: packages/cli
-      - name: Publish to npm (provenance)
+      - name: Publish to npm (Trusted Publishing + provenance)
         if: github.event_name == 'push' && needs.prep.outputs.dry_run == 'false'
+        # No NODE_AUTH_TOKEN: auth is OIDC via the npm Trusted Publisher (id-token: write above).
+        # Provenance is automatic under Trusted Publishing.
         run: npm publish
         working-directory: packages/cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish (dry run)
         if: github.event_name != 'push' || needs.prep.outputs.dry_run != 'false'
         run: npm publish --dry-run
