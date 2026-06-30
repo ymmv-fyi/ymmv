@@ -2,6 +2,15 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [0.1.3] - 2026-06-30
+
+### Fixed
+- **Reclaiming a recycled GitHub username locked the new owner out of publishing.** After GitHub
+  freed a username a prior ymmv user had renamed away from, the new owner could sign in but every
+  `ymmv set` returned "handle taken" and `ymmv.fyi/<handle>` kept redirecting to the previous owner.
+  A GitHub-proven sign-in now clears the stale ownership record, so the rightful owner publishes
+  immediately.
+
 ## [0.1.2] - 2026-06-29
 
 ### Fixed
@@ -34,6 +43,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.1.3]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.0
