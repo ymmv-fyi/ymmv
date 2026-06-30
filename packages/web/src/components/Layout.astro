@@ -18,6 +18,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="darkreader-lock" />
     {/* Set the theme before first paint (stored choice > system > dark) to avoid a flash. */}
     <script is:inline>
       (function () {
@@ -88,6 +89,34 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
             }
           });
         } catch (e) {}
+      })();
+    </script>
+    {/* Click-to-copy for the install CTA(s). Progressive enhancement: only wires up (and reveals
+        the copy affordance) when the Clipboard API is available; otherwise the command stays
+        plain readable/selectable text. One delegated handler covers every [data-copy] block. */}
+    <script is:inline>
+      (function () {
+        if (!navigator.clipboard) return;
+        var nodes = document.querySelectorAll("[data-copy]");
+        nodes.forEach(function (el) {
+          el.dataset.copyReady = "";
+          var status = el.querySelector("[data-copy-status]");
+          var timer;
+          el.addEventListener("click", function () {
+            navigator.clipboard
+              .writeText(el.dataset.copy)
+              .then(function () {
+                el.dataset.copied = "";
+                if (status) status.textContent = "Copied";
+                clearTimeout(timer);
+                timer = setTimeout(function () {
+                  delete el.dataset.copied;
+                  if (status) status.textContent = "";
+                }, 1200);
+              })
+              .catch(function () {});
+          });
+        });
       })();
     </script>
   </body>

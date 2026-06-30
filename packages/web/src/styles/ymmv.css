@@ -18,6 +18,11 @@
 
   --content: 660px;
   --label-col: 34%;
+  --page-pad-x: 28px;
+
+  /* motion — strong ease-out for responsive/entering motion (page fade, press-scales).
+     Built-in CSS easings are too weak; hover *color* changes keep plain `ease`. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 /* Dark is the primary mode; light is the considered inverse. The no-FOUC head script sets
@@ -29,6 +34,9 @@ html[data-theme="dark"] {
   --muted: #8a8e96;
   --faint: #5b5f67;
   --hairline: #222428;
+  /* raised controls (install button, theme toggle) need a border that reads against --surface —
+     the row hairline is too dark in dark mode and the control looks like floating text */
+  --border-raised: #2c2f37;
   --accent: #e8a33d;
   --accent-soft: #e8a33d26;
 }
@@ -41,6 +49,8 @@ html[data-theme="light"] {
      2026-06-29): light faint 2.41 → 3.35:1, light accent 3.46 → 4.8:1. Dark theme unchanged. */
   --faint: #8c8980;
   --hairline: #e6e4de;
+  /* light borders already read fine on near-white; keep raised = hairline */
+  --border-raised: var(--hairline);
   --accent: #9a6410;
   --accent-soft: #9a64101a;
 }
@@ -66,9 +76,9 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  transition:
-    background 0.3s,
-    color 0.3s;
+  /* Theme switch is intentionally instant — no cross-fade. Body's bg/text are the only
+     theme-driven properties that could transition; everything else (hairlines, surfaces,
+     accent) already snaps, so animating only the body read as a half-faded toggle. */
 }
 
 a {
@@ -92,32 +102,43 @@ a {
 .page {
   max-width: var(--content);
   margin: 0 auto;
-  padding: 64px 28px 96px;
-  animation: fade 0.28s ease-out both;
+  padding: 64px var(--page-pad-x) 96px;
+  /* `backwards` (not `both`): start at the from-state, but don't RETAIN it — `forwards`/`both`
+     would keep an identity transform, leaving .page a permanent stacking context over the toggle. */
+  animation: fade 0.28s var(--ease-out) backwards;
 }
 
 .theme-toggle {
   position: fixed;
   top: 20px;
-  right: 24px;
+  /* align the toggle's right edge with the content's VISIBLE right edge (hairlines/values) on wide
+     screens — i.e. the column edge pulled in by the page padding; 24px corner on narrow screens */
+  right: max(24px, calc(50% - var(--content) / 2 + var(--page-pad-x)));
+  /* above page content — otherwise a stacking context on .page can cover this fixed control
+     (e.g. the full-width .page on mobile) and swallow the tap */
+  z-index: 10;
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-raised);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.04em;
   padding: 7px 12px;
   border-radius: 8px;
-  cursor: pointer;
   transition:
     color 0.18s,
-    border-color 0.18s;
+    border-color 0.18s,
+    transform 0.12s var(--ease-out);
 }
 .theme-toggle:hover,
 .theme-toggle:focus-visible {
   color: var(--accent);
   border-color: var(--accent);
   outline: none;
+}
+/* press feedback — confirms the click landed; :active fires on touch too, so no hover gate */
+.theme-toggle:active {
+  transform: scale(0.97);
 }
 
 /* ---- profile header ---- */
@@ -130,6 +151,16 @@ a {
 .url b {
   color: var(--muted);
   font-weight: 400;
+}
+/* the domain is a quiet breadcrumb home — inherits the faint url color, no underline, no amber
+   (amber stays reserved for links + diffs); brightens on hover to signal it's clickable */
+.url a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+.url a:hover {
+  color: var(--text);
 }
 
 .handle {
@@ -197,20 +228,36 @@ a {
   color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid var(--accent-soft);
+  transition: border-bottom-color 150ms ease;
 }
 .spec .v a:hover {
   border-bottom-color: var(--accent);
 }
 
 /* ---- footer line ---- */
+/* 40px matches the .group-h section gap so the rhythm above and below a spec table is even */
 .foot {
-  margin-top: 36px;
+  margin-top: 40px;
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--faint);
 }
+/* the foot command is a CLI invocation, not a link or a diff-difference — keep amber scarce
+   (reserved for links + "you differ"); the command reads as emphasis in plain ink */
 .foot b {
-  color: var(--accent);
+  color: var(--text);
+  font-weight: 400;
+}
+/* secondary "make your own" CTA under the profile foot — dimmer than the contextual command
+   above it (faint label, muted command) so it reads as the quieter, second-rank action */
+.cta {
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--faint);
+}
+.cta b {
+  color: var(--muted);
   font-weight: 400;
 }
 
@@ -308,19 +355,84 @@ a {
 .empty-msg .h {
   color: var(--text);
 }
+/* The install command is also the primary CTA — the whole block is a click-to-copy <button>.
+   Rest state is visually identical to the old static block; the copy affordance + press/focus
+   feedback only appear once JS wires it ([data-copy-ready]), so it's never a dead control and
+   the command stays readable/selectable with no JS. */
 .install {
   font-family: var(--font-mono);
   font-size: 14px;
+  line-height: inherit;
   color: var(--muted);
   background: var(--surface);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--border-raised);
   border-radius: 8px;
   padding: 12px 14px;
   display: inline-block;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+  user-select: text;
+  transition: transform 0.12s var(--ease-out);
 }
 .install .prompt {
   color: var(--faint);
   user-select: none;
+}
+.install[data-copy-ready] {
+  cursor: pointer;
+}
+.install[data-copy-ready]:active {
+  transform: scale(0.98);
+}
+.install[data-copy-ready]:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* trailing copy affordance — hidden until JS-ready. On success the clipboard glyph morphs to
+   an accent check (Emil: "state indication"). Two glyphs crossfade in place → no width jump. */
+.copy-hint {
+  display: none;
+}
+.install[data-copy-ready] .copy-hint {
+  position: relative;
+  display: inline-block;
+  width: 1.1em;
+  height: 1em;
+  margin-left: 10px;
+  vertical-align: -0.05em;
+}
+.copy-hint .ch {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity 150ms ease,
+    transform 150ms var(--ease-out);
+}
+.copy-hint .ch-idle {
+  color: var(--muted);
+}
+.copy-hint .ch-done {
+  color: var(--accent);
+  opacity: 0;
+  transform: scale(0.7);
+}
+.install[data-copied] .ch-idle {
+  opacity: 0;
+  transform: scale(0.7);
+}
+.install[data-copied] .ch-done {
+  opacity: 1;
+  transform: scale(1);
+}
+@media (hover: hover) and (pointer: fine) {
+  .install[data-copy-ready]:hover .ch-idle {
+    color: var(--text);
+  }
 }
 .nudge {
   margin-top: 28px;
@@ -331,7 +443,7 @@ a {
 
 /* ---- landing ---- */
 .hero {
-  margin-bottom: 56px;
+  margin-bottom: 32px;
 }
 .wordmark {
   font-family: var(--font-display);
@@ -350,6 +462,7 @@ a {
   font-size: 18px;
   margin: 20px 0 28px;
   max-width: 48ch;
+  text-wrap: balance;
 }
 .tagline b {
   color: var(--text);
@@ -362,7 +475,7 @@ a {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
-  margin: 64px 0 18px;
+  margin: 48px 0 18px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -372,6 +485,18 @@ a {
   flex: 1;
   height: 1px;
   background: var(--hairline);
+}
+/* The landing sample is a PREVIEW, not the page's own profile — frame it in a subtle surface
+   card and demote the sample handle so it reads as an illustration, not the primary content. */
+.sample {
+  border: 1px solid var(--border-raised);
+  border-radius: 12px;
+  background: var(--surface);
+  /* less inset on narrow screens so the spec sheet keeps its width */
+  padding: clamp(20px, 5vw, 28px) clamp(18px, 5vw, 24px);
+}
+.sample .handle {
+  font-size: clamp(34px, 6vw, 42px);
 }
 .site-foot {
   margin-top: 72px;
@@ -385,38 +510,53 @@ a {
   color: var(--muted);
   text-decoration: none;
   border-bottom: 1px solid var(--accent-soft);
+  transition: color 150ms ease;
 }
-/* biome-ignore lint/style/noDescendingSpecificity: independent component from .spec .v a:hover — no shared elements */
 .site-foot a:hover {
   color: var(--accent);
 }
-/* Footer: surface-grouped (terminal / web / meta). label | command·url | note, aligned at a
-   tab stop. The command column gets a min-width on wider screens so notes line up; below that
-   it drops, so the note wraps under the command instead of overflowing. */
+/* Footer: surface-grouped (terminal / web / meta). label | command·url | note.
+   Mobile-first: the note STACKS under its command (separated by line + the muted→faint color
+   step) so the two never run together. At ≥560px it becomes the tabular layout — command and
+   note inline, notes aligned at a shared tab stop. */
 .site-foot .fg {
   display: grid;
   grid-template-columns: 6em 1fr;
   column-gap: 24px;
-  row-gap: 4px;
+  row-gap: 10px;
   align-items: baseline;
 }
 .site-foot .fg + .fg {
-  margin-top: 14px;
+  margin-top: 20px;
 }
 .site-foot .g {
   grid-column: 1;
 }
 .site-foot .fl {
   grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
 }
 .site-foot .fl code {
   font: inherit;
   color: var(--muted);
 }
+/* notes read as muted (≈AA), not faint (sub-AA on near-white); they're already separated from
+   the command spatially (tab stop on wide, own line on narrow), so equal weight doesn't blend */
 .site-foot .fl .n {
-  color: var(--faint);
+  color: var(--muted);
 }
 @media (min-width: 560px) {
+  .site-foot .fg {
+    row-gap: 4px;
+  }
+  .site-foot .fg + .fg {
+    margin-top: 14px;
+  }
+  .site-foot .fl {
+    display: block;
+  }
   .site-foot .fl code {
     display: inline-block;
     min-width: 16.5em;
@@ -430,12 +570,26 @@ a {
   }
 }
 
-/* Honor reduced-motion — kill the load fade. */
+/* Honor reduced-motion — kill the load fade + position/scale motion. Keep opacity/color
+   feedback (Emil: reduced motion is fewer & gentler, not zero). */
 @media (prefers-reduced-motion: reduce) {
   .page {
     animation: none;
   }
-  body {
+  .theme-toggle,
+  .install {
     transition: none;
+  }
+  .theme-toggle:active,
+  .install[data-copy-ready]:active {
+    transform: none;
+  }
+  /* copy glyph still crossfades on success, but without the scale movement */
+  .copy-hint .ch {
+    transition: opacity 150ms ease;
+  }
+  .copy-hint .ch-done,
+  .install[data-copied] .ch-idle {
+    transform: none;
   }
 }
