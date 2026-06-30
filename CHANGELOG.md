@@ -2,6 +2,12 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [0.1.2] - 2026-06-29
+
+### Fixed
+- **`ymmv delete` and `ymmv logout` 403'd.** The Worker's CSRF check blocked the CLI; disabled it
+  (bearer-token API, no CSRF surface). Publish and sign-in were unaffected.
+
 ## [0.1.1] - 2026-06-29
 
 ### Fixed
@@ -28,5 +34,6 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.1.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.0
