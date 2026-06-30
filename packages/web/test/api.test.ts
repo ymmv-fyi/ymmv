@@ -3,6 +3,7 @@ import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
 import { beforeEach, describe, expect, it } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
+import { handleBindStatements } from "../src/lib/users.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
 import { GET } from "../src/pages/api/v1/u/[handle].ts";
 
@@ -230,7 +231,7 @@ describe("rename + reclaim precedence", () => {
     expect((await GET(getCtx("alice"))).headers.get("location")).toBe("/api/v1/u/alice2");
   });
 
-  it("a reclaimed handle reads as the NEW live owner, not a 301 to the old (live-before-history)", async () => {
+  it("cross-account login-reclaim of a recycled handle: stale history cleared, reclaimer publishes, GET resolves to them", async () => {
     // gid 5101 owns "reclaimme", then renames away → "reclaimme" lands in handle_history under 5101.
     await seedToken("rcl-a", 5101);
     await publish("rcl-a", profile("reclaimme", [{ key: "editor", value: "Vim" }]));
@@ -238,20 +239,27 @@ describe("rename + reclaim precedence", () => {
     // Sanity: with only the history row (no live owner), "reclaimme" 301s to 5101's current handle.
     expect((await GET(getCtx("reclaimme"))).status).toBe(301);
 
-    // gid 5102 legitimately takes the freed handle. Reclaim flows through GitHub-proven login (publish
-    // is blocked by the takeover guard), so seed the live row directly to mimic that login bind.
-    await env.DB.prepare(
-      "INSERT INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES (?, 'reclaimme', 'reclaimme', '[]', ?, ?)",
-    )
-      .bind(5102, "2026-06-29T00:00:00.000Z", "2026-06-29T00:00:00.000Z")
-      .run();
-    await env.DB.prepare(
-      "INSERT INTO profile_entries (github_id, key, value) VALUES (?, 'shell', 'fish')",
-    )
-      .bind(5102)
-      .run();
+    // GitHub frees "reclaimme"; gid 5102 acquires it and logs in. The authoritative reclaim is the
+    // GitHub-proven login bind (release:true, stampPublish:false → updated_at NULL) — the exact
+    // statements POST /api/v1/auth/token runs. (The prior version of this test faked this with a direct
+    // updated_at INSERT, an unreachable state that masked the bug — WRITE-02.)
+    const now = new Date().toISOString();
+    await env.DB.batch(
+      handleBindStatements(env.DB, 5102, "reclaimme", now, { stampPublish: false, release: true }),
+    );
 
-    // The live owner (5102) must win over the history row (5101): 200 with 5102's profile, NOT a 301.
+    // The stale handle_history row from 5101 must be gone — current GitHub-proven ownership supersedes
+    // it. So the freshly-reclaimed-but-unpublished handle reads as 404, NOT a 301 back to 5101 (WRITE-01,
+    // redirect half).
+    expect((await GET(getCtx("reclaimme"))).status).toBe(404);
+
+    // …and 5102 can now publish it: no permanent 409 from a leftover history row (WRITE-01, publish half).
+    await seedToken("rcl-b", 5102);
+    expect(
+      (await publish("rcl-b", profile("reclaimme", [{ key: "shell", value: "fish" }]))).status,
+    ).toBe(200);
+
+    // GET now resolves to the reclaimer's live profile, not a 301 to the prior owner.
     const res = await GET(getCtx("reclaimme"));
     expect(res.status).toBe(200);
     expect(((await res.json()) as Profile).entries).toEqual([{ key: "shell", value: "fish" }]);

@@ -206,7 +206,7 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(n?.n).toBe(2);
   });
 
-  it("login reclaims a handle another account vacated (publish can't; login is authoritative)", async () => {
+  it("login reclaims a handle another account vacated, and the reclaimer can then publish (login is authoritative)", async () => {
     stubGithub(() => githubUser(1, "alice"));
     await mint(); // gid1 binds alice
     stubGithub(() => githubUser(1, "alice2"));
@@ -218,6 +218,13 @@ describe("POST /api/v1/auth/token — mint", () => {
       .bind("alice")
       .first<{ github_id: number }>();
     expect(owner?.github_id).toBe(2);
+
+    // …and the reclaimer is not locked out: the GitHub-proven login bind clears the stale
+    // handle_history["alice"]={gid1} row, so gid2 can publish. Pre-fix that leftover row made the
+    // takeover guard 409 the new legitimate owner forever (WRITE-01).
+    expect(
+      (await PUBLISH(publishCtx(g2.token, "alice", [{ key: "editor", value: "Helix" }]))).status,
+    ).toBe(200);
   });
 
   it("a reserved GitHub username displaces the user's prior handle to limbo (no stale /handle)", async () => {

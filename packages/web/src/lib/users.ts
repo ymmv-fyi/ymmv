@@ -3,8 +3,10 @@
 // IN-transaction so there's no pre-read/TOCTOU, `OR REPLACE` gives latest-wins, and the SELECT
 // form sidesteps the SQLite INSERT…SELECT…ON CONFLICT parser caveat — so it lives in ONE place.
 // The two callers differ on exactly two axes:
-//   • release   — login also NULLs a stale LIVE holder of this handle (a fresh GitHub /user just
-//                 proved the caller owns it now); publish never transfers a live handle.
+//   • release   — login clears any OTHER account's claim to this handle, live or vacated: it NULLs a
+//                 stale LIVE holder *and* deletes a stale handle_history (vacated) row for the handle
+//                 (a fresh GitHub /user just proved the caller owns it now). Publish never transfers a
+//                 handle between accounts, so it does neither.
 //   • stampPublish — publish's claim stamps updated_at + extras ("this row has a profile"); login
 //                 leaves them untouched, or a never-published login would look published and break
 //                 the GET "200 requires updated_at" invariant.
@@ -41,6 +43,16 @@ export function handleBindStatements(
           "UPDATE users SET handle = NULL, handle_lower = NULL WHERE handle_lower = ? AND github_id <> ?",
         )
         .bind(handleLower, githubId),
+    );
+    // 2b. clear a stale VACATED marker for this handle (login only). A prior owner who renamed away
+    //     left a handle_history row pointing the handle at THEM; GitHub's /user just proved the caller
+    //     owns it NOW, so current ownership supersedes that marker. Without this, the publish takeover
+    //     guard's handle_history UNION (profile.ts) 409s the new owner forever, and a GET 301s the
+    //     handle back to the prior owner until the (impossible) publish (WRITE-01). old_handle_lower is
+    //     the PK, so this drops at most one row; it targets the CLAIMED handle, never the caller's own
+    //     old handle just recorded in statement 1 (a different key — statement 1's WHERE excludes it).
+    statements.push(
+      db.prepare("DELETE FROM handle_history WHERE old_handle_lower = ?").bind(handleLower),
     );
   }
 
