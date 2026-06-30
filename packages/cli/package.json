@@ -4,7 +4,7 @@
   "description": "Publish and diff terminal-native developer tool-stack profiles at ymmv.fyi.",
   "type": "module",
   "bin": {
-    "ymmv": "./dist/index.js"
+    "ymmv": "./dist/cli.js"
   },
   "files": [
     "dist"

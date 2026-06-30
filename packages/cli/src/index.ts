@@ -1,6 +1,4 @@
-#!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, view } from "./commands.js";
 import { BASE } from "./config.js";
@@ -109,13 +107,4 @@ export async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
       break;
   }
-}
-
-// Run only when invoked as the bin (`ymmv`), not when imported by tests.
-const invokedPath = process.argv[1];
-if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
-  main(process.argv.slice(2)).catch((err: unknown) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exitCode = 1;
-  });
 }
