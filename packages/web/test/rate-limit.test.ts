@@ -1,9 +1,10 @@
 import { env } from "cloudflare:test";
 import { SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
-import { writeRateLimitKey } from "../src/lib/rate-limit.ts";
+import { authRateLimitKey, writeRateLimitKey } from "../src/lib/rate-limit.ts";
+import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
 
 // The Workers rate-limit binding (RL_WRITE) emulated by miniflare/vitest-pool-workers. Its
@@ -47,22 +48,61 @@ function deleteCtx(token: string): APIContext {
 
 // Hammer a key until the binding denies, returning {allowed, denied}. Bounded so a misconfigured
 // (never-denying) binding fails the test instead of looping forever. Each .limit() is in-memory
-// (no D1), so even ~60 iterations are cheap.
-async function exhaust(key: string, cap = 500): Promise<{ allowed: number; denied: boolean }> {
+// (no D1), so even ~60 iterations are cheap. Defaults to RL_WRITE; pass RL_AUTH for the per-IP cap.
+async function exhaust(
+  key: string,
+  limiter: RateLimit = env.RL_WRITE,
+  cap = 500,
+): Promise<{ allowed: number; denied: boolean }> {
   let allowed = 0;
   for (let i = 0; i < cap; i++) {
-    const { success } = await env.RL_WRITE.limit({ key });
+    const { success } = await limiter.limit({ key });
     if (!success) return { allowed, denied: true };
     allowed++;
   }
   return { allowed, denied: false };
 }
 
+// The mint handler's outbound GitHub introspection call, stubbed via the global fetch (same isolate).
+// Returns the introspection 200 shape for a fixed identity.
+function stubIntrospect(id: number, login: string): ReturnType<typeof vi.fn> {
+  const fn = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ user: { id, login } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  );
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+function mintCtx(accessToken: string, ip?: string): APIContext {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (ip) headers["cf-connecting-ip"] = ip;
+  return {
+    request: new Request("https://ymmv.test/api/v1/auth/token", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ access_token: accessToken }),
+    }),
+  } as unknown as APIContext;
+}
+
+// Disjoint from the profile-write ids above (90000-90003) and IPs, so the never-reset limiter counters
+// don't bleed across tests (workers-sdk#14392).
+const GID_MINT_CAP = 90010;
+const GID_MINT_IPCAP = 90011;
+const GID_MINT_OK = 90012;
+const IP_MINT_CAP = "203.0.113.10";
+
 beforeEach(async () => {
   await seedToken(TOK_POST, GID_POST);
   await seedToken(TOK_DELETE, GID_DELETE);
   await seedToken(TOK_FRESH, GID_FRESH);
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("rate limiting", () => {
   it("the RL_WRITE binding denies after its configured threshold", async () => {
@@ -103,9 +143,60 @@ describe("rate limiting", () => {
   });
 });
 
-describe("writeRateLimitKey", () => {
-  it("namespaces by github_id so distinct identities never share a counter", () => {
+describe("mint rate limiting (POST /api/v1/auth/token)", () => {
+  it("mint 429s once the identity's write budget is exhausted, writing nothing", async () => {
+    const fetchFn = stubIntrospect(GID_MINT_CAP, "mintcap");
+    // Pre-trip the SAME per-identity key the mint handler keys on (post-introspection).
+    expect((await exhaust(writeRateLimitKey(GID_MINT_CAP))).denied).toBe(true);
+
+    const res = await MINT(mintCtx("gho_x"));
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    expect(fetchFn).toHaveBeenCalled(); // identity WAS resolved — the write cap is post-introspection
+
+    // 429 short-circuits before the D1 batch: no token AND no user/handle row for this identity.
+    expect(
+      (
+        await env.DB.prepare("SELECT COUNT(*) AS n FROM tokens WHERE github_id = ?")
+          .bind(GID_MINT_CAP)
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+    expect(
+      (
+        await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE github_id = ?")
+          .bind(GID_MINT_CAP)
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+  });
+
+  it("mint 429s per IP BEFORE the outbound introspection call", async () => {
+    const fetchFn = stubIntrospect(GID_MINT_IPCAP, "ipcap");
+    expect((await exhaust(authRateLimitKey(IP_MINT_CAP), env.RL_AUTH)).denied).toBe(true);
+
+    const res = await MINT(mintCtx("gho_x", IP_MINT_CAP));
+    expect(res.status).toBe(429);
+    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    expect(fetchFn).not.toHaveBeenCalled(); // IP cap short-circuits before GitHub is ever hit
+  });
+
+  it("mint with no cf-connecting-ip fails open (RL_AUTH doesn't block it)", async () => {
+    stubIntrospect(GID_MINT_OK, "noip");
+    const res = await MINT(mintCtx("gho_x")); // no IP header, not pre-tripped → proceeds
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("rate-limit keys", () => {
+  it("writeRateLimitKey namespaces by github_id so distinct identities never share a counter", () => {
     expect(writeRateLimitKey(42)).toBe("w:42");
     expect(writeRateLimitKey(42)).not.toBe(writeRateLimitKey(43));
+  });
+
+  it("authRateLimitKey namespaces by IP, disjoint from the write namespace (no w:/a: collision)", () => {
+    expect(authRateLimitKey("1.2.3.4")).toBe("a:1.2.3.4");
+    // An IP string that looks like a github_id must NOT collide with a write key.
+    expect(authRateLimitKey("42")).not.toBe(writeRateLimitKey(42));
   });
 });

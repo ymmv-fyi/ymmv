@@ -242,18 +242,17 @@ describe("rename + reclaim precedence", () => {
     // GitHub frees "reclaimme"; gid 5102 acquires it and logs in. The authoritative reclaim is the
     // GitHub-proven login bind (release:true, stampPublish:false → updated_at NULL) — the exact
     // statements POST /api/v1/auth/token runs. (The prior version of this test faked this with a direct
-    // updated_at INSERT, an unreachable state that masked the bug — WRITE-02.)
+    // updated_at INSERT, an unreachable state that masked the bug.)
     const now = new Date().toISOString();
     await env.DB.batch(
       handleBindStatements(env.DB, 5102, "reclaimme", now, { stampPublish: false, release: true }),
     );
 
     // The stale handle_history row from 5101 must be gone — current GitHub-proven ownership supersedes
-    // it. So the freshly-reclaimed-but-unpublished handle reads as 404, NOT a 301 back to 5101 (WRITE-01,
-    // redirect half).
+    // it. So the freshly-reclaimed-but-unpublished handle reads as 404, NOT a 301 back to 5101.
     expect((await GET(getCtx("reclaimme"))).status).toBe(404);
 
-    // …and 5102 can now publish it: no permanent 409 from a leftover history row (WRITE-01, publish half).
+    // …and 5102 can now publish it: no permanent 409 from a leftover history row.
     await seedToken("rcl-b", 5102);
     expect(
       (await publish("rcl-b", profile("reclaimme", [{ key: "shell", value: "fish" }]))).status,

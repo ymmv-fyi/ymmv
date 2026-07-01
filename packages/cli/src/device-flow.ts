@@ -1,10 +1,12 @@
+import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
 import { saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
-// the Worker, which verifies identity and mints the ymmv token (the CLI never calls /user itself).
+// the Worker, which verifies the token's audience (introspection) and mints the ymmv token (the CLI
+// never calls /user itself). GITHUB_CLIENT_ID (public, no secret in device flow) is the single source
+// of truth in @ymmv/shared — the Worker introspects against the SAME id, so the two must never drift.
 
-const CLIENT_ID = "Ov23liMoD29eizQcN1KZ"; // public OAuth client, no secret (device flow)
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 
@@ -31,7 +33,7 @@ export async function requestDeviceCode(deps: PollDeps = {}): Promise<DeviceCode
   const res = await doFetch(DEVICE_CODE_URL, {
     method: "POST",
     headers: { accept: "application/json" },
-    body: new URLSearchParams({ client_id: CLIENT_ID }),
+    body: new URLSearchParams({ client_id: GITHUB_CLIENT_ID }),
   });
   if (!res.ok) {
     throw new Error(`device code request failed: ${res.status} ${await res.text()}`);
@@ -56,7 +58,7 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
       method: "POST",
       headers: { accept: "application/json" },
       body: new URLSearchParams({
-        client_id: CLIENT_ID,
+        client_id: GITHUB_CLIENT_ID,
         device_code: dc.device_code,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       }),

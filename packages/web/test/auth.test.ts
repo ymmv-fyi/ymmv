@@ -8,7 +8,7 @@ import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { POST as PUBLISH } from "../src/pages/api/v1/profile.ts";
 
 // The mint handler runs in the SAME workerd isolate as the test, so a global fetch stub intercepts
-// its outbound call to api.github.com/user.
+// its outbound token-introspection call to api.github.com/applications/{client_id}/token.
 function stubGithub(handler: (url: string) => Response) {
   const fn = vi.fn(async (input: RequestInfo | URL) => {
     const url =
@@ -23,8 +23,9 @@ function stubGithub(handler: (url: string) => Response) {
   return fn;
 }
 
-const githubUser = (id: number, login: string): Response =>
-  new Response(JSON.stringify({ id, login }), {
+// GitHub token introspection (POST /applications/{id}/token) nests the owner under `user` on a 200.
+const introspectOk = (id: number, login: string): Response =>
+  new Response(JSON.stringify({ user: { id, login } }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });
@@ -84,15 +85,21 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("POST /api/v1/auth/token — mint", () => {
-  it("verifies via /user, binds the handle, mints a token (no-store)", async () => {
-    const fetchFn = stubGithub(() => githubUser(4242, "carol"));
+  it("verifies via introspection, binds the handle, mints a token (no-store)", async () => {
+    const fetchFn = stubGithub(() => introspectOk(4242, "carol"));
     const res = await MINT(mintCtx({ access_token: "gho_valid" }));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as { token: string; handle: string };
     expect(body.handle).toBe("carol");
     expect(body.token.startsWith("ymmv_")).toBe(true);
-    expect(fetchFn).toHaveBeenCalledWith("https://api.github.com/user", expect.anything());
+    // Verifies via introspection (audience check), not a bare /user identity read.
+    expect(fetchFn).toHaveBeenCalledWith(
+      expect.stringContaining("/applications/"),
+      expect.objectContaining({ method: "POST" }),
+    );
+    const introInit = fetchFn.mock.calls[0][1] as RequestInit;
+    expect((introInit.headers as Record<string, string>).authorization).toMatch(/^Basic /);
 
     const tok = await env.DB.prepare("SELECT github_id, revoked_at FROM tokens WHERE hash = ?")
       .bind(await hashToken(body.token))
@@ -107,37 +114,64 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(user).toEqual({ handle: "carol", handle_lower: "carol", updated_at: null }); // login != publish
   });
 
-  it("401 github_auth_failed on a bad GitHub token; no rows minted", async () => {
-    stubGithub(() => new Response("", { status: 401 }));
-    const res = await MINT(mintCtx({ access_token: "gho_bad" }));
+  // Regression: a token NOT issued to ymmv's OAuth app (leaked PAT, or phished for another app)
+  // introspects as 404 → 401. Pre-fix, the Worker read /user and minted a session for the token's
+  // owner (confused-deputy takeover). Assert nothing is minted AND no victim user row is squatted.
+  it("401 github_auth_failed on a foreign/invalid token (introspection 404); no rows minted", async () => {
+    const fetchFn = stubGithub(() => new Response("", { status: 404 }));
+    const res = await MINT(mintCtx({ access_token: "gho_foreign_app_token" }));
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: string }).error).toBe("github_auth_failed");
+    expect(fetchFn).toHaveBeenCalled(); // it DID call introspection (audience check), just got 404
     expect(
       (await env.DB.prepare("SELECT COUNT(*) AS n FROM tokens").first<{ n: number }>())?.n,
     ).toBe(0);
+    expect(
+      (await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>())?.n,
+    ).toBe(0);
   });
 
-  it("503 github_unavailable on a GitHub outage (not a misleading 401)", async () => {
-    stubGithub(() => new Response("", { status: 503 }));
-    const res = await MINT(mintCtx({ access_token: "gho_valid" }));
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as { error: string }).error).toBe("github_unavailable");
+  it("503 github_unavailable on a GitHub outage / spam-throttle (not a misleading 401)", async () => {
+    // 5xx and 422 (validation/spammed) are GitHub's problem, not the user's token.
+    for (const status of [503, 422]) {
+      stubGithub(() => new Response("", { status }));
+      const res = await MINT(mintCtx({ access_token: "gho_valid" }));
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { error: string }).error).toBe("github_unavailable");
+    }
+  });
+
+  it("fail-closed: 500 when GITHUB_CLIENT_SECRET is unset — never falls back to an identity read", async () => {
+    const secretEnv = env as { GITHUB_CLIENT_SECRET?: string };
+    const saved = secretEnv.GITHUB_CLIENT_SECRET;
+    const fetchFn = stubGithub(() => introspectOk(1, "x"));
+    try {
+      secretEnv.GITHUB_CLIENT_SECRET = ""; // simulate an unprovisioned secret
+      const res = await MINT(mintCtx({ access_token: "gho_x" }));
+      expect(res.status).toBe(500);
+      expect(fetchFn).not.toHaveBeenCalled(); // never reached the outbound introspection call
+      expect(
+        (await env.DB.prepare("SELECT COUNT(*) AS n FROM tokens").first<{ n: number }>())?.n,
+      ).toBe(0);
+    } finally {
+      secretEnv.GITHUB_CLIENT_SECRET = saved;
+    }
   });
 
   it("400 on missing/empty access_token, without calling GitHub", async () => {
-    const fetchFn = stubGithub(() => githubUser(1, "x"));
+    const fetchFn = stubGithub(() => introspectOk(1, "x"));
     expect((await MINT(mintCtx({}))).status).toBe(400);
     expect((await MINT(mintCtx({ access_token: "" }))).status).toBe(400);
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("400 bad_json", async () => {
-    stubGithub(() => githubUser(1, "x"));
+    stubGithub(() => introspectOk(1, "x"));
     expect((await MINT(mintCtx("{not json"))).status).toBe(400);
   });
 
   it("reserved GitHub username → handle:null, token still minted", async () => {
-    stubGithub(() => githubUser(50, "login")); // "login" is a reserved route/verb
+    stubGithub(() => introspectOk(50, "login")); // "login" is a reserved route/verb
     const { token, handle } = await mint();
     expect(handle).toBeNull();
     expect(token.startsWith("ymmv_")).toBe(true);
@@ -148,7 +182,7 @@ describe("POST /api/v1/auth/token — mint", () => {
   });
 
   it("re-login refreshes the handle + records history, preserving a published row's updated_at/extras", async () => {
-    stubGithub(() => githubUser(4242, "carol"));
+    stubGithub(() => introspectOk(4242, "carol"));
     const first = await mint();
     await PUBLISH(publishCtx(first.token, "carol", [{ key: "editor", value: "Vim" }]));
     const published = await env.DB.prepare(
@@ -158,7 +192,7 @@ describe("POST /api/v1/auth/token — mint", () => {
       .first<{ updated_at: string; extras: string }>();
     expect(published?.updated_at).not.toBeNull();
 
-    stubGithub(() => githubUser(4242, "caroline")); // GitHub rename
+    stubGithub(() => introspectOk(4242, "caroline")); // GitHub rename
     await mint("gho_2");
     const after = await env.DB.prepare(
       "SELECT handle, handle_lower, updated_at, extras FROM users WHERE github_id = ?",
@@ -179,9 +213,9 @@ describe("POST /api/v1/auth/token — mint", () => {
   });
 
   it("re-login releases a stale live holder of the handle (self-heal)", async () => {
-    stubGithub(() => githubUser(9, "famous"));
+    stubGithub(() => introspectOk(9, "famous"));
     await mint();
-    stubGithub(() => githubUser(4242, "famous")); // gid 4242 now owns "famous" on GitHub
+    stubGithub(() => introspectOk(4242, "famous")); // gid 4242 now owns "famous" on GitHub
     await mint("gho_2");
     const nine = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
       .bind(9)
@@ -194,7 +228,7 @@ describe("POST /api/v1/auth/token — mint", () => {
   });
 
   it("two logins for one github_id mint two active tokens (multi-device; revoke is per-token)", async () => {
-    stubGithub(() => githubUser(4242, "carol"));
+    stubGithub(() => introspectOk(4242, "carol"));
     const a = await mint("t1");
     const b = await mint("t2");
     expect(a.token).not.toBe(b.token);
@@ -207,11 +241,11 @@ describe("POST /api/v1/auth/token — mint", () => {
   });
 
   it("login reclaims a handle another account vacated, and the reclaimer can then publish (login is authoritative)", async () => {
-    stubGithub(() => githubUser(1, "alice"));
+    stubGithub(() => introspectOk(1, "alice"));
     await mint(); // gid1 binds alice
-    stubGithub(() => githubUser(1, "alice2"));
+    stubGithub(() => introspectOk(1, "alice2"));
     await mint("g1b"); // gid1 renames → alice vacated (history under gid1, no live holder)
-    stubGithub(() => githubUser(2, "alice")); // gid2 now owns "alice" on GitHub
+    stubGithub(() => introspectOk(2, "alice")); // gid2 now owns "alice" on GitHub
     const g2 = await mint();
     expect(g2.handle).toBe("alice");
     const owner = await env.DB.prepare("SELECT github_id FROM users WHERE handle_lower = ?")
@@ -221,16 +255,16 @@ describe("POST /api/v1/auth/token — mint", () => {
 
     // …and the reclaimer is not locked out: the GitHub-proven login bind clears the stale
     // handle_history["alice"]={gid1} row, so gid2 can publish. Pre-fix that leftover row made the
-    // takeover guard 409 the new legitimate owner forever (WRITE-01).
+    // takeover guard 409 the new legitimate owner forever.
     expect(
       (await PUBLISH(publishCtx(g2.token, "alice", [{ key: "editor", value: "Helix" }]))).status,
     ).toBe(200);
   });
 
   it("a reserved GitHub username displaces the user's prior handle to limbo (no stale /handle)", async () => {
-    stubGithub(() => githubUser(60, "bob"));
+    stubGithub(() => introspectOk(60, "bob"));
     await mint(); // gid60 owns "bob"
-    stubGithub(() => githubUser(60, "set")); // GitHub login becomes a reserved verb
+    stubGithub(() => introspectOk(60, "set")); // GitHub login becomes a reserved verb
     expect((await mint("g2")).handle).toBeNull();
     const user = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
       .bind(60)
@@ -246,7 +280,7 @@ describe("POST /api/v1/auth/token — mint", () => {
   });
 
   it("a minted token round-trips a real publish", async () => {
-    stubGithub(() => githubUser(7, "dave"));
+    stubGithub(() => introspectOk(7, "dave"));
     const { token } = await mint();
     expect(
       (await PUBLISH(publishCtx(token, "dave", [{ key: "editor", value: "Helix" }]))).status,
@@ -256,7 +290,7 @@ describe("POST /api/v1/auth/token — mint", () => {
 
 describe("POST /api/v1/auth/logout — revoke", () => {
   async function mintThenUnstub(id: number, login: string): Promise<string> {
-    stubGithub(() => githubUser(id, login));
+    stubGithub(() => introspectOk(id, login));
     const { token } = await mint();
     vi.unstubAllGlobals();
     return token;

@@ -8,6 +8,8 @@ declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
     RL_WRITE: RateLimit;
+    RL_AUTH: RateLimit;
+    GITHUB_CLIENT_SECRET: string;
     TEST_MIGRATIONS: { name: string; queries: string[] }[];
   }
 }
