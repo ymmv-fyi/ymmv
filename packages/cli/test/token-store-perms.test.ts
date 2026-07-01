@@ -1,4 +1,4 @@
-import { rm, stat } from "node:fs/promises";
+import { chmod, mkdir, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -23,4 +23,18 @@ describe("token file permissions (real fs)", () => {
     await saveToken({ token: "ymmv_real", handle: "carol" });
     expect((await stat(tokenFilePath())).mode & 0o777).toBe(0o600);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "tightens a pre-existing world-traversable (0o755) cred dir to 0o700",
+    async () => {
+      const dir = dirname(tokenFilePath());
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      // Recreate the dir in the buggy pre-fix state: 0o755. Force with an explicit chmod because a
+      // restrictive umask could otherwise mask the create mode down.
+      await mkdir(dir, { recursive: true });
+      await chmod(dir, 0o755);
+      await saveToken({ token: "ymmv_dir", handle: "carol" });
+      expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    },
+  );
 });

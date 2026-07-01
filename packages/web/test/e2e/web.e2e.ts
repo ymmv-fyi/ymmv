@@ -133,6 +133,16 @@ test.describe("long values + safety", () => {
     expect(overflow).toBeLessThanOrEqual(1); // no horizontal scrollbar => it wrapped
   });
 
+  test("external profile links carry rel=noreferrer (no Referer leak to the destination)", async ({
+    page,
+  }) => {
+    await page.goto("/antfu");
+    const link = page.getByRole("link", { name: /dotfiles-but-with-a-very-long-path/ });
+    const rel = await link.getAttribute("rel");
+    expect(rel).toContain("noreferrer");
+    expect(rel).toContain("noopener"); // don't regress the existing reverse-tabnabbing guard
+  });
+
   test("HTML-escapes user values and never emits a javascript: link", async ({ page }) => {
     page.on("dialog", () => {
       throw new Error("a script in a profile value executed");

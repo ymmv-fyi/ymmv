@@ -15,6 +15,10 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ access_token: accessToken }),
+    // Never follow a redirect: a 30x must fail (the existing `!res.ok` guard rejects the resulting
+    // opaqueredirect), not re-POST the GitHub access_token to the redirect target or read a
+    // redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
+    redirect: "manual",
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -37,6 +41,9 @@ export async function revokeYmmvToken(token: string): Promise<boolean> {
   const res = await fetch(`${BASE}/api/v1/auth/logout`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
+    // Never follow a redirect: a 30x→200 must not read as a successful revoke (which would delete the
+    // local file while the server token stays live). Same guard as mint + publish/delete.
+    redirect: "manual",
   });
   if (!res.ok) throw new Error(`logout failed: ${res.status}`);
   const body = (await res.json().catch(() => ({}))) as { revoked?: boolean };

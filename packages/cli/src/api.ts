@@ -1,4 +1,4 @@
-import type { Profile } from "@ymmv/shared";
+import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
@@ -71,7 +71,10 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
   if (!res.ok) {
     throw new Error(`fetch failed: ${res.status} ${await res.text()}`);
   }
-  return (await res.json()) as Profile;
+  // Validate at the boundary instead of a bare `as Profile` cast: a non-conforming origin (YMMV_API
+  // override / MITM) returning e.g. `entries:null` must surface as a typed ProfileParseError, not a
+  // TypeError crash deep in diff()/buildDefaults.
+  return parseProfile(await res.json());
 }
 
 /**
