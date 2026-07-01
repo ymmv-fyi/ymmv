@@ -130,8 +130,9 @@ function extrasBlock(
 
 /**
  * The diff — the soul of ymmv — as a 3-column readout: label | theirs | yours. Differing rows mark
- * the *yours* column amber with a leading amber dot; same rows are muted. With color off, a leading
- * `~`/`=` symbol carries the same information so it reads on any terminal.
+ * BOTH value columns amber with a leading amber dot (a difference is symmetric, neither side is the
+ * "wrong" one — mirrors the web diff); same rows are muted. With color off, a leading `~`/`=`
+ * symbol carries the same information so it reads on any terminal.
  */
 export function renderDiff(
   result: DiffResult,
@@ -161,8 +162,8 @@ export function renderDiff(
       lines.push(`${sym} ${r.label.padEnd(labelW)}  ${r.theirs.padEnd(theirsW)}  ${r.mine}`);
     } else if (r.differ) {
       lines.push(
-        `${c.amber}•${c.reset} ${r.label.padEnd(labelW)}  ${r.theirs.padEnd(theirsW)}  ` +
-          `${c.amber}${r.mine}${c.reset}`,
+        `${c.amber}•${c.reset} ${r.label.padEnd(labelW)}  ` +
+          `${c.amber}${r.theirs.padEnd(theirsW)}${c.reset}  ${c.amber}${r.mine}${c.reset}`,
       );
     } else {
       lines.push(
