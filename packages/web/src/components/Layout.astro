@@ -19,15 +19,32 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="darkreader-lock" />
+    {/* Browser-UI color (mobile toolbar/overscroll). Hexes mirror the --bg tokens in ymmv.css;
+        JS-synced (not media-attr metas) because the stored choice overrides prefers-color-scheme.
+        Must precede the no-FOUC script, which sets it to the resolved theme. */}
+    <meta name="theme-color" content="#0c0d10" />
     {/* Set the theme before first paint (stored choice > system > dark) to avoid a flash. */}
     <script is:inline>
       (function () {
+        // localStorage gets its own guard: a storage-blocked browser must still fall
+        // through to the prefers-color-scheme check, not skip it via a shared catch.
+        var stored = null;
         try {
-          var stored = localStorage.getItem("ymmv-theme");
-          var theme =
-            stored || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-          document.documentElement.dataset.theme = theme;
+          stored = localStorage.getItem("ymmv-theme");
         } catch (e) {}
+        // whitelist: arbitrary storage garbage must not become a token-less data-theme value
+        if (stored !== "light" && stored !== "dark") stored = null;
+        var theme = stored;
+        if (!theme) {
+          try {
+            theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          } catch (e) {
+            theme = "dark";
+          }
+        }
+        document.documentElement.dataset.theme = theme;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", theme === "light" ? "#fbfaf7" : "#0c0d10");
       })();
     </script>
     <title>{title}</title>
@@ -71,6 +88,15 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
           // aria-pressed=true ⇒ the non-default (light) theme is active
           btn.setAttribute("aria-pressed", String(current() === "light"));
         }
+        function syncThemeColor() {
+          // Keep the browser UI (mobile toolbar/overscroll) on the active --bg. Read the token
+          // from CSS (this script runs after the stylesheet) so a palette change can't desync it;
+          // only the pre-paint head script keeps hex literals.
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (!meta) return;
+          var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+          if (bg) meta.setAttribute("content", bg);
+        }
         syncPressed(); // expose the toggle state at load, not only after the first click
         btn.addEventListener("click", function () {
           var next = current() === "dark" ? "light" : "dark";
@@ -79,14 +105,20 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
             localStorage.setItem("ymmv-theme", next);
           } catch (e) {}
           syncPressed();
+          syncThemeColor();
         });
         try {
           var mq = matchMedia("(prefers-color-scheme: light)");
           mq.addEventListener("change", function (e) {
-            if (!localStorage.getItem("ymmv-theme")) {
-              document.documentElement.dataset.theme = e.matches ? "light" : "dark";
-              syncPressed();
-            }
+            // guard INSIDE the callback — the outer try only covers registration, and
+            // localStorage can throw here in storage-blocked browsers
+            try {
+              if (!localStorage.getItem("ymmv-theme")) {
+                document.documentElement.dataset.theme = e.matches ? "light" : "dark";
+                syncPressed();
+                syncThemeColor();
+              }
+            } catch (err) {}
           });
         } catch (e) {}
       })();
@@ -116,6 +148,37 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
               })
               .catch(function () {});
           });
+        });
+      })();
+    </script>
+    {/* The profile page's inline "diff vs <you>" form. Navigates to /<handle>/vs/<you> and
+        remembers the entered handle (the input is the only write point — the web has no auth),
+        so return visits are prefilled. No-JS keeps the <noscript> URL-pattern hint instead. */}
+    <script is:inline>
+      (function () {
+        var form = document.querySelector("[data-diff-vs]");
+        if (!form) return;
+        var input = form.querySelector("input");
+        if (!input) return;
+        try {
+          var last = localStorage.getItem("ymmv-you");
+          if (last && !input.value) input.value = last;
+        } catch (e) {}
+        form.addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var you = input.value.trim().replace(/^@+/, "");
+          // Mirror the server's isValidHandle (GitHub handle shape, ≤39). Without this, "." or
+          // ".." survive encodeURIComponent and the browser normalizes the dot-segments away
+          // (silent self-navigation), and garbage would be persisted + prefilled forever.
+          if (!/^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you) || you.length > 39) {
+            input.focus();
+            return;
+          }
+          try {
+            localStorage.setItem("ymmv-you", you);
+          } catch (e) {}
+          location.href =
+            "/" + encodeURIComponent(form.dataset.diffVs) + "/vs/" + encodeURIComponent(you);
         });
       })();
     </script>
