@@ -1,13 +1,16 @@
 ---
 // The 3-column diff (label | theirs | yours), per DESIGN.md + docs/preview.html.
-// Amber is scarce: it marks ONLY a real difference (the yours value + the label dot). Same rows
-// recede to --faint. Extras don't diff (free labels), so they're intentionally omitted here.
+// Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
+// a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
+// Extras don't diff (free labels), so they render dimmed and uncounted below the table.
 // Values are user-controlled → rendered via Astro auto-escaping.
 //
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
 // only on differing rows (presence, not just hue), and each row carries a visually-hidden
 // "differs:"/"same:" prefix for screen readers. Header + row-label cells are real <th>.
 import type { DiffResult } from "@ymmv/shared";
+import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { safeHref } from "../lib/safe-href.ts";
 
 interface Props {
   result: DiffResult;
@@ -15,22 +18,35 @@ interface Props {
   mine: string; // the viewer ("you")
 }
 const { result, theirs, mine } = Astro.props;
+const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length > 0;
 ---
 
-<h1 class="url">how <b>{theirs}</b> differs from <b>{mine}</b></h1>
+<h1 class="url">
+  how <b><a href={`/${encodeURIComponent(theirs)}`}>{theirs}</a></b> differs from{" "}
+  <b><a href={`/${encodeURIComponent(mine)}`}>{mine}</a></b>
+</h1>
 
 <table class="diff">
   <thead>
     <tr>
       <td></td>
-      <th scope="col">{theirs}</th>
-      <th scope="col">{mine}</th>
+      <th scope="col" title={theirs}>{theirs}</th>
+      <th scope="col" title={mine}>{mine}</th>
     </tr>
   </thead>
   <tbody>
     {
       result.rows.map((row) => {
         const differs = row.status !== "same";
+        // Never display a marked difference as two equal-looking strings: if stripping would
+        // collide the sides (https://x vs x — dotfiles compares verbatim), render both raw.
+        const collide =
+          row.theirs != null &&
+          row.mine != null &&
+          row.theirs !== row.mine &&
+          displayUrl(row.theirs) === displayUrl(row.mine);
+        const cell = (v: string) => (collide ? v : displayUrl(v));
+        const cellTitle = (v: string) => (collide ? undefined : urlTitle(v));
         return (
           <tr class={differs ? "changed" : "same"}>
             <th scope="row" class="k">
@@ -38,8 +54,20 @@ const { result, theirs, mine } = Astro.props;
               <span class="sr-only">{differs ? "differs: " : "same: "}</span>
               {row.label}
             </th>
-            <td class="theirs">{row.theirs ?? <span class="missing">—</span>}</td>
-            <td class="yours">{row.mine ?? <span class="missing">—</span>}</td>
+            <td class="theirs">
+              {row.theirs != null ? (
+                <span title={cellTitle(row.theirs)}>{cell(row.theirs)}</span>
+              ) : (
+                <span class="missing">—</span>
+              )}
+            </td>
+            <td class="yours">
+              {row.mine != null ? (
+                <span title={cellTitle(row.mine)}>{cell(row.mine)}</span>
+              ) : (
+                <span class="missing">—</span>
+              )}
+            </td>
           </tr>
         );
       })
@@ -47,4 +75,68 @@ const { result, theirs, mine } = Astro.props;
   </tbody>
 </table>
 
-<div class="foot">{result.differ} differ · {result.shared} shared — <b>your mileage may vary</b></div>
+<div class="foot">
+  {result.differ} differ · {result.shared} shared — <b>your mileage may vary</b> ·{" "}
+  <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
+</div>
+
+{
+  hasExtras && (
+    <>
+      <h2 class="group-h">Extras — not compared</h2>
+      {/* Same URL treatment as the profile page (safeHref link + full-URL title). <bdi> isolates
+          each untrusted run so a bidi control in a label can't visually reorder the "label = value"
+          line (the CLI strips bidi outright; a shared web sanitizer is a follow-up). */}
+      <table class="spec extras-dim">
+        <tbody>
+          {result.extras.theirs.map((x) => {
+            const href = safeHref(x.value);
+            return (
+              <tr>
+                <th scope="row" class="k">{theirs}</th>
+                <td class="v">
+                  <bdi>{x.label}</bdi> ={" "}
+                  {href ? (
+                    <a
+                      href={href}
+                      rel="nofollow ugc noopener noreferrer"
+                      target="_blank"
+                      title={urlTitle(x.value)}
+                    >
+                      <bdi>{displayUrl(x.value)}</bdi>
+                    </a>
+                  ) : (
+                    <bdi>{displayUrl(x.value)}</bdi>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+          {result.extras.mine.map((x) => {
+            const href = safeHref(x.value);
+            return (
+              <tr>
+                <th scope="row" class="k">{mine}</th>
+                <td class="v">
+                  <bdi>{x.label}</bdi> ={" "}
+                  {href ? (
+                    <a
+                      href={href}
+                      rel="nofollow ugc noopener noreferrer"
+                      target="_blank"
+                      title={urlTitle(x.value)}
+                    >
+                      <bdi>{displayUrl(x.value)}</bdi>
+                    </a>
+                  ) : (
+                    <bdi>{displayUrl(x.value)}</bdi>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </>
+  )
+}

@@ -7,6 +7,8 @@
 // and group headers as non-headings so they don't pollute the document outline / emit a 2nd <h1>.
 // Row labels are real <th scope="row"> for screen-reader header association.
 import { KEY_LABELS, type Profile } from "@ymmv/shared";
+import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import InstallCommand from "./InstallCommand.astro";
 import { safeHref } from "../lib/safe-href.ts";
 
 interface Props {
@@ -40,8 +42,13 @@ const GroupTag = example ? "p" : "h2";
                 </th>
                 <td class="v">
                   {href ? (
-                    <a href={href} rel="nofollow ugc noopener noreferrer" target="_blank">
-                      {e.value}
+                    <a
+                      href={href}
+                      rel="nofollow ugc noopener noreferrer"
+                      target="_blank"
+                      title={urlTitle(e.value)}
+                    >
+                      {displayUrl(e.value)}
                     </a>
                   ) : (
                     e.value
@@ -71,8 +78,13 @@ const GroupTag = example ? "p" : "h2";
                 </th>
                 <td class="v">
                   {href ? (
-                    <a href={href} rel="nofollow ugc noopener noreferrer" target="_blank">
-                      {x.value}
+                    <a
+                      href={href}
+                      rel="nofollow ugc noopener noreferrer"
+                      target="_blank"
+                      title={urlTitle(x.value)}
+                    >
+                      {displayUrl(x.value)}
                     </a>
                   ) : (
                     x.value
@@ -89,9 +101,46 @@ const GroupTag = example ? "p" : "h2";
 
 {!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
 
-<div class="foot">$ <b>npx ymmv-cli {handle}</b></div>
+{
+  example ? (
+    <div class="foot">$ <b>npx ymmv-cli {handle}</b></div>
+  ) : (
+    <div class="foot"><InstallCommand command={`npx ymmv-cli ${handle}`} /></div>
+  )
+}
 {!example && (
-  <p class="cta">
-    make yours → <b>npx ymmv-cli</b>
-  </p>
+  <>
+    <p class="cta">
+      make yours → <b>npx ymmv-cli</b>
+    </p>
+    {/* action → the profile page, whose ?you= handler 302s to the diff: a native (script-failed)
+        submit works from anywhere this form renders, including the /vs/ nudge page */}
+    <form class="cta diff-cta" action={`/${handle}`} data-diff-vs={handle}>
+      <label>
+        diff vs{" "}
+        <input
+          class="you"
+          name="you"
+          placeholder="<you>"
+          maxlength="39"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-label={`your handle — diff ${handle} against you`}
+        />
+      </label>
+      <button class="go" type="submit" aria-label="view the diff">→</button>
+    </form>
+    <noscript>
+      {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
+      <style is:inline>
+        .diff-cta {
+          display: none;
+        }
+      </style>
+      <p class="cta">
+        diff → <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
+      </p>
+    </noscript>
+  </>
 )}
