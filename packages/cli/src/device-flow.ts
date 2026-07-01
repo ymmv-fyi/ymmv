@@ -52,6 +52,14 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
 
   let interval = dc.interval || 5;
   const deadline = now() + dc.expires_in * 1000;
+  // GitHub returns EVERY device-flow protocol outcome (authorization_pending / slow_down /
+  // access_denied / expired_token) as HTTP 200 + JSON, so a non-ok status or a non-JSON body is a
+  // transient infra blip (a proxy 5xx, an HTML error page), never an auth verdict. Keep polling
+  // through it instead of aborting the whole login — but give up after a run of them so a PERSISTENT
+  // failure (a corporate proxy 403/407, a GitHub outage) fails fast with a clear message instead of
+  // hanging silently until the code expires. The real OAuth errors below stay fatal.
+  let transientFailures = 0;
+  const MAX_TRANSIENT_FAILURES = 5;
   while (now() < deadline) {
     await sleep(interval * 1000);
     const res = await doFetch(TOKEN_URL, {
@@ -63,7 +71,23 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       }),
     });
-    const tok = (await res.json()) as { access_token?: string; error?: string; interval?: number };
+    let tok: { access_token?: string; error?: string; interval?: number } | undefined;
+    if (res.ok) {
+      try {
+        tok = (await res.json()) as { access_token?: string; error?: string; interval?: number };
+      } catch {
+        tok = undefined;
+      }
+    }
+    if (tok === undefined) {
+      if (++transientFailures >= MAX_TRANSIENT_FAILURES) {
+        throw new Error(
+          "GitHub isn't responding to the login poll — check your connection and run `ymmv login` again.",
+        );
+      }
+      continue;
+    }
+    transientFailures = 0;
     if (tok.access_token) return tok.access_token;
     switch (tok.error) {
       case "authorization_pending":

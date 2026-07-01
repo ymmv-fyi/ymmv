@@ -23,7 +23,14 @@ export function tokenFilePath(): string {
 /** Persist the token for the CURRENT base — 0600, via a temp file + atomic rename. */
 export async function saveToken(data: Omit<StoredToken, "base">): Promise<void> {
   const path = tokenFilePath();
-  await mkdir(dirname(path), { recursive: true });
+  const dir = dirname(path);
+  // 0o700 the credential dir, not just the 0o600 token file. `mode` on mkdir only applies to dirs it
+  // CREATES (and is umask-masked), so also chmod on POSIX to tighten a pre-existing world-traversable
+  // 0o755 dir left by an older CLI. Best-effort: on a foreign-owned or network-mounted dir (NFS
+  // root_squash, CIFS, WSL /mnt) chmod can EPERM/ENOSYS, and this is pure defense-in-depth — the token
+  // file is still written 0o600, so a dir-chmod failure must never break login. Windows is a no-op.
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") await chmod(dir, 0o700).catch(() => {});
   // Unique temp name so we never reuse crash residue or collide with a concurrent save, and an
   // explicit chmod because writeFile's `mode` only applies when it CREATES the file.
   const tmp = `${path}.${randomUUID()}.tmp`;

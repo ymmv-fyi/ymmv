@@ -2,6 +2,29 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [0.1.5] - 2026-06-30
+
+### Security
+- **The `ymmv` credential directory is now created private (0700).** The saved token file was already
+  owner-only (0600), but the enclosing `~/.config/ymmv` directory was world-traversable, so another
+  local user could see that a ymmv credential existed. It's now locked to your user, and an older
+  directory left more open is tightened on the next save. POSIX only — Windows relies on your per-user
+  profile permissions.
+- **External links on a profile page no longer leak the referring URL.** Links to your published
+  dotfiles/other URLs now carry `rel="noreferrer"`, so the destination site no longer receives which
+  ymmv.fyi page the visitor came from. (Reverse-tabnabbing was already blocked by `noopener`.)
+- **Sign-in and sign-out no longer follow HTTP redirects.** A redirect can't trick the CLI into
+  re-sending your GitHub token to another location or reading a redirect as a successful sign-out.
+  Hardening only — the production service doesn't redirect these requests.
+
+### Fixed
+- **A brief GitHub hiccup during sign-in no longer aborts the whole login.** If GitHub returned a
+  transient error while the CLI was waiting for you to authorize the device code, login used to fail
+  outright; it now keeps polling through the blip. A sustained outage or a blocking proxy fails fast
+  with a clear message instead of hanging until the code expires.
+- **The CLI validates profile data it fetches.** A malformed response (e.g. from a custom `YMMV_API`
+  endpoint) now fails with a clear error instead of crashing partway through a diff.
+
 ## [0.1.4] - 2026-06-30
 
 ### Security
@@ -59,6 +82,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.1.5]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.2

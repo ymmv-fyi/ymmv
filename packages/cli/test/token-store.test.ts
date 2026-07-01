@@ -21,9 +21,11 @@ const DIR = dirname(PATH);
 beforeEach(() => vi.clearAllMocks());
 
 describe("saveToken", () => {
-  it("mkdirs, writes a unique 0600 temp file scoped to the base, chmods it, then atomically renames", async () => {
+  it("mkdirs a 0700 dir, writes a unique 0600 temp file scoped to the base, chmods it, then atomically renames", async () => {
     await saveToken({ token: "ymmv_x", handle: "carol" });
-    expect(mkdir).toHaveBeenCalledWith(DIR, { recursive: true });
+    expect(mkdir).toHaveBeenCalledWith(DIR, { recursive: true, mode: 0o700 });
+    // POSIX also chmods the dir 0o700 to tighten a pre-existing world-traversable dir.
+    if (process.platform !== "win32") expect(chmod).toHaveBeenCalledWith(DIR, 0o700);
     // unique temp name (not a fixed .tmp), written with mode 0600
     const tmp = vi.mocked(writeFile).mock.calls[0]?.[0] as string;
     expect(tmp).toMatch(/token\.json\..+\.tmp$/);

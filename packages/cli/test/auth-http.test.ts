@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mintYmmvToken } from "../src/auth-http.js";
+import { mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
 
 // Real mintYmmvToken (NOT mocked here — other CLI suites mock auth-http.js; Vitest isolates files, so
 // no bleed). Stub the global fetch to drive each Worker response the mint handler can return.
@@ -43,5 +43,27 @@ describe("mintYmmvToken", () => {
   it("throws a generic login-failed error on other non-ok statuses (e.g. foreign-token 401)", async () => {
     stubFetch({ error: "github_auth_failed" }, 401);
     await expect(mintYmmvToken("gho_x")).rejects.toThrow(/login failed: 401/i);
+  });
+
+  it('sets redirect:"manual" so a 3xx can never masquerade as a successful mint', async () => {
+    // A stubbed fetch can't reproduce real redirect-following, so lock in the guard-option itself:
+    // absent it, Node follows the 30x and re-POSTs the access_token to the redirect target.
+    stubFetch({ token: "ymmv_x", handle: "carol" }, 200);
+    await mintYmmvToken("gho_x");
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/auth/token"),
+      expect.objectContaining({ redirect: "manual" }),
+    );
+  });
+});
+
+describe("revokeYmmvToken", () => {
+  it('sets redirect:"manual" so a 3xx can never masquerade as a successful logout', async () => {
+    stubFetch({ revoked: true }, 200);
+    await revokeYmmvToken("ymmv_x");
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/auth/logout"),
+      expect.objectContaining({ redirect: "manual" }),
+    );
   });
 });

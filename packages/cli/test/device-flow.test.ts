@@ -27,6 +27,13 @@ function fetchSeq(...bodies: unknown[]): typeof fetch {
   return fn as unknown as typeof fetch;
 }
 
+// For transient-blip tests: drive raw Response objects (non-ok status / non-JSON body) directly.
+function fetchResponses(...responses: Response[]): typeof fetch {
+  const fn = vi.fn();
+  for (const r of responses) fn.mockResolvedValueOnce(r);
+  return fn as unknown as typeof fetch;
+}
+
 const noSleep = vi.fn().mockResolvedValue(undefined);
 const at0 = () => 0;
 
@@ -71,6 +78,59 @@ describe("pollForToken state machine", () => {
       now: at0,
     });
     expect(sleep.mock.calls.map((c) => c[0])).toEqual([5000, 30000]);
+  });
+
+  it("keeps polling through a transient 5xx (non-JSON) blip instead of aborting login", async () => {
+    // The Trigger: GitHub returns one 502 mid-poll. Old code called res.json() on the non-JSON body
+    // and threw, killing the whole login; now it's treated like authorization_pending.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const token = await pollForToken(DC, {
+      fetch: fetchResponses(
+        new Response("Bad Gateway", { status: 502 }),
+        json({ access_token: "gho_x" }),
+      ),
+      sleep,
+      now: at0,
+    });
+    expect(token).toBe("gho_x");
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps polling through a non-JSON 200 body (transient) instead of throwing", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const token = await pollForToken(DC, {
+      fetch: fetchResponses(
+        new Response("<html>proxy error</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+        json({ access_token: "gho_x" }),
+      ),
+      sleep,
+      now: at0,
+    });
+    expect(token).toBe("gho_x");
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up with a clear error after a run of transient failures (no silent ~15-min hang)", async () => {
+    // A PERSISTENT non-200 (proxy 403/407, GitHub outage) must fail fast, not poll to the deadline
+    // and then misreport "expired". Five consecutive 502s trip the cap.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      pollForToken(DC, {
+        fetch: fetchResponses(
+          new Response("Bad Gateway", { status: 502 }),
+          new Response("Bad Gateway", { status: 502 }),
+          new Response("Bad Gateway", { status: 502 }),
+          new Response("Bad Gateway", { status: 502 }),
+          new Response("Bad Gateway", { status: 502 }),
+        ),
+        sleep,
+        now: at0,
+      }),
+    ).rejects.toThrow(/isn't responding/i);
+    expect(sleep).toHaveBeenCalledTimes(5);
   });
 
   it("throws a friendly error on access_denied", async () => {
