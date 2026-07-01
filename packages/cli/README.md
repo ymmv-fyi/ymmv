@@ -2,8 +2,8 @@
 
 **Share your dev tool-stack from the terminal.**
 
-Editor, OS, shell, terminal, fonts, AI tools — published to a clean page at `ymmv.fyi/<your-handle>`
-in about 10 seconds.
+Editor, OS, shell, terminal, browser, font (and more) — published to a clean
+page at `ymmv.fyi/<handle>` in about 10 seconds.
 
 ```sh
 npx ymmv-cli            # detect your stack, confirm, go live at ymmv.fyi/<you>
@@ -16,7 +16,8 @@ Install once for the short `ymmv` command:
 npm i -g ymmv-cli
 ```
 
-First run includes a one-time GitHub sign-in (the device flow you know from `gh` / `npm login`, ~10s).
+First run includes a one-time GitHub sign-in (the device flow you know from `gh`
+/ `npm login`, ~10s).
 
 ## Commands
 

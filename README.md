@@ -2,8 +2,8 @@
 
 **Share your dev tool-stack from the terminal.**
 
-Editor, OS, shell, terminal, fonts, AI tools — published to a clean page at `ymmv.fyi/<your-handle>`
-in about 10 seconds, straight from the command line.
+Editor, OS, shell, terminal, browser, font (and more) — published to a clean
+page at `ymmv.fyi/<handle>` in about 10 seconds.
 
 ![Running npx ymmv-cli to detect, confirm, and publish a dev stack to a live ymmv.fyi page](docs/demo.gif)
 
@@ -14,17 +14,15 @@ npx ymmv-cli           # detect your stack, confirm, go live at ymmv.fyi/<you>
 npx ymmv-cli bardisty  # view someone's stack in the terminal
 ```
 
-First run includes a one-time GitHub sign-in (the device flow you know from `gh` / `npm login`, ~10s).
-Every update after that is instant.
+First run includes a one-time GitHub sign-in (the device flow you know from `gh`
+/ `npm login`, ~10s). Every update after that is instant.
 
 ## What you get
 
-- **A clean, shareable page** at `ymmv.fyi/<your-handle>` — typography-forward, dark and light.
-- **Auto-detected** — it reads your shell, OS, terminal, editor and pre-fills; you just confirm.
+- **A clean, shareable page** at `ymmv.fyi/<handle>`.
+- **Auto-detected** — it reads your shell, OS, terminal, and editor, then pre-fills; you just confirm.
 - **Instant updates** — re-run any time; your page refreshes in seconds.
-- **Open data** — every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
-- **Diffs** — view someone's profile while you're logged in, and you'll see how your stack
-compares:
+- **Diffs** — view someone's profile while you're logged in, and you'll see how your stack compares:
 
   ```
               theirs         yours
@@ -33,6 +31,10 @@ compares:
   font        Berkeley Mono  JetBrains Mono
   wm          AeroSpace      —
   ```
+
+  Also available on the web at `https://ymmv.fyi/<you>/vs/<them>`.
+
+- **Open data** — every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
 ## Commands
 
