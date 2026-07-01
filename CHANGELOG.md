@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-01
 
 ### Changed
 - **Stack diffs now compare by tool identity, not exact text.** Two profiles that list the same tool
