@@ -123,6 +123,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.2.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.2.0
 [0.1.5]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.3
