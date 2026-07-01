@@ -32,7 +32,8 @@ First run includes a one-time GitHub sign-in (the device flow you know from `gh`
   wm          AeroSpace      —
   ```
 
-  Also available on the web at `https://ymmv.fyi/<you>/vs/<them>`.
+  Also on the web: type a handle into the `diff vs` box on any profile page, or
+  go straight to `https://ymmv.fyi/<you>/vs/<them>`.
 
 - **Open data** — every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
