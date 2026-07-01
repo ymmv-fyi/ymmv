@@ -33,7 +33,7 @@ First run includes a one-time GitHub sign-in (the device flow you know from `gh`
   ```
 
   Also on the web: type a handle into the `diff vs` box on any profile page, or
-  go straight to `https://ymmv.fyi/<you>/vs/<them>`.
+  go straight to `https://ymmv.fyi/<them>/vs/<you>`.
 
 - **Open data** — every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
