@@ -43,7 +43,12 @@
     // then `wrangler deploy` (env baked at build, no --env). Migrations read THIS source config:
     // `wrangler d1 migrations apply ymmv --env production --remote`.
     "production": {
-      "name": "ymmv",
+      // Worker name = the deployed script name (serves the ymmv.fyi custom domain below). Must match
+      // what `wrangler secret put --env production` targets, so GITHUB_CLIENT_SECRET lands on the live
+      // Worker. The build bakes this name; `wrangler deploy` uses it as-is (release.yml scopes
+      // CLOUDFLARE_ENV to the build step so wrangler doesn't re-suffix it). The D1 database is still
+      // named "ymmv" (database_name below) — unrelated to the Worker name.
+      "name": "ymmv-production",
       "d1_databases": [
         {
           "binding": "DB",

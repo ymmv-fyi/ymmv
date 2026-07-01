@@ -133,14 +133,14 @@ jobs:
         run: npm publish --dry-run
         working-directory: packages/cli
 
-  # Deploy the unified Worker. Per-env CLOUDFLARE_ENV build bakes the right bindings/routes into the
+  # Deploy the unified Worker. The CLOUDFLARE_ENV build bakes the right name/bindings/routes into the
   # adapter's generated config, then wrangler deploys THAT (no --env). D1 migrations run against the
   # source config (--env). Dry-run validates config + bundle offline (no Cloudflare secrets needed).
+  # CLOUDFLARE_ENV is scoped to the build step ONLY (see below) — it must NOT reach `wrangler deploy`.
   deploy-worker:
     needs: [prep, gate]
     runs-on: ubuntu-latest
     env:
-      CLOUDFLARE_ENV: ${{ needs.prep.outputs.environment }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
@@ -152,9 +152,16 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ymmv/shared build
-      # Astro 7 bakes env at build time (CLOUDFLARE_ENV) — one build per environment.
+      # Astro 7 bakes env at build time (CLOUDFLARE_ENV) — one build per environment. Scope
+      # CLOUDFLARE_ENV to THIS step only: it selects the env for the baked config (name + bindings +
+      # routes). If it also reached `wrangler deploy` below, wrangler would re-apply the env to the
+      # already-baked config (which has no env blocks) and append `-<env>` to the worker name
+      # (ymmv-production -> ymmv-production-production), diverging from the name that
+      # `wrangler secret put --env <env>` targets — a silent secret/worker-name mismatch.
       - name: Build Worker for ${{ needs.prep.outputs.environment }}
         run: pnpm --filter @ymmv/web build
+        env:
+          CLOUDFLARE_ENV: ${{ needs.prep.outputs.environment }}
       # Guard against a silent rate-limit fail-open: RL_WRITE MUST be in the env-baked config, or the
       # handler's `if (!limiter) return null` would disable write rate limiting in production.
       - name: Assert RL_WRITE is bound
