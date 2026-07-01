@@ -10,8 +10,11 @@
  * Rules:
  *  - Iterate CURATED_KEYS in canonical order → deterministic row order, independent of input.
  *  - A row exists for every key present on EITHER side; keys absent on both → no row.
- *  - Equality compares TRIMMED values (whitespace-insensitive); values are returned
- *    verbatim and case stays significant ("Code" ≠ "code").
+ *  - Equality compares CANONICAL identity (see normalize.ts), not raw text: values are folded
+ *    (case + Unicode NFC + whitespace-insensitive) and resolved through a curated per-field alias
+ *    catalog, so "Firefox" = "firefox", "VS Code" = "vscode", "nvim" = "Neovim". Distinct tools
+ *    never merge (Vim ≠ Neovim, macOS 15.2 ≠ 15.4). `dotfiles` (a URL) compares verbatim/trimmed.
+ *    Values are still returned VERBATIM — normalization affects comparison only.
  *  - Duplicate keys in `entries` resolve LAST-WINS (Map insertion semantics).
  *  - Non-curated keys in `entries` are IGNORED (never a row) — the API rejects them on
  *    write, so this is purely defensive against malformed input.
@@ -25,6 +28,7 @@
 
 import type { CuratedKey } from "./keys.js";
 import { CURATED_KEYS, KEY_LABELS } from "./keys.js";
+import { canonical } from "./normalize.js";
 import type { DiffResult, DiffRow, DiffStatus, Profile } from "./types.js";
 
 /** Curated-key → value lookup; last-wins on duplicate keys, non-curated keys ignored on read. */
@@ -39,9 +43,9 @@ function toLookup(entries: Profile["entries"]): Map<CuratedKey, string> {
   return map;
 }
 
-function classify(mine: string | null, theirs: string | null): DiffStatus {
+function classify(key: CuratedKey, mine: string | null, theirs: string | null): DiffStatus {
   if (mine !== null && theirs !== null) {
-    return mine.trim() === theirs.trim() ? "same" : "changed";
+    return canonical(key, mine) === canonical(key, theirs) ? "same" : "changed";
   }
   return mine !== null ? "only_mine" : "only_theirs";
 }
@@ -61,7 +65,7 @@ export function diff(mine: Profile, theirs: Profile): DiffResult {
       continue;
     }
 
-    const status = classify(mineValue, theirsValue);
+    const status = classify(key, mineValue, theirsValue);
     if (status === "same") {
       shared += 1;
     } else {

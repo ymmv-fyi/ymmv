@@ -2,6 +2,16 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **Stack diffs now compare by tool identity, not exact text.** Two profiles that list the same tool
+  with different casing, spacing, or a common synonym now count as a match instead of a difference —
+  `Firefox` = `firefox`, `VS Code` = `vscode`, `JetBrains Mono` = `JetBrainsMono`, `nvim` = `Neovim`.
+  Genuinely different tools still differ (Vim ≠ Neovim, Chrome ≠ Chromium, macOS 15.2 ≠ 15.4), and a
+  `dotfiles` URL is still compared exactly (case and path matter). Values are shown exactly as you
+  typed them; only the match logic changed.
+
 ## [0.1.5] - 2026-06-30
 
 ### Security

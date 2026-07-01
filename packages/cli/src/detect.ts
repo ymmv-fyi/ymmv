@@ -1,4 +1,4 @@
-import type { CuratedKey } from "@ymmv/shared";
+import { type CuratedKey, TOOLS } from "@ymmv/shared";
 
 // Lightweight env detector. Reads ONLY environment variables + the Node platform — no
 // `systeminformation`, no process scanning, no child processes (that library solved the unreliable
@@ -21,53 +21,21 @@ function firstToken(s: string): string {
   return s.trim().split(/\s+/)[0] ?? "";
 }
 
-const SHELL_NAMES: Record<string, string> = {
-  zsh: "zsh",
-  bash: "bash",
-  fish: "fish",
-  sh: "sh",
-  dash: "dash",
-  ksh: "ksh",
-  tcsh: "tcsh",
-  csh: "csh",
-  nu: "Nushell",
-  nushell: "Nushell",
-  pwsh: "PowerShell",
-  powershell: "PowerShell",
-  elvish: "Elvish",
-  xonsh: "xonsh",
+// Detector name maps derived from the shared TOOLS catalog (single source of truth — see
+// tools.ts): envToken (lowercased) → canonical display name. Exact equivalence to the previous
+// hardcoded maps is pinned by detect.test.ts, so a TOOLS edit can't silently drop a mapping.
+const namesFor = (key: CuratedKey): Record<string, string> => {
+  const map: Record<string, string> = {};
+  for (const tool of TOOLS) {
+    if (tool.key !== key) continue;
+    for (const token of tool.envTokens ?? []) map[token] = tool.canonical;
+  }
+  return map;
 };
 
-const EDITOR_NAMES: Record<string, string> = {
-  nvim: "Neovim",
-  vim: "Vim",
-  vi: "Vim",
-  code: "VS Code",
-  "code-insiders": "VS Code Insiders",
-  codium: "VSCodium",
-  emacs: "Emacs",
-  nano: "Nano",
-  hx: "Helix",
-  helix: "Helix",
-  subl: "Sublime Text",
-  micro: "Micro",
-  idea: "IntelliJ IDEA",
-  zed: "Zed",
-  pico: "Pico",
-};
-
-const TERM_PROGRAMS: Record<string, string> = {
-  "iterm.app": "iTerm2",
-  apple_terminal: "Terminal",
-  vscode: "VS Code",
-  wezterm: "WezTerm",
-  ghostty: "Ghostty",
-  hyper: "Hyper",
-  rio: "Rio",
-  kitty: "kitty",
-  tabby: "Tabby",
-  warpterminal: "Warp",
-};
+const SHELL_NAMES = namesFor("shell");
+const EDITOR_NAMES = namesFor("editor");
+const TERM_PROGRAMS = namesFor("terminal");
 
 function detectOS(env: Env, platform: NodeJS.Platform): string | undefined {
   // A WSL distro is more useful than a bare "Linux".
