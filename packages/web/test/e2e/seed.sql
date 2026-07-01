@@ -3,18 +3,22 @@
 -- profile (bardisty) to diff against, a renamed-away handle (antfuold → 301 → antfu), and an XSS
 -- row (xsstest) to prove HTML-escaping + the safeHref javascript:-scheme guard.
 
-DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003);
-DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003);
+DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005);
+DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005);
 
 INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES
   (1001, 'antfu', 'antfu',
    '[{"label":"Keyboard","value":"HHKB Pro 2"},{"label":"Dotfiles","value":"https://github.com/antfu/dotfiles"}]',
    '2026-06-28T09:00:00.000Z', '2026-06-20T00:00:00.000Z'),
-  (2002, 'bardisty', 'bardisty', '[]',
+  (2002, 'bardisty', 'bardisty', '[{"label":"Launcher","value":"Raycast"}]',
    '2026-06-28T10:00:00.000Z', '2026-06-21T00:00:00.000Z'),
   (3003, 'xsstest', 'xsstest',
    '[{"label":"Bio <script>alert(1)</script>","value":"<b>not bold</b> & \"quoted\""},{"label":"Evil link","value":"javascript:alert(1)"}]',
-   '2026-06-28T11:00:00.000Z', '2026-06-22T00:00:00.000Z');
+   '2026-06-28T11:00:00.000Z', '2026-06-22T00:00:00.000Z'),
+  (4004, 'plainuser', 'plainuser', '[]',
+   '2026-06-28T12:00:00.000Z', '2026-06-23T00:00:00.000Z'),
+  (5005, 'collide', 'collide', '[]',
+   '2026-06-28T13:00:00.000Z', '2026-06-24T00:00:00.000Z');
 
 INSERT INTO profile_entries (github_id, key, value) VALUES
   (1001, 'editor', 'VS Code'),
@@ -36,7 +40,15 @@ INSERT INTO profile_entries (github_id, key, value) VALUES
   (2002, 'font', 'JetBrains Mono'),
   (2002, 'multiplexer', 'tmux'),
   (2002, 'ai-tool', 'Claude Code'),
-  (3003, 'dotfiles', 'javascript:alert(1)');
+  (3003, 'dotfiles', 'javascript:alert(1)'),
+  (4004, 'editor', 'Zed'),
+  (4004, 'os', 'Windows'),
+  -- plainuser vs collide: dotfiles differ ONLY by scheme (verbatim compare) — exercises the
+  -- diff collide guard (both cells must render raw, never as two identical stripped strings)
+  (4004, 'dotfiles', 'github.com/plain/dots'),
+  (5005, 'editor', 'Zed'),
+  (5005, 'os', 'Windows'),
+  (5005, 'dotfiles', 'https://github.com/plain/dots');
 
 -- antfu was renamed away from "antfuold" → that old URL must 301 to /antfu.
 INSERT OR REPLACE INTO handle_history (old_handle_lower, github_id, changed_at) VALUES
