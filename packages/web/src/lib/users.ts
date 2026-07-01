@@ -48,7 +48,7 @@ export function handleBindStatements(
     //     left a handle_history row pointing the handle at THEM; GitHub's /user just proved the caller
     //     owns it NOW, so current ownership supersedes that marker. Without this, the publish takeover
     //     guard's handle_history UNION (profile.ts) 409s the new owner forever, and a GET 301s the
-    //     handle back to the prior owner until the (impossible) publish (WRITE-01). old_handle_lower is
+    //     handle back to the prior owner until the (impossible) publish. old_handle_lower is
     //     the PK, so this drops at most one row; it targets the CLAIMED handle, never the caller's own
     //     old handle just recorded in statement 1 (a different key — statement 1's WHERE excludes it).
     statements.push(

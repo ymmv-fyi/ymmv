@@ -2,6 +2,22 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [0.1.4] - 2026-06-30
+
+### Security
+- **Sign-in now verifies your GitHub token was actually issued to ymmv.** The device-flow sign-in
+  endpoint used to trust any valid GitHub access token's identity — so a token leaked, or phished for a
+  *different* OAuth app, could be used to mint a ymmv session for that account. Sign-in now verifies each
+  token belongs to ymmv's own GitHub app (token introspection) and rejects foreign or invalid tokens.
+  Signing in through the `ymmv` CLI is unchanged.
+- **Sign-in is rate-limited.** The mint endpoint now caps requests per identity and per client IP, so it
+  can't be hammered to inflate the database or amplify calls to GitHub. The CLI shows a clear "too many
+  login attempts — try again shortly."
+
+### Notes
+- Residual (unchanged): a token obtained by phishing a victim into authorizing ymmv's *own* app still
+  validates — this is inherent to the GitHub device flow and out of scope for this change.
+
 ## [0.1.3] - 2026-06-30
 
 ### Fixed
@@ -43,6 +59,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.1.4]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.1.1

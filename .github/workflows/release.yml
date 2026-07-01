@@ -4,6 +4,17 @@ name: Release
 #   • push a tag `vX.Y.Z`  → REAL production release: npm publish (provenance) + deploy the Worker.
 #   • workflow_dispatch    → rehearsal/ops: pick an environment + dry-run (default: staging, dry-run).
 #                            The "tagged-release dry-run hits staging" check is this, with defaults.
+#
+# PRE-TAG CHECKLIST (a `vX.Y.Z` tag deploys STRAIGHT to production — there is no staging gate in the
+# tag path). Sign-in fails CLOSED without its secret, and the gate job below never exercises the mint
+# path, so a missing secret is a SILENT total login outage. Before tagging:
+#   1. Set the Worker secret in BOTH envs (once, and after any rotation):
+#        wrangler secret put GITHUB_CLIENT_SECRET --env staging
+#        wrangler secret put GITHUB_CLIENT_SECRET --env production
+#      Value = the ymmv GitHub OAuth app's client secret (GitHub → Settings → Developer settings →
+#      OAuth Apps → ymmv). GITHUB_CLIENT_ID is a committed @ymmv/shared constant, not a secret.
+#   2. Rehearse on staging (workflow_dispatch → staging) and run a real `ymmv login` against it. Only
+#      tag once that succeeds.
 on:
   push:
     tags: ["v*"]
@@ -148,6 +159,11 @@ jobs:
       # handler's `if (!limiter) return null` would disable write rate limiting in production.
       - name: Assert RL_WRITE is bound
         run: grep -q "RL_WRITE" dist/server/wrangler.json || { echo "::error::RL_WRITE missing from generated config — rate limiting would silently fail open"; exit 1; }
+        working-directory: packages/web
+      # Same guard for the mint per-IP cap: RL_AUTH must be in the env-baked config, or checkAuthRateLimit's
+      # `if (!limiter) return null` would disable the login flood cap in production.
+      - name: Assert RL_AUTH is bound
+        run: grep -q "RL_AUTH" dist/server/wrangler.json || { echo "::error::RL_AUTH missing from generated config — the mint per-IP cap would silently fail open"; exit 1; }
         working-directory: packages/web
       # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
       - name: Apply D1 migrations

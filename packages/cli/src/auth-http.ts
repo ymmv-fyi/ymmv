@@ -8,7 +8,8 @@ export interface MintResult {
   handle: string | null;
 }
 
-/** Exchange a GitHub access token for a minted ymmv token (the Worker verifies identity via /user). */
+/** Exchange a GitHub access token for a minted ymmv token (the Worker verifies the token's audience
+ *  via GitHub token introspection). */
 export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   const res = await fetch(`${BASE}/api/v1/auth/token`, {
     method: "POST",
@@ -19,6 +20,12 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     if (res.status === 503) {
       throw new Error(body.message ?? "GitHub is unavailable — run `ymmv login` again shortly.");
+    }
+    if (res.status === 429) {
+      // The mint endpoint is rate-limited (per identity + per IP). Surface the server's hint.
+      const retry = res.headers.get("retry-after");
+      const msg = body.message ?? "too many login attempts — slow down and try again shortly";
+      throw new Error(retry ? `${msg} (retry in ${retry}s)` : msg);
     }
     throw new Error(`login failed: ${res.status} ${body.error ?? ""}`.trim());
   }
