@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { diff } from "./diff.js";
+import type { CuratedKey } from "./keys.js";
 import type { Entry, Extra, Profile } from "./types.js";
 import { SCHEMA_VERSION } from "./types.js";
 
@@ -12,6 +13,10 @@ function profile(entries: Entry[], extras: Extra[] = []): Profile {
     updated_at: "2026-06-28T00:00:00Z",
   };
 }
+
+// Composed vs decomposed accent built from code points (ASCII source) — genuinely different bytes.
+const CAFE_COMPOSED = `caf${String.fromCharCode(0x00e9)}`; // U+00E9
+const CAFE_DECOMPOSED = `cafe${String.fromCharCode(0x0301)}`; // e + combining acute
 
 describe("diff()", () => {
   it("1. identical — every row `same`, differ 0", () => {
@@ -164,5 +169,77 @@ describe("diff()", () => {
     ]);
     const result = diff(mine, profile([]));
     expect(result.rows.map((r) => r.key)).toEqual(["editor"]);
+  });
+
+  it("16. case-insensitive — Firefox === firefox, values still verbatim", () => {
+    const result = diff(
+      profile([{ key: "browser", value: "Firefox" }]),
+      profile([{ key: "browser", value: "firefox" }]),
+    );
+    expect(result.rows[0]?.status).toBe("same");
+    expect(result.rows[0]).toMatchObject({ mine: "Firefox", theirs: "firefox" });
+  });
+
+  it("17. Unicode NFC — composed and decomposed forms are `same`", () => {
+    expect(CAFE_COMPOSED).not.toBe(CAFE_DECOMPOSED); // sanity: genuinely different inputs
+    const result = diff(
+      profile([{ key: "font", value: CAFE_COMPOSED }]),
+      profile([{ key: "font", value: CAFE_DECOMPOSED }]),
+    );
+    expect(result.rows[0]?.status).toBe("same");
+  });
+
+  it("18. whitespace-insensitive — 'VS Code'='vscode', 'JetBrains Mono'='JetBrainsMono'", () => {
+    const editor = diff(
+      profile([{ key: "editor", value: "VS Code" }]),
+      profile([{ key: "editor", value: "vscode" }]),
+    );
+    expect(editor.rows[0]?.status).toBe("same");
+    const font = diff(
+      profile([{ key: "font", value: "JetBrains Mono" }]),
+      profile([{ key: "font", value: "JetBrainsMono" }]),
+    );
+    expect(font.rows[0]?.status).toBe("same");
+  });
+
+  it("19. curated aliases — Code=VS Code, nvim=Neovim, pwsh=PowerShell", () => {
+    const pairs: [CuratedKey, string, string][] = [
+      ["editor", "vsc", "VS Code"],
+      ["editor", "nvim", "Neovim"],
+      ["shell", "pwsh", "PowerShell"],
+    ];
+    for (const [key, a, b] of pairs) {
+      const result = diff(profile([{ key, value: a }]), profile([{ key, value: b }]));
+      expect(result.rows[0]?.status, `${a} vs ${b}`).toBe("same");
+    }
+  });
+
+  it("20. no false positives — distinct tools stay `changed`", () => {
+    const pairs: [CuratedKey, string, string][] = [
+      ["editor", "Vim", "Neovim"],
+      ["editor", "vi", "Vim"], // detector token, NOT a diff alias
+      ["editor", "Code", "VS Code"], // "Code" (elementary's editor) is not aliased to VS Code
+      ["browser", "Chrome", "Chromium"],
+      ["os", "macOS 15.2", "macOS 15.4"], // versions are real differences
+      ["ai-tool", "Claude", "Claude Code"],
+    ];
+    for (const [key, a, b] of pairs) {
+      const result = diff(profile([{ key, value: a }]), profile([{ key, value: b }]));
+      expect(result.rows[0]?.status, `${a} vs ${b}`).toBe("changed");
+    }
+  });
+
+  it("21. dotfiles (URL) compares verbatim — trim-equal is `same`, case/path differ is `changed`", () => {
+    const base = "https://github.com/antfu/dotfiles";
+    const trimmed = diff(
+      profile([{ key: "dotfiles", value: base }]),
+      profile([{ key: "dotfiles", value: `${base} ` }]),
+    );
+    expect(trimmed.rows[0]?.status).toBe("same"); // trim only
+    const cased = diff(
+      profile([{ key: "dotfiles", value: base }]),
+      profile([{ key: "dotfiles", value: "https://github.com/antfu/Dotfiles" }]),
+    );
+    expect(cased.rows[0]?.status).toBe("changed"); // case significant for URLs
   });
 });
