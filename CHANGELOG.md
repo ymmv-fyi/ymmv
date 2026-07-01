@@ -2,6 +2,37 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **Light theme no longer shows a dark band past the bottom of short pages on mobile.** The page
+  canvas and the browser UI (`theme-color`) now follow the active theme.
+- **The landing example now matches real profiles:** Dotfiles renders under Stack (it's a curated
+  field), not Extras.
+- **Publishing right after seeing "no ymmv profile for you yet" now shows your diff.** That nudge
+  page was cached with the long-lived policy, so a freshly published viewer could be served the
+  stale nudge; it now stays short-cached like a 404.
+
+### Changed
+- **Diffs now mark both differing values in amber** — on the web and in the CLI — not just your
+  column. A difference is symmetric; neither side is the "wrong" one.
+- **Diff pages navigate:** both handles in the header link to their profiles, and the summary line
+  gains a `swap →` link to flip the comparison.
+- **Extras now appear under a web diff** in a dimmed "not compared" list, matching the CLI (they
+  were silently omitted before).
+- **Profile pages gained a click-to-copy command and an inline `diff vs <you>` box** — type any
+  handle to jump straight to the diff; the handle is remembered for next time, invalid handles
+  are rejected before navigating, and the form still works when scripts are blocked.
+- **`https://` URLs display without the scheme** (`github.com/you/dotfiles`), so they wrap cleanly
+  on phones; links keep the full URL, `http://` stays visible (a cleartext target is worth seeing),
+  and a diff never renders two different values as the same string. Long handles in diff column
+  headers ellipsize instead of wrapping letter-by-letter.
+- **Dimmed text is brighter in both themes** to clear WCAG AA contrast — section labels, shared
+  diff rows, and footers were below 4.5:1.
+- **Keyboard focus is clearly visible on every control** (real focus rings, which also survive
+  Windows forced-colors mode), and the theme toggle's touch target now meets the 44px guideline.
+- Diff pages ship a diff-specific share description instead of the generic site blurb.
+
 ## [0.2.0] - 2026-07-01
 
 ### Changed
