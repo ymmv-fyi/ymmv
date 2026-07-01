@@ -12,6 +12,8 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **Publishing right after seeing "no ymmv profile for you yet" now shows your diff.** That nudge
   page was cached with the long-lived policy, so a freshly published viewer could be served the
   stale nudge; it now stays short-cached like a 404.
+- **A malformed stored extra can no longer break a profile page.** Bad rows are dropped on read
+  instead of erroring the whole page.
 
 ### Changed
 - **Diffs now mark both differing values in amber** — on the web and in the CLI — not just your
@@ -29,8 +31,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   headers ellipsize instead of wrapping letter-by-letter.
 - **Dimmed text is brighter in both themes** to clear WCAG AA contrast — section labels, shared
   diff rows, and footers were below 4.5:1.
-- **Keyboard focus is clearly visible on every control** (real focus rings, which also survive
-  Windows forced-colors mode), and the theme toggle's touch target now meets the 44px guideline.
+- **Keyboard focus is clearly visible on every control** — focus rings that survive Windows
+  forced-colors mode (the `diff vs` text box signals focus with its caret and accent underline,
+  and gains a ring in forced-colors) — and the theme toggle's touch target now meets the 44px
+  guideline.
 - Diff pages ship a diff-specific share description instead of the generic site blurb.
 
 ## [0.2.0] - 2026-07-01
