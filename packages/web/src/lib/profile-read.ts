@@ -20,11 +20,20 @@ export type ProfileRead =
   | { kind: "renamed"; handle: string }
   | { kind: "notfound" };
 
-// Stored extras are written as valid JSON, but parse defensively so one bad row can't 500 a read.
-function parseExtras(json: string): Extra[] {
+// Stored extras are written as valid JSON, but parse defensively so one bad row can't 500 a read —
+// including element shape: a non-string label/value would throw later in render (.replace on a number).
+// Exported for unit tests only.
+export function parseExtras(json: string): Extra[] {
   try {
     const parsed = JSON.parse(json ?? "[]");
-    return Array.isArray(parsed) ? (parsed as Extra[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (x): x is Extra =>
+        x !== null &&
+        typeof x === "object" &&
+        typeof x.label === "string" &&
+        typeof x.value === "string",
+    );
   } catch {
     return [];
   }

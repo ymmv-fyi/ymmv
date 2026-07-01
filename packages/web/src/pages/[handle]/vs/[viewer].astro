@@ -37,7 +37,13 @@ if (theirs.kind === "live" && mine.kind === "renamed") {
   });
 }
 
-Astro.response.headers.set("cache-control", readCacheControl(theirs.kind === "live" ? "live" : "notfound"));
+// The long-lived policy needs BOTH sides live: the nudge state ("no profile for <you> yet")
+// must stay short-cached like a 404, or a viewer who publishes right after seeing it can be
+// served the stale nudge from the edge for the length of the stale window.
+Astro.response.headers.set(
+  "cache-control",
+  readCacheControl(theirs.kind === "live" && mine.kind === "live" ? "live" : "notfound"),
+);
 if (theirs.kind !== "live") {
   Astro.response.status = 404;
 }
@@ -52,9 +58,14 @@ const title = theirsProfile
     ? `${theirsProfile.handle} vs ${mineHandle} — ymmv.fyi`
     : `${theirsProfile.handle} — ymmv.fyi`
   : `${theirsRaw} — ymmv.fyi`;
+// a diff-specific share description; the other states keep Layout's default
+const description =
+  theirsProfile && diffResult
+    ? `How ${theirsProfile.handle}'s developer tool stack differs from ${mineHandle}'s. Your mileage may vary.`
+    : undefined;
 ---
 
-<Layout title={title}>
+<Layout title={title} description={description}>
   {
     !theirsProfile ? (
       <NotFound handle={theirsRaw} />
@@ -63,7 +74,7 @@ const title = theirsProfile
     ) : (
       <>
         <Profile profile={theirsProfile} />
-        <p class="nudge">no ymmv profile for {mineRaw} yet — publish yours to diff →</p>
+        <p class="nudge">no ymmv profile for <bdi>{mineRaw}</bdi> yet — publish yours to diff →</p>
       </>
     )
   }

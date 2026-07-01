@@ -8,6 +8,19 @@ import { readCacheControl, resolveProfile } from "../../lib/profile-read.ts";
 // SSR profile page. Shares the resolver with the JSON endpoint, so HTML + JSON agree on
 // live / renamed (301) / not-found. A D1 throw bubbles → Astro 500 (error honesty), never a fake 404.
 const raw = String(Astro.params.handle ?? "");
+
+// A native (script-failed) diff-form submit lands here as GET /<handle>?you=<x> — honor it
+// server-side so the form still works when its inline script never ran: redirect to the canonical
+// diff URL. Only a valid handle shape redirects (mirrors the form's own guard); anything else
+// falls through and renders the profile. Runs before the D1 read — the redirect needs no data.
+const you = (Astro.url.searchParams.get("you") ?? "").trim().replace(/^@+/, "");
+if (you.length <= 39 && /^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you)) {
+  const redirect = Astro.redirect(`/${encodeURIComponent(raw)}/vs/${encodeURIComponent(you)}`, 302);
+  // every response carries an explicit edge policy — keep the 302 short-cached like a notfound
+  redirect.headers.set("cache-control", readCacheControl("notfound"));
+  return redirect;
+}
+
 const result = await resolveProfile(env.DB, raw);
 
 // Renamed away → 301 to the owner's current root URL, with the edge-cache policy attached.
