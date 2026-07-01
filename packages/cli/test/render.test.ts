@@ -59,9 +59,10 @@ const DIFF: DiffResult = {
 };
 
 describe("renderDiff", () => {
-  it("color mode: amber marks the differing row; footer is the thesis line", () => {
+  it("color mode: amber marks BOTH values of the differing row; footer is the thesis line", () => {
     const out = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
-    expect(out).toContain(AMBER);
+    expect(out).toContain(`${AMBER}fish`); // theirs column ambers too — a difference is symmetric
+    expect(out).toContain(`${AMBER}zsh`);
     expect(out).toMatch(/1 differ · 1 shared — your mileage may vary/);
   });
 
