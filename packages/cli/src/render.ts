@@ -7,9 +7,9 @@ import {
   type Profile,
 } from "@ymmv/shared";
 
-// Terminal rendering — the CLI half of the design system. Mirrors the web surface (DESIGN.md):
-// aligned key→value columns, amber ONLY on diff-differences (the load-bearing scarcity rule), muted
-// for same. Two hard requirements live here:
+// Terminal rendering — the CLI half of the design system. Mirrors the web surface (ymmv.css):
+// aligned key→value columns, amber on links + diff-differences ONLY (the load-bearing scarcity
+// rule, same as the web), muted for same. Two hard requirements live here:
 //   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) symbols so
 //     the diff still reads on any terminal.
 //   • Output sanitization: every profile value is UNTRUSTED — strip ANSI/control sequences
@@ -27,10 +27,10 @@ const CODES = {
   bold: `${CSI}1m`,
   reset: `${CSI}0m`,
 };
-type Codes = typeof CODES;
-const NO_CODES: Codes = { amber: "", faint: "", bold: "", reset: "" };
+export type Codes = typeof CODES;
+export const NO_CODES: Codes = { amber: "", faint: "", bold: "", reset: "" };
 
-function palette(color: boolean): Codes {
+export function palette(color: boolean): Codes {
   return color ? CODES : NO_CODES;
 }
 
@@ -70,6 +70,69 @@ export function useColor(env: Env, isTTY: boolean): boolean {
   // FORCE_COLOR convention (supports-color): "0" force-DISABLES, any other value force-enables.
   if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== "0";
   return isTTY;
+}
+
+/** Color for the current process: NO_COLOR/FORCE_COLOR, else stdout TTY state. */
+export function colorEnabled(): boolean {
+  return useColor(process.env, Boolean(process.stdout.isTTY));
+}
+
+const OSC = `${ESC}]`;
+const ST = `${ESC}\\`;
+
+/**
+ * Display-only URL shortening: trim + strip a leading "https://" (the boring default; "http://"
+ * stays deliberately — it is information). Duplicated from the web on purpose
+ * (packages/web/src/lib/display-value.ts) — the web package must not become a CLI dependency and
+ * @ymmv/shared stays wire-schema-only.
+ */
+export function displayUrl(value: string): string {
+  return value.trim().replace(/^https:\/\/(?=.)/i, "");
+}
+
+const HTTP_URL_RE = /^https?:\/\/\S+$/i;
+
+/** Is this value a bare http(s) URL (the whole value, no whitespace)? */
+export function isHttpUrl(value: string): boolean {
+  return HTTP_URL_RE.test(value.trim());
+}
+
+// Terminals known to mishandle (not ignore) unknown OSC sequences — never emit OSC-8 there.
+// Everything else gets the link when color is on; non-supporting-but-sane terminals drop the
+// sequence and show the text. Contingency if reality disagrees: grow this into an env sniff here.
+const NO_OSC8_TERMS = new Set(["linux", "dumb"]);
+
+/**
+ * A URL for the terminal: amber + OSC-8 hyperlink + shortened display when color is on; the full
+ * plain URL when color is off (piped/NO_COLOR output stays machine-readable). Safe on untrusted
+ * values: sanitizeValue strips ESC/BEL/C0/C1 first, so the value can neither terminate the OSC
+ * early nor smuggle its own sequence.
+ */
+export function link(url: string, color: boolean, term = process.env.TERM): string {
+  const clean = sanitizeValue(url).trim();
+  if (!color) return clean;
+  const text = `${CODES.amber}${displayUrl(clean)}${CODES.reset}`;
+  if (term !== undefined && NO_OSC8_TERMS.has(term)) return text;
+  return `${OSC}8;;${clean}${ST}${text}${OSC}8;;${ST}`;
+}
+
+/**
+ * Humanize a wire timestamp: "just now" (under a minute — including a FUTURE stamp, so clock skew
+ * never prints "-3m ago"), Nm/Nh/Nd ago, the plain date past ~30 days, and the raw (sanitized)
+ * string when unparseable.
+ */
+export function relTime(iso: string, now: () => number = Date.now): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return sanitizeValue(iso);
+  const ms = now() - t;
+  if (ms < 60_000) return "just now";
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
 /** Curated entries in canonical order, with display labels; non-curated rows are dropped. */
@@ -187,10 +250,11 @@ export function nudge(color: boolean): string {
   return `\n  ${c.amber}publish yours to diff →${c.reset} run ${c.bold}ymmv${c.reset}\n`;
 }
 
-/** Friendly "unknown handle" message (the arg is already handle-validated; sanitize defensively). */
-export function notFound(handle: string): string {
+/** Friendly "unknown handle" message (the arg is already handle-validated; sanitize defensively).
+ *  `base` is the full site URL (BASE) — linked amber like every other link. */
+export function notFound(handle: string, color: boolean, base: string): string {
   return (
     `\n  no ymmv profile for "${sanitizeValue(handle)}" yet.\n` +
-    "  publish one at ymmv.fyi with: npx ymmv-cli\n"
+    `  publish one at ${link(base, color)} with: npx ymmv-cli\n`
   );
 }

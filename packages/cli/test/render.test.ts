@@ -1,8 +1,12 @@
 import type { DiffResult, Profile } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import {
+  displayUrl,
+  isHttpUrl,
+  link,
   notFound,
   nudge,
+  relTime,
   renderDiff,
   renderProfile,
   sanitizeValue,
@@ -12,6 +16,7 @@ import {
 const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
 const AMBER = `${ESC}[93m`;
+const OSC8_OPEN = `${ESC}]8;;`;
 
 describe("sanitizeValue (terminal-escape injection)", () => {
   it("strips ANSI color sequences", () => {
@@ -45,6 +50,73 @@ describe("useColor", () => {
   it("otherwise follows the TTY state", () => {
     expect(useColor({}, true)).toBe(true);
     expect(useColor({}, false)).toBe(false);
+  });
+});
+
+describe("displayUrl / isHttpUrl", () => {
+  it("strips only the leading https:// for display", () => {
+    expect(displayUrl("https://git.io/etc")).toBe("git.io/etc");
+    expect(displayUrl("  https://git.io/etc  ")).toBe("git.io/etc");
+  });
+  it("keeps http:// (it is information) and a bare scheme intact", () => {
+    expect(displayUrl("http://old.example")).toBe("http://old.example");
+    expect(displayUrl("https://")).toBe("https://");
+  });
+  it("isHttpUrl accepts whole-value http(s) URLs only", () => {
+    expect(isHttpUrl("https://git.io/etc")).toBe(true);
+    expect(isHttpUrl("http://git.io/etc")).toBe(true);
+    expect(isHttpUrl(" https://git.io/etc ")).toBe(true);
+    expect(isHttpUrl("git.io/etc")).toBe(false);
+    expect(isHttpUrl("see https://git.io/etc")).toBe(false);
+    expect(isHttpUrl("ftp://host")).toBe(false);
+  });
+});
+
+describe("link", () => {
+  it("color mode: OSC-8 wraps the full URL, display is amber + shortened", () => {
+    const out = link("https://git.io/etc", true, "xterm-256color");
+    expect(out).toBe(
+      `${OSC8_OPEN}https://git.io/etc${ESC}\\${AMBER}git.io/etc${ESC}[0m${OSC8_OPEN}${ESC}\\`,
+    );
+  });
+  it("plain mode: the full URL, no ANSI, no shortening", () => {
+    const out = link("https://git.io/etc", false);
+    expect(out).toBe("https://git.io/etc");
+    expect(out).not.toContain(ESC);
+  });
+  it("TERM=linux/dumb: amber text, zero OSC-8 bytes (denylist)", () => {
+    for (const term of ["linux", "dumb"]) {
+      const out = link("https://git.io/etc", true, term);
+      expect(out).toBe(`${AMBER}git.io/etc${ESC}[0m`);
+      expect(out).not.toContain(OSC8_OPEN);
+    }
+  });
+  it("an injected escape can neither terminate the OSC early nor survive display", () => {
+    const out = link(`https://x.io/${ESC}${BEL}evil`, true, "xterm");
+    expect(out).toContain("https://x.io/evil");
+    expect(out).not.toContain(BEL);
+    expect(out.split(`${ESC}\\`).length).toBe(3); // exactly the two ST terminators we emit
+  });
+});
+
+describe("relTime", () => {
+  const at = (iso: string) => () => Date.parse(iso);
+  const NOW = "2026-07-02T12:00:00.000Z";
+  it("humanizes wire timestamps relative to the injected clock", () => {
+    expect(relTime("2026-07-02T11:59:30.000Z", at(NOW))).toBe("just now");
+    expect(relTime("2026-07-02T11:55:00.000Z", at(NOW))).toBe("5m ago");
+    expect(relTime("2026-07-02T09:00:00.000Z", at(NOW))).toBe("3h ago");
+    expect(relTime("2026-06-30T12:00:00.000Z", at(NOW))).toBe("2d ago");
+  });
+  it("falls back to the plain date past ~30 days", () => {
+    expect(relTime("2026-05-18T12:00:00.000Z", at(NOW))).toBe("2026-05-18");
+  });
+  it("a FUTURE stamp (clock skew) reads as just now, never negative", () => {
+    expect(relTime("2026-07-02T12:03:00.000Z", at(NOW))).toBe("just now");
+  });
+  it("unparseable input comes back raw but sanitized", () => {
+    expect(relTime("not-a-date", at(NOW))).toBe("not-a-date");
+    expect(relTime(`${ESC}[2Jt`, at(NOW))).toBe("t");
   });
 });
 
@@ -142,7 +214,11 @@ describe("nudge / notFound", () => {
     expect(nudge(false)).not.toContain(ESC);
     expect(nudge(false)).toMatch(/publish yours to diff/);
   });
-  it("notFound names the handle", () => {
-    expect(notFound("ghost")).toMatch(/no ymmv profile for "ghost"/);
+  it("notFound names the handle and links the site (plain URL when color is off)", () => {
+    const out = notFound("ghost", false, "https://ymmv.fyi");
+    expect(out).toMatch(/no ymmv profile for "ghost"/);
+    expect(out).toContain("publish one at https://ymmv.fyi with: npx ymmv-cli");
+    expect(out).not.toContain(ESC);
+    expect(notFound("ghost", true, "https://ymmv.fyi")).toContain(`${AMBER}ymmv.fyi`);
   });
 });
