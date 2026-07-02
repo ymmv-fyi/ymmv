@@ -27,7 +27,7 @@ export async function safeFetch(
   try {
     return await fetchFn(url, init);
   } catch (err) {
-    throw new Error(`can't reach ${reach} — check your connection (${causeText(err)})`, {
+    throw new Error(`can't reach ${reach}. Check your connection (${causeText(err)})`, {
       cause: err,
     });
   }

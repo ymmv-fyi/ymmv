@@ -134,7 +134,7 @@ describe("publish", () => {
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
-    const hint = /extra "Theme" duplicates a curated field — ymmv unset --extra "Theme"/;
+    const hint = /extra "Theme" duplicates a curated field; ymmv unset --extra "Theme"/;
     // The card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo.
     const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
     expect(logs.filter(isCard).length).toBe(2); // card before the edit pass, card after

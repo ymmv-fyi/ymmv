@@ -17,15 +17,17 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **The card and diff match the web page:** `ymmv.fyi/<handle>` header, `updated 3h ago`, a
   title line over the diff, uppercase column headers. With `YMMV_API` set, every printed URL
   shows that Worker's host.
-- **`ymmv -y` skips the prompts entirely**, as help always said — card, then publish.
+- **`ymmv -y` skips the prompts entirely**, as help always said: card, then publish.
 - **`set`/`unset` reply with one line** ending in a pointer at your live page (the extra
   `Published` echo is gone).
 
 ### Fixed
-- **Offline errors are readable:** `can't reach ymmv.fyi — check your connection (…)` instead
+- **Offline errors are readable:** `can't reach ymmv.fyi. Check your connection (…)` instead
   of a raw `fetch failed`, and a network blip no longer kills a login you already approved.
 - **A 401-retry publish can no longer land on a different GitHub account** when the re-login
-  binds one — it refuses instead of silently overwriting.
+  binds one; it refuses instead of silently overwriting.
+- **Messages use plain punctuation.** The em dashes are gone from prompts, errors, and
+  confirmations (the diff's "your mileage may vary" line keeps its web-matching typography).
 
 ## [0.5.0] - 2026-07-02
 

@@ -13,12 +13,12 @@ import { deleteToken, loadToken, peekBase } from "./token-store.js";
 // help.test.ts greps this file to keep the list in sync with CURATED_KEYS.
 export const help = (
   c: Codes,
-): string => `${c.bold}ymmv${c.reset} — terminal-native developer tool-stack profiles (ymmv.fyi)
+): string => `${c.bold}ymmv${c.reset}: terminal-native developer tool-stack profiles (ymmv.fyi)
 
 ${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
   ymmv -y                   publish without prompts (required when stdin isn't a TTY)
-  ymmv <handle>             view a profile — logged in, see the diff vs yours
+  ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (when a handle collides with a verb)
   ymmv set <key> <value>    set one curated key
   ymmv set --extra "L=V"    set a free-form extra
@@ -43,7 +43,7 @@ async function logout(): Promise<void> {
     const otherBase = await peekBase();
     console.log(
       otherBase && otherBase !== BASE
-        ? `Not logged in to ${BASE} (a token for ${otherBase} exists — set YMMV_API to that to log out of it).`
+        ? `Not logged in to ${BASE} (a token for ${otherBase} exists; set YMMV_API to that to log out of it).`
         : "Not logged in.",
     );
     return;
@@ -53,7 +53,7 @@ async function logout(): Promise<void> {
     revoked = await revokeYmmvToken(stored.token);
   } catch {
     console.error(
-      "Couldn't reach the server to revoke — your token is still active. Run `ymmv logout` again when connected.",
+      "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected.",
     );
     process.exitCode = 1;
     return;
