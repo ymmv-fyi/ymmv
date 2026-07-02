@@ -37,7 +37,7 @@ instant. Works on macOS, Linux, Windows, and WSL.
   ~ Theme   Gruvbox   Catppuccin
   ~ Font    Lilex     JetBrains Mono
 
-    3 differ · 1 shared: your mileage may vary
+    3 differ   1 shared
   ```
 
   Also on the web: type a handle into the `diff vs` box on any profile page, or

@@ -26,9 +26,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   of a raw `fetch failed`, and a network blip no longer kills a login you already approved.
 - **A 401-retry publish can no longer land on a different GitHub account** when the re-login
   binds one; it refuses instead of silently overwriting.
-- **Messages use plain punctuation.** The em dashes are gone from prompts, errors,
-  confirmations, and the diff footer ("N differ · M shared: your mileage may vary"), on the
-  web page too, so the two surfaces stay identical.
+- **Messages use plain punctuation.** The em dashes are gone from prompts, errors, and
+  confirmations, and the diff footer is just the counts now: `N differ   M shared` in the
+  terminal, `N differ · M shared · swap →` on the web. The tagline is gone from both.
 
 ## [0.5.0] - 2026-07-02
 
