@@ -10,6 +10,7 @@ import {
   SCHEMA_VERSION,
 } from "@ymmv/shared";
 import { deleteProfile, ensureLogin, fetchProfileJson, publishProfile } from "./api.js";
+import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
 import {
   applySet,
@@ -19,7 +20,14 @@ import {
   unknownEntries,
 } from "./profile-ops.js";
 import type { Prompter } from "./prompt.js";
-import { notFound, nudge, renderDiff, renderProfile, sanitizeValue, useColor } from "./render.js";
+import {
+  colorEnabled,
+  notFound,
+  nudge,
+  renderDiff,
+  renderProfile,
+  sanitizeValue,
+} from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
@@ -30,10 +38,6 @@ export interface InteractiveIO {
   interactive: boolean;
   prompter?: Prompter;
   yes: boolean;
-}
-
-function colorEnabled(): boolean {
-  return useColor(process.env, Boolean(process.stdout.isTTY));
 }
 
 /**
@@ -169,7 +173,7 @@ export async function view(handle: string): Promise<void> {
   const theirs = await fetchProfileJson(handle);
   const c = colorEnabled();
   if (!theirs) {
-    console.log(notFound(handle));
+    console.log(notFound(handle, c, BASE));
     return;
   }
 
