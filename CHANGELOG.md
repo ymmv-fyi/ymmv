@@ -2,6 +2,20 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **`ymmv unset <key>` removes a curated field from your profile.** `ymmv unset --extra "Keyboard"`
+  removes a free-form extra.
+
+### Changed
+- **`ymmv set <key> -` now clears the field.** Extras too: `ymmv set --extra "Keyboard=-"`.
+
+### Fixed
+- **Publishing from a stale or switched login now refuses instead of writing to the wrong
+  profile.** Covers a second device still bound to an old handle after a GitHub rename, and a
+  login change mid-command; the CLI points to `ymmv login`.
+
 ## [0.3.0] - 2026-07-01
 
 ### Fixed

@@ -25,6 +25,7 @@ First run includes a one-time GitHub sign-in (the device flow you know from `gh`
 - `ymmv <handle>` — view a profile, or diff it against yours when you're logged in
 - `ymmv set editor Neovim` — change one value
 - `ymmv set --extra "Keyboard=HHKB"` — add a free-form line of your own
+- `ymmv unset editor` — remove one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` — remove your profile
 - `ymmv login` / `ymmv logout` — sign in / out
 
