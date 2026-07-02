@@ -7,7 +7,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ### Added
 - **Republishing is one keypress.** `ymmv` shows your merged profile card first; Enter
   publishes, `e` edits the fields, `n` aborts. First-time publish keeps the guided prompts,
-  now with a hint: Enter keeps the shown value, `-` clears it.
+  now with a hint: Enter to keep the shown value, `-` to clear it.
 - **Links are clickable.** URLs render amber as terminal hyperlinks, shortened like the web
   (`git.io/etc`). Piped and NO_COLOR output keeps full plain URLs.
 - **Ctrl+C cleanly aborts any prompt** (exit 130) instead of hanging, and login now says it's

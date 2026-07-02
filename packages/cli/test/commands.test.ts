@@ -302,7 +302,7 @@ describe("publish", () => {
     expect(secondCard.join("\n")).toMatch(/Editor\s+—/); // cleared → explicit gap, not silence
     expect(secondCard.join("\n")).not.toContain("Vim");
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
-    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
   });
 
   it("Ctrl+C at a field prompt: Aborted line, exit 130, no POST", async () => {
@@ -316,7 +316,7 @@ describe("publish", () => {
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -334,7 +334,7 @@ describe("publish", () => {
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -641,7 +641,7 @@ describe("delete", () => {
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
-    expect(logs.join("\n")).toMatch(/Cancelled — nothing deleted\./);
+    expect(logs.join("\n")).toMatch(/Cancelled\. Nothing deleted\./);
     expect(process.exitCode).toBe(130);
   });
 });
