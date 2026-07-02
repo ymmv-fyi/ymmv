@@ -1,6 +1,7 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
 import { causeText, safeFetch } from "./http.js";
+import { colorEnabled, link, palette, sanitizeValue } from "./render.js";
 import { saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
@@ -137,7 +138,14 @@ export async function login(deps: PollDeps = {}): Promise<void> {
     );
   }
   const dc = await requestDeviceCode(deps);
-  console.log(`\n  Open ${dc.verification_uri} and enter code: ${dc.user_code}\n`);
+  const color = colorEnabled();
+  const c = palette(color);
+  // user_code/verification_uri come off the wire — sanitize/link like every other print surface.
+  console.log(
+    `\n  Open ${link(dc.verification_uri, color)} and enter code: ` +
+      `${c.bold}${sanitizeValue(dc.user_code)}${c.reset}`,
+  );
+  console.log(`  ${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}\n`);
   const accessToken = await pollForToken(dc, deps);
   const { token, handle } = await mintYmmvToken(accessToken);
   try {

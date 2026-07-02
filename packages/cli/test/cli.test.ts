@@ -60,6 +60,19 @@ describe("ymmv logout", () => {
   });
 });
 
+describe("ymmv login", () => {
+  it("prints the next-step hint after a STANDALONE login only", async () => {
+    vi.mocked(login).mockResolvedValue(undefined);
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    await main(["login"]);
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(logs.join("\n")).toMatch(/next: run ymmv to publish your stack/);
+  });
+});
+
 describe("ymmv unset dispatch", () => {
   it("main(['unset','shell']) routes to the unset flow (GET then POST without the key)", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
@@ -120,18 +133,14 @@ describe("publish auto-reauth", () => {
     expect(login).not.toHaveBeenCalled();
   });
 
-  it("sanitizes the server-echoed handle in the publish confirmation", async () => {
+  it("sanitizes the server-echoed handle in the publish result (callers print it verbatim)", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
-    const logs: string[] = [];
-    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
-      logs.push(a.join(" "));
-    });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ handle: `car${esc}[31mol` })));
-    await publishProfile(PROFILE);
-    const out = logs.join("\n");
-    expect(out).toMatch(/Published carol -> /);
-    expect(out).not.toContain(esc);
+    const res = await publishProfile(PROFILE);
+    expect(res.handle).toBe("carol");
+    expect(res.url).toMatch(/\/carol$/);
+    expect(res.handle).not.toContain(esc);
   });
 
   it("throws after a second auth failure (no infinite loop)", async () => {

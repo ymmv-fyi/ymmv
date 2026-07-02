@@ -213,6 +213,24 @@ describe("login() orchestration", () => {
     logSpy.mockRestore();
   });
 
+  it("prints a SANITIZED user code and the waiting line (both come off the wire)", async () => {
+    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    const esc = String.fromCharCode(0x1b);
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const dirty = { ...DC, user_code: `WXYZ${esc}[31m-1234` };
+    await withTTY(true, async () => {
+      await login({ fetch: fetchSeq(dirty, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+    });
+    const out = logs.join("\n");
+    expect(out).toContain("WXYZ-1234");
+    expect(out).not.toContain(esc); // tests run piped → color off → zero ANSI, injected or ours
+    expect(out).toMatch(/waiting for GitHub approval… \(Ctrl\+C to cancel\)/);
+    logSpy.mockRestore();
+  });
+
   it("refuses (no network) in a non-TTY context — the device flow can't complete there", async () => {
     const fetchFn = vi.fn();
     await withTTY(undefined, async () => {

@@ -408,7 +408,9 @@ describe("set", () => {
         { key: "shell", value: "zsh" },
       ]),
     );
-    expect(logs.join("\n")).toMatch(/Set Shell = zsh/);
+    // ONE line: the confirmation ends with a pointer at the live page — no separate Published echo.
+    expect(logs.join("\n")).toMatch(/Set Shell = zsh\. → https:\/\/ymmv\.fyi\/me/);
+    expect(logs.join("\n")).not.toMatch(/Published/);
   });
 
   it("extra: adds a free-form extra even with no existing profile", async () => {
@@ -472,7 +474,8 @@ describe("unset", () => {
     await runUnset({ kind: "curated", key: "shell" });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
-    expect(logs.join("\n")).toMatch(/Removed Shell \(was "zsh"\)\./);
+    expect(logs.join("\n")).toMatch(/Removed Shell \(was "zsh"\)\. → https:\/\/ymmv\.fyi\/me/);
+    expect(logs.join("\n")).not.toMatch(/Published/);
   });
 
   it("extra: drops it from the POSTed extras, message shows the stored casing", async () => {

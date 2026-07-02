@@ -4,12 +4,18 @@ import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import { makePrompter } from "./prompt.js";
+import { type Codes, colorEnabled, palette } from "./render.js";
 import { resolveArg } from "./resolve.js";
 import { deleteToken, loadToken, peekBase } from "./token-store.js";
 
-const HELP = `ymmv — terminal-native developer tool-stack profiles (ymmv.fyi)
+// Styled at print time; with color off the output is byte-identical to the historic plain text
+// (pinned by the help snapshot test). The curated key names must stay LITERAL in this source —
+// help.test.ts greps this file to keep the list in sync with CURATED_KEYS.
+export const help = (
+  c: Codes,
+): string => `${c.bold}ymmv${c.reset} — terminal-native developer tool-stack profiles (ymmv.fyi)
 
-Usage:
+${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
   ymmv -y                   publish without prompts (required when stdin isn't a TTY)
   ymmv <handle>             view a profile — logged in, see the diff vs yours
@@ -22,11 +28,11 @@ Usage:
   ymmv login | logout       GitHub device-flow auth
   ymmv help | --version
 
-Curated keys: editor, os, shell, prompt, terminal, browser, window-manager,
+${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool
 
-Respects NO_COLOR. Point YMMV_API at a dev Worker to target one.
-Publish your own: npx ymmv-cli`;
+${c.faint}Respects NO_COLOR. Point YMMV_API at a dev Worker to target one.${c.reset}
+Publish your own: ${c.bold}npx ymmv-cli${c.reset}`;
 
 // `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke can't reach the
 // server, KEEP the local token (deleting it would orphan a still-active token; revoke-all is post-v1)
@@ -96,14 +102,18 @@ export async function main(argv: string[]): Promise<void> {
     case "delete":
       await interactive(runDelete, cmd.yes);
       break;
-    case "login":
+    case "login": {
       await login();
+      // Standalone login only — an ensureLogin() mid-publish must not say "run ymmv" while it runs.
+      const c = palette(colorEnabled());
+      console.log(`  ${c.faint}next: run ymmv to publish your stack${c.reset}`);
       break;
+    }
     case "logout":
       await logout();
       break;
     case "help":
-      console.log(HELP);
+      console.log(help(palette(colorEnabled())));
       break;
     case "version":
       printVersion();
