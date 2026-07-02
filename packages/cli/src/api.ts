@@ -1,6 +1,7 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
+import { sanitizeValue } from "./render.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
@@ -39,6 +40,15 @@ export async function publishProfile(profile: Profile): Promise<void> {
     });
 
   let cred = await ensureLogin();
+  // The caller merged `profile` for the handle ITS login resolved moments ago. If the token store
+  // now resolves to a different account (a concurrent `ymmv login`), sending would publish that
+  // merge onto the wrong profile — refuse instead of silently substituting the new handle. The
+  // 401/409 retry below is exempt: re-login there is a fresh, user-interactive proof of identity.
+  if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
+    throw new Error(
+      "the stored login changed while this command was running — re-run it under the current account.",
+    );
+  }
   let res = await send(cred);
   if (res.status === 401 || res.status === 409) {
     // 401: token revoked/expired. 409: the local handle went stale after a GitHub rename. Both heal
@@ -58,13 +68,21 @@ export async function publishProfile(profile: Profile): Promise<void> {
   if (!res.ok) {
     throw new Error(`publish failed: ${res.status} ${await res.text()}`);
   }
-  const data = (await res.json()) as { handle: string };
-  console.log(`Published ${data.handle} -> ${BASE}/${data.handle}`);
+  const data = (await res.json()) as { handle?: unknown };
+  // The confirmation echoes wire data: shape-check + sanitize the server-returned handle before
+  // printing (a non-first-party origin could inject terminal escapes here).
+  const shown = typeof data.handle === "string" ? sanitizeValue(data.handle) : profile.handle;
+  console.log(`Published ${shown} -> ${BASE}/${shown}`);
 }
 
 /** Fetch a public profile as JSON. Returns null on 404 (no profile / reserved); throws on real
  *  errors. The Worker 301s a renamed handle to its current one — Node's fetch follows it by default,
- *  so callers always see the live profile or a clean miss. */
+ *  so callers always see the live profile or a clean miss.
+ *
+ *  INVARIANT: read-modify-write callers (publish/set/unset) require an UNCACHED read. The response
+ *  declares `s-maxage=30, stale-while-revalidate=86400` (web: profile-read.ts readCacheControl);
+ *  nothing edge-caches Worker responses today, but if a cache rule ever fronts /api/v1/u/*, a stale
+ *  read here would make the full-replace publish silently drop writes made moments earlier. */
 export async function fetchProfileJson(handle: string): Promise<Profile | null> {
   const res = await fetch(`${BASE}/api/v1/u/${encodeURIComponent(handle)}`);
   if (res.status === 404) return null;

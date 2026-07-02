@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/token-store.js");
 vi.mock("../src/device-flow.js");
 
-import { publish, runDelete, runSet, view } from "../src/commands.js";
+import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
 import type { Prompter } from "../src/prompt.js";
 import { deleteToken, loadToken } from "../src/token-store.js";
 
@@ -136,6 +136,14 @@ describe("publish", () => {
     await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/fetch failed/);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
+
+  it("aborts when the pre-publish read resolves a different handle (rename guard) — no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me-renamed")));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/ymmv login/);
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
 });
 
 describe("set", () => {
@@ -184,6 +192,155 @@ describe("set", () => {
     await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
       /fetch failed/,
     );
+  });
+
+  it("refuses when the read resolves a different handle (server-side rename) — no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me-renamed")));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
+      /ymmv login/,
+    );
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+});
+
+describe("unset", () => {
+  const noPost = (fetchFn: ReturnType<typeof vi.fn>) =>
+    fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST");
+
+  it("curated: republishes without the key and echoes the old value", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [
+            { key: "editor", value: "Vim" },
+            { key: "shell", value: "zsh" },
+          ]),
+        ),
+      ) // GET existing
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "shell" });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
+    expect(logs.join("\n")).toMatch(/Removed Shell \(was "zsh"\)\./);
+  });
+
+  it("extra: drops it from the POSTed extras, message shows the stored casing", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Keyboard", value: "HHKB" }]))) // GET
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "keyboard" });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.extras).toEqual([]);
+    expect(logs.join("\n")).toMatch(/Removed extra "Keyboard" \(was "HHKB"\)\./);
+  });
+
+  it("curated no-op: not set → message, exit 0, and NO network write", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "multiplexer" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs.join("\n")).toMatch(/Multiplexer is not set\./);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("extra no-op: unknown label → message, no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me")));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "Keyboard" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs.join("\n")).toMatch(/No extra "Keyboard"\./);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("never published (404): friendly nudge, exit 0, no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "editor" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs.join("\n")).toMatch(/No profile yet/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("aborts (no republish) when loading the existing profile transiently fails", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValue(fail(500));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(/fetch failed/);
+    expect(noPost(fetchFn)).toBe(true);
+  });
+
+  it("refuses when the bound handle is null (reserved username)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: null });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "editor" });
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("sanitizes the echoed old value (ANSI stripped — it came off the wire)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(prof("me", [{ key: "window-manager", value: "i3\u001b[31mX" }])),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "window-manager" });
+    const out = logs.join("\n");
+    expect(out).toMatch(/Removed Window Manager \(was "i3X"\)\./);
+    expect(out).not.toContain("\u001b");
+  });
+
+  it("extra: sanitizes the echoed label AND value (both come off the wire)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
+    const dirty = `Key${esc}[31mboard`;
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: dirty, value: `HH${esc}[2JKB` }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: dirty });
+    const out = logs.join("\n");
+    expect(out).toMatch(/Removed extra "Keyboard" \(was "HHKB"\)\./);
+    expect(out).not.toContain(esc);
+  });
+
+  it("refuses when the read resolves a different handle (server-side rename) — no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me-renamed", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(/ymmv login/);
+    expect(noPost(fetchFn)).toBe(true);
+  });
+
+  it("removing the last entry publishes entries: []", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "editor" });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([]);
   });
 });
 

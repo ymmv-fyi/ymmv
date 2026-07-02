@@ -72,6 +72,87 @@ describe("resolveArg", () => {
     expect(resolveArg(["set", "--extra", "Launcher"]).kind).toBe("error");
   });
 
+  it("`unset <key>` → curated unset target", () => {
+    expect(resolveArg(["unset", "editor"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "editor" },
+    });
+  });
+
+  it("`unset` with no key → usage error", () => {
+    const cmd = resolveArg(["unset"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/usage: ymmv unset/);
+  });
+
+  it("`unset <non-curated-key>` → error naming curated keys", () => {
+    const cmd = resolveArg(["unset", "hairstyle"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/curated key/);
+  });
+
+  it("`unset <key> <value>` (trailing args) → usage error, never a silent unset", () => {
+    const cmd = resolveArg(["unset", "editor", "vim"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/usage: ymmv unset editor/);
+  });
+
+  it("`unset --extra <label>` / `-e` → extra unset target", () => {
+    expect(resolveArg(["unset", "--extra", "Keyboard"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "Keyboard" },
+    });
+    expect(resolveArg(["unset", "-e", "Keyboard"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "Keyboard" },
+    });
+  });
+
+  it("`unset --extra` joins a multi-word label", () => {
+    expect(resolveArg(["unset", "--extra", "mech", "keyboard"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "mech keyboard" },
+    });
+  });
+
+  it("`unset --extra` with no label → error", () => {
+    expect(resolveArg(["unset", "--extra"]).kind).toBe("error");
+  });
+
+  it('`unset --extra "Label=Value"` → just-the-label hint', () => {
+    const cmd = resolveArg(["unset", "--extra", "Keyboard=HHKB"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/just the label/);
+  });
+
+  it("`set <key> -` rewrites to unset (dash clears, like the publish prompt)", () => {
+    expect(resolveArg(["set", "window-manager", "-"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "window-manager" },
+    });
+  });
+
+  it('`set --extra "Label=-"` rewrites to unset extra', () => {
+    expect(resolveArg(["set", "--extra", "Keyboard=-"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "Keyboard" },
+    });
+  });
+
+  it('`set --extra "Label= -"` trims to the dash sentinel → unset extra', () => {
+    expect(resolveArg(["set", "--extra", "Keyboard=", "-"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "Keyboard" },
+    });
+  });
+
+  it("`set <key> - foo` stays a literal set (only a lone dash clears)", () => {
+    expect(resolveArg(["set", "os", "-", "foo"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "os", value: "- foo" },
+    });
+  });
+
   it("an unknown option → error", () => {
     expect(resolveArg(["--bogus"]).kind).toBe("error");
   });

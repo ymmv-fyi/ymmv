@@ -1,9 +1,9 @@
 import { CURATED_KEYS, type CuratedKey, type Entry, type Extra, type Profile } from "@ymmv/shared";
-import type { SetTarget } from "./resolve.js";
+import type { SetTarget, UnsetTarget } from "./resolve.js";
 
-// Pure profile transforms shared by the publish + set commands. No IO — given the current profile
-// (or null) and an input, they return the next entries/extras. Kept separate so the merge rules are
-// unit-testable without touching the network or a prompt.
+// Pure profile transforms shared by the write commands (publish/set/unset). No IO — given the
+// current profile (or null) and an input, they return the next entries/extras. Kept separate so
+// the merge rules are unit-testable without touching the network or a prompt.
 
 /**
  * Per-key defaults for the publish edit prompt. An existing published value wins over a fresh
@@ -34,7 +34,9 @@ export function entriesFromMap(map: Map<CuratedKey, string>): Entry[] {
 
 /**
  * Apply one `set` change to a profile, returning fresh entries/extras (never mutates the input).
- * Curated keys upsert by key; extras upsert by case-insensitive label.
+ * Curated keys upsert by key; extras upsert by trimmed, case-insensitive label (the server stores
+ * labels verbatim, so a foreign client's padded label must still match — the upsert then replaces
+ * it with the clean one).
  */
 export function applySet(
   existing: Profile | null,
@@ -49,10 +51,46 @@ export function applySet(
     if (i >= 0) entries[i] = next;
     else entries.push(next);
   } else {
-    const i = extras.findIndex((x) => x.label.toLowerCase() === target.label.toLowerCase());
+    const wanted = target.label.trim().toLowerCase();
+    const i = extras.findIndex((x) => x.label.trim().toLowerCase() === wanted);
     const next: Extra = { label: target.label, value: target.value };
     if (i >= 0) extras[i] = next;
     else extras.push(next);
   }
   return { entries, extras };
+}
+
+/**
+ * Apply one `unset` to a profile, returning fresh entries/extras (never mutates the input) plus
+ * what was removed — `removed: null` means nothing matched and the caller must skip the republish.
+ * `removed.label` is raw stored data (the curated key / the extra's stored casing); display
+ * formatting is the caller's job. Extras drop EVERY trimmed, case-insensitive label match: the
+ * server stores labels verbatim with no uniqueness, so foreign-client data can hold "Keyboard",
+ * "keyboard", or " Keyboard " — first-match-only (or exact-match-only) would leave a visible
+ * ghost behind a success (or lying no-op) message.
+ */
+export function applyUnset(
+  existing: Profile,
+  target: UnsetTarget,
+): { entries: Entry[]; extras: Extra[]; removed: { label: string; value: string } | null } {
+  const entries: Entry[] = existing.entries.map((e) => ({ ...e }));
+  const extras: Extra[] = existing.extras.map((x) => ({ ...x }));
+
+  if (target.kind === "curated") {
+    const hit = entries.find((e) => e.key === target.key);
+    if (!hit) return { entries, extras, removed: null };
+    return {
+      entries: entries.filter((e) => e.key !== target.key),
+      extras,
+      removed: { label: hit.key, value: hit.value },
+    };
+  }
+  const wanted = target.label.trim().toLowerCase();
+  const hit = extras.find((x) => x.label.trim().toLowerCase() === wanted);
+  if (!hit) return { entries, extras, removed: null };
+  return {
+    entries,
+    extras: extras.filter((x) => x.label.trim().toLowerCase() !== wanted),
+    removed: { label: hit.label, value: hit.value },
+  };
 }

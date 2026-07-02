@@ -60,6 +60,22 @@ describe("ymmv logout", () => {
   });
 });
 
+describe("ymmv unset dispatch", () => {
+  it("main(['unset','shell']) routes to the unset flow (GET then POST without the key)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ ...PROFILE, entries: [{ key: "shell", value: "zsh" }] })) // GET
+      .mockResolvedValueOnce(ok({ handle: "carol" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await main(["unset", "shell"]);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    const postInit = fetchFn.mock.calls[1]?.[1] as RequestInit;
+    expect(postInit.method).toBe("POST");
+    expect(JSON.parse(postInit.body as string).entries).toEqual([]);
+  });
+});
+
 describe("publish auto-reauth", () => {
   it("on 401: deletes the token, re-logs-in, retries once", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
@@ -83,7 +99,8 @@ describe("publish auto-reauth", () => {
       .mockResolvedValueOnce(status(409, { error: "handle_taken" }))
       .mockResolvedValueOnce(ok({ handle: "new" }));
     vi.stubGlobal("fetch", fetchFn);
-    await publishProfile(PROFILE);
+    // the caller merged this profile while bound to "old" — the 409 heals it via re-login
+    await publishProfile({ ...PROFILE, handle: "old" });
     expect(deleteToken).not.toHaveBeenCalled();
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(2);
@@ -91,6 +108,30 @@ describe("publish auto-reauth", () => {
     const retryInit = fetchFn.mock.calls[1]?.[1] as RequestInit;
     expect(JSON.parse(retryInit.body as string).handle).toBe("new");
     expect(retryInit.headers).toMatchObject({ authorization: "Bearer t2" });
+  });
+
+  it("refuses the FIRST send when the stored login no longer matches the merged profile", async () => {
+    // a concurrent `ymmv login` swapped accounts between the caller's read and this write
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t2", handle: "mallory" });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/login changed/);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes the server-echoed handle in the publish confirmation", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
+    const logs: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ handle: `car${esc}[31mol` })));
+    await publishProfile(PROFILE);
+    const out = logs.join("\n");
+    expect(out).toMatch(/Published carol -> /);
+    expect(out).not.toContain(esc);
   });
 
   it("throws after a second auth failure (no infinite loop)", async () => {

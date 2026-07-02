@@ -1,6 +1,6 @@
 import { type CuratedKey, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { applySet, buildDefaults, entriesFromMap } from "../src/profile-ops.js";
+import { applySet, applyUnset, buildDefaults, entriesFromMap } from "../src/profile-ops.js";
 
 function prof(entries: Profile["entries"] = [], extras: Profile["extras"] = []): Profile {
   return { schema_version: SCHEMA_VERSION, handle: "me", entries, extras, updated_at: "x" };
@@ -61,9 +61,96 @@ describe("applySet", () => {
     });
     expect(extras).toEqual([{ label: "launcher", value: "Raycast" }]);
   });
+  it("extra: matches a whitespace-padded stored label and replaces it with the clean one", () => {
+    const { extras } = applySet(prof([], [{ label: " Keyboard ", value: "HHKB" }]), {
+      kind: "extra",
+      label: "keyboard",
+      value: "MX",
+    });
+    expect(extras).toEqual([{ label: "keyboard", value: "MX" }]);
+  });
   it("does not mutate the input profile", () => {
     const original = prof([{ key: "editor", value: "Vim" }]);
     applySet(original, { kind: "curated", key: "editor", value: "Neovim" });
     expect(original.entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+});
+
+describe("applyUnset", () => {
+  it("curated: removes the key, keeps the rest, reports the raw key + old value", () => {
+    const { entries, removed } = applyUnset(
+      prof([
+        { key: "editor", value: "Vim" },
+        { key: "shell", value: "zsh" },
+      ]),
+      { kind: "curated", key: "shell" },
+    );
+    expect(entries).toEqual([{ key: "editor", value: "Vim" }]);
+    expect(removed).toEqual({ label: "shell", value: "zsh" });
+  });
+  it("curated: absent key → removed null, entries unchanged", () => {
+    const { entries, removed } = applyUnset(prof([{ key: "editor", value: "Vim" }]), {
+      kind: "curated",
+      key: "multiplexer",
+    });
+    expect(removed).toBeNull();
+    expect(entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+  it("extra: removes by case-insensitive label, reporting the stored casing", () => {
+    const { extras, removed } = applyUnset(prof([], [{ label: "Keyboard", value: "HHKB" }]), {
+      kind: "extra",
+      label: "keyboard",
+    });
+    expect(extras).toEqual([]);
+    expect(removed).toEqual({ label: "Keyboard", value: "HHKB" });
+  });
+  it("extra: matches a whitespace-padded stored label (foreign clients store labels verbatim)", () => {
+    const { extras, removed } = applyUnset(prof([], [{ label: " Keyboard ", value: "HHKB" }]), {
+      kind: "extra",
+      label: "keyboard",
+    });
+    expect(extras).toEqual([]);
+    expect(removed).toEqual({ label: " Keyboard ", value: "HHKB" });
+  });
+  it("extra: absent label → removed null, extras unchanged", () => {
+    const { extras, removed } = applyUnset(prof([], [{ label: "Launcher", value: "Raycast" }]), {
+      kind: "extra",
+      label: "keyboard",
+    });
+    expect(removed).toBeNull();
+    expect(extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+  });
+  it("extra: removes ALL case-insensitive duplicates, echoing the first's stored casing", () => {
+    const { extras, removed } = applyUnset(
+      prof(
+        [],
+        [
+          { label: "Keyboard", value: "HHKB" },
+          { label: "Launcher", value: "Raycast" },
+          { label: "keyboard", value: "MX" },
+        ],
+      ),
+      { kind: "extra", label: "KEYBOARD" },
+    );
+    expect(extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+    expect(removed).toEqual({ label: "Keyboard", value: "HHKB" });
+  });
+  it("removing the only entry leaves entries: [] (valid to publish)", () => {
+    const { entries, removed } = applyUnset(prof([{ key: "editor", value: "Vim" }]), {
+      kind: "curated",
+      key: "editor",
+    });
+    expect(entries).toEqual([]);
+    expect(removed).toEqual({ label: "editor", value: "Vim" });
+  });
+  it("does not mutate the input profile", () => {
+    const original = prof(
+      [{ key: "editor", value: "Vim" }],
+      [{ label: "Keyboard", value: "HHKB" }],
+    );
+    applyUnset(original, { kind: "curated", key: "editor" });
+    applyUnset(original, { kind: "extra", label: "keyboard" });
+    expect(original.entries).toEqual([{ key: "editor", value: "Vim" }]);
+    expect(original.extras).toEqual([{ label: "Keyboard", value: "HHKB" }]);
   });
 });

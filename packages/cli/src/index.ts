@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { revokeYmmvToken } from "./auth-http.js";
-import { type InteractiveIO, publish, runDelete, runSet, view } from "./commands.js";
+import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import { makePrompter } from "./prompt.js";
@@ -15,6 +15,8 @@ Usage:
   ymmv view <handle>        explicit view (when a handle collides with a verb)
   ymmv set <key> <value>    set one curated key
   ymmv set --extra "L=V"    set a free-form extra
+  ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
+  ymmv unset --extra "L"    remove a free-form extra
   ymmv delete               delete your profile (permanent)
   ymmv login | logout       GitHub device-flow auth
   ymmv help | --version
@@ -86,6 +88,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "set":
       await runSet(cmd.target);
+      break;
+    case "unset":
+      await runUnset(cmd.target);
       break;
     case "delete":
       await interactive(runDelete, cmd.yes);
