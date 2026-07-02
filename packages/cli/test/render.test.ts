@@ -145,6 +145,21 @@ describe("renderDiff", () => {
     expect(out).toMatch(/^= Editor/m);
   });
 
+  it("opens with the web's title line in both color modes", () => {
+    const plain = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    expect(plain).toContain("  how antfu differs from you");
+    const color = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
+    expect(color).toContain(`${ESC}[1mantfu${ESC}[0m`);
+    expect(color).toMatch(/how/);
+    expect(color).toMatch(/differs from/);
+  });
+
+  it("uppercases the column headers (web parity), leaving row values untouched", () => {
+    const out = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    expect(out).toMatch(/ANTFU\s+YOU/);
+    expect(out).toContain("fish"); // values keep their case
+  });
+
   it("sanitizes an injected value before it reaches the terminal", () => {
     const evil: DiffResult = {
       rows: [
@@ -182,7 +197,10 @@ describe("renderDiff", () => {
 });
 
 describe("renderProfile", () => {
-  it("shows the handle + values but never spends amber (scarcity rule)", () => {
+  const SITE = "ymmv.fyi";
+  const at = (iso: string) => () => Date.parse(iso);
+
+  it("shows the handle + values but never spends amber on plain values (scarcity rule)", () => {
     const p: Profile = {
       schema_version: 1,
       handle: "antfu",
@@ -190,7 +208,7 @@ describe("renderProfile", () => {
       extras: [],
       updated_at: "2026-01-01",
     };
-    const out = renderProfile(p, { color: true });
+    const out = renderProfile(p, { color: true, site: SITE });
     expect(out).toContain("antfu");
     expect(out).toContain("fish");
     expect(out).not.toContain(AMBER);
@@ -204,7 +222,62 @@ describe("renderProfile", () => {
       extras: [],
       updated_at: "t",
     };
-    expect(renderProfile(empty, { color: false })).toContain("x");
+    expect(renderProfile(empty, { color: false, site: SITE })).toContain("x");
+  });
+
+  const FULLISH: Profile = {
+    schema_version: 1,
+    handle: "carol",
+    entries: [
+      { key: "editor", value: "Zed" },
+      { key: "dotfiles", value: "https://git.io/etc" },
+    ],
+    extras: [{ label: "Keyboard", value: "HHKB" }],
+    updated_at: "2026-07-02T09:00:00.000Z",
+  };
+  const NOW = "2026-07-02T12:00:00.000Z";
+
+  it("heads the card with the web breadcrumb: faint site/ + bold handle", () => {
+    const out = renderProfile(FULLISH, { color: true, site: SITE, now: at(NOW) });
+    const ESC_ = String.fromCharCode(27);
+    expect(out).toContain(`  ${ESC_}[90mymmv.fyi/${ESC_}[0m${ESC_}[1mcarol${ESC_}[0m`);
+    const plain = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+    expect(plain).toContain("  ymmv.fyi/carol");
+  });
+
+  it("URL values render as amber links (the web rule: amber = links + diffs)", () => {
+    const out = renderProfile(FULLISH, { color: true, site: SITE, now: at(NOW) });
+    expect(out).toContain(`${AMBER}git.io/etc`);
+    expect(out).toContain(OSC8_OPEN);
+    const plain = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+    expect(plain).toContain("https://git.io/etc"); // full URL, machine-readable
+    expect(plain).not.toContain(ESC);
+  });
+
+  it("humanizes the updated line in view mode", () => {
+    const out = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+    expect(out).toContain("updated 3h ago");
+  });
+
+  it("view mode hides unset keys — no — gap rows, no unset labels (preview must not leak)", () => {
+    const out = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+    expect(out).not.toContain("—");
+    expect(out).not.toContain("Font");
+    expect(out).not.toContain("Version Manager");
+  });
+
+  it("preview mode lists all 13 curated labels, marks gaps with —, and drops updated", () => {
+    const out = renderProfile(FULLISH, {
+      color: false,
+      site: SITE,
+      mode: "preview",
+      now: at(NOW),
+    });
+    expect(out).toContain("Editor");
+    expect(out).toContain("Version Manager"); // widest label, present as a gap row
+    expect(out).toMatch(/Font\s+—/);
+    expect(out).toContain("Zed");
+    expect(out).not.toContain("updated");
   });
 });
 

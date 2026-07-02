@@ -16,7 +16,9 @@ npx ymmv-cli bardisty   # view someone's stack in the terminal
 Viewing someone while you're logged in diffs their stack against yours:
 
 ```
-          bardisty  you
+  how bardisty differs from you
+
+          BARDISTY  YOU
 ~ Editor  Zed       VS Code
 = Shell   bash      bash
 ~ Theme   Gruvbox   Catppuccin

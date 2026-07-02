@@ -29,7 +29,9 @@ instant. Works on macOS, Linux, Windows, and WSL.
 - **Diffs.** View someone's profile while you're logged in, and you'll see how your stack compares:
 
   ```
-            bardisty  you
+    how bardisty differs from you
+
+            BARDISTY  YOU
   ~ Editor  Zed       VS Code
   = Shell   bash      bash
   ~ Theme   Gruvbox   Catppuccin

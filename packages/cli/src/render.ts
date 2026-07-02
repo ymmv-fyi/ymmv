@@ -135,21 +135,31 @@ export function relTime(iso: string, now: () => number = Date.now): string {
   return new Date(t).toISOString().slice(0, 10);
 }
 
-/** Curated entries in canonical order, with display labels; non-curated rows are dropped. */
-function orderedEntries(profile: Profile): { label: string; value: string }[] {
+/**
+ * A single profile as a key→value spec sheet, headed by the web's breadcrumb (faint site/ + bold
+ * handle). URL values render as links; everything else is plain ink.
+ *
+ * `mode: "view"` (default — `ymmv <handle>`) hides unset keys and shows the humanized `updated`
+ * line, exactly like the web page. `mode: "preview"` (the publish flow ONLY) shows every unset
+ * curated key as a faint `Label  —` row so gaps are visible before confirming, and drops the
+ * `updated` line (a pre-publish timestamp would be a lie). view() never passes `mode`, so preview
+ * rows cannot leak into viewing.
+ */
+export function renderProfile(
+  profile: Profile,
+  opts: { color: boolean; site: string; mode?: "view" | "preview"; now?: () => number },
+): string {
+  const c = palette(opts.color);
+  const preview = opts.mode === "preview";
   const byKey = new Map<string, string>(
     (profile.entries ?? []).map((e: Entry) => [e.key, e.value]),
   );
-  return CURATED_KEYS.flatMap((key) => {
+  // value === null marks a preview gap row (unset curated key).
+  const rows = CURATED_KEYS.flatMap((key) => {
     const value = byKey.get(key);
-    return value === undefined ? [] : [{ label: KEY_LABELS[key], value: sanitizeValue(value) }];
+    if (value === undefined && !preview) return [];
+    return [{ label: KEY_LABELS[key], value: value === undefined ? null : sanitizeValue(value) }];
   });
-}
-
-/** A single profile as a key→value spec sheet (plain view; no amber — amber is reserved for diffs). */
-export function renderProfile(profile: Profile, opts: { color: boolean }): string {
-  const c = palette(opts.color);
-  const rows = orderedEntries(profile);
   const extras = (profile.extras ?? []).map((x) => ({
     label: sanitizeValue(x.label),
     value: sanitizeValue(x.value),
@@ -159,18 +169,30 @@ export function renderProfile(profile: Profile, opts: { color: boolean }): strin
     ...rows.map((r) => r.label.length),
     ...extras.map((x) => x.label.length),
   );
+  const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color) : v);
 
-  const lines: string[] = ["", `  ${c.bold}${sanitizeValue(profile.handle)}${c.reset}`, ""];
+  const lines: string[] = [
+    "",
+    `  ${c.faint}${opts.site}/${c.reset}${c.bold}${sanitizeValue(profile.handle)}${c.reset}`,
+    "",
+  ];
   for (const r of rows) {
-    lines.push(`  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${r.value}`);
+    lines.push(
+      r.value === null
+        ? `  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`
+        : `  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}`,
+    );
   }
   if (extras.length) {
     lines.push("");
     for (const x of extras) {
-      lines.push(`  ${c.faint}${x.label.padEnd(labelW)}${c.reset}  ${x.value}`);
+      lines.push(`  ${c.faint}${x.label.padEnd(labelW)}${c.reset}  ${val(x.value)}`);
     }
   }
-  lines.push("", `  ${c.faint}updated ${sanitizeValue(profile.updated_at)}${c.reset}`, "");
+  if (!preview) {
+    lines.push("", `  ${c.faint}updated ${relTime(profile.updated_at, opts.now)}${c.reset}`);
+  }
+  lines.push("");
   return lines.join("\n");
 }
 
@@ -212,12 +234,19 @@ export function renderDiff(
     differ: r.status !== "same",
   }));
   const labelW = Math.max(3, ...cells.map((r) => r.label.length));
-  const theirsW = Math.max(theirsLabel.length, ...cells.map((r) => r.theirs.length));
+  // Column headers echo the web's uppercase letterspaced caps; widths come from what is printed.
+  const theirsHead = theirsLabel.toUpperCase();
+  const theirsW = Math.max(theirsHead.length, ...cells.map((r) => r.theirs.length));
 
-  const lines: string[] = [""];
-  // Column header (which side is which), muted.
+  const lines: string[] = [
+    "",
+    // The web diff's h1, collapsed to one line — information (which side is which), not decoration,
+    // so it prints in both color modes.
+    `  ${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset} ${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,
+    "",
+  ];
   lines.push(
-    `  ${c.faint}${"".padEnd(labelW)}  ${theirsLabel.padEnd(theirsW)}  ${mineLabel}${c.reset}`,
+    `  ${c.faint}${"".padEnd(labelW)}  ${theirsHead.padEnd(theirsW)}  ${mineLabel.toUpperCase()}${c.reset}`,
   );
   for (const r of cells) {
     if (!opts.color) {
