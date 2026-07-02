@@ -2,6 +2,31 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **Republishing is one keypress.** `ymmv` shows your merged profile card first; Enter
+  publishes, `e` edits the fields, `n` aborts. First-time publish keeps the guided prompts,
+  now with a hint: Enter keeps the shown value, `-` clears it.
+- **Links are clickable.** URLs render amber as terminal hyperlinks, shortened like the web
+  (`git.io/etc`). Piped and NO_COLOR output keeps full plain URLs.
+- **Ctrl+C cleanly aborts any prompt** (exit 130) instead of hanging, and login now says it's
+  waiting for your GitHub approval.
+
+### Changed
+- **The card and diff match the web page:** `ymmv.fyi/<handle>` header, `updated 3h ago`, a
+  title line over the diff, uppercase column headers. With `YMMV_API` set, every printed URL
+  shows that Worker's host.
+- **`ymmv -y` skips the prompts entirely**, as help always said — card, then publish.
+- **`set`/`unset` reply with one line** ending in a pointer at your live page (the extra
+  `Published` echo is gone).
+
+### Fixed
+- **Offline errors are readable:** `can't reach ymmv.fyi — check your connection (…)` instead
+  of a raw `fetch failed`, and a network blip no longer kills a login you already approved.
+- **A 401-retry publish can no longer land on a different GitHub account** when the re-login
+  binds one — it refuses instead of silently overwriting.
+
 ## [0.5.0] - 2026-07-02
 
 ### Added
