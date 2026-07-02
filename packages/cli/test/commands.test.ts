@@ -125,6 +125,7 @@ describe("publish", () => {
     const prompter: Prompter = {
       ask: vi.fn(async (label: string) => (label === "Theme" ? "Catppuccin" : "")),
       confirm: vi.fn().mockResolvedValue(true),
+      choice: vi.fn().mockResolvedValue("y"),
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
@@ -144,6 +145,7 @@ describe("publish", () => {
       // accept the Editor value, skip every other curated key
       ask: vi.fn(async (label: string) => (label === "Editor" ? "Neovim" : "")),
       confirm: vi.fn().mockResolvedValue(true),
+      choice: vi.fn().mockResolvedValue("y"),
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
@@ -163,7 +165,12 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn(async (_label: string, def?: string) => def ?? "");
-    const prompter: Prompter = { ask, confirm: vi.fn().mockResolvedValue(true), close: vi.fn() };
+    const prompter: Prompter = {
+      ask,
+      confirm: vi.fn().mockResolvedValue(true),
+      choice: vi.fn().mockResolvedValue("y"),
+      close: vi.fn(),
+    };
     await publish({ interactive: true, yes: false, prompter });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toContainEqual(foreign);
@@ -201,6 +208,7 @@ describe("publish", () => {
     const prompter: Prompter = {
       ask: vi.fn(async () => ""),
       confirm: vi.fn().mockResolvedValue(false),
+      choice: vi.fn().mockResolvedValue("n"),
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
@@ -450,6 +458,7 @@ describe("delete", () => {
     const prompter: Prompter = {
       ask: vi.fn(),
       confirm: vi.fn().mockResolvedValue(false),
+      choice: vi.fn(),
       close: vi.fn(),
     };
     await runDelete({ interactive: true, yes: false, prompter });
