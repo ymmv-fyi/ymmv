@@ -169,7 +169,8 @@ test.describe("the 3-column diff", () => {
     // both sides live → the long-lived edge policy (the nudge test pins the short side)
     expect(res?.headers()["cache-control"]).toContain("s-maxage=30");
     // 13-key taxonomy: theme + version-manager differ, prompt shared (seed.sql arithmetic)
-    await expect(page.locator(".foot")).toContainText("8 differ · 5 shared");
+    await expect(page.locator(".foot")).toContainText("8 differ");
+    await expect(page.locator(".foot")).toContainText("5 shared");
 
     const changedYours = page.locator("tr.changed .yours").first();
     const changedTheirs = page.locator("tr.changed .theirs").first();
@@ -207,7 +208,8 @@ test.describe("the 3-column diff", () => {
     // verbatim-compared, so the row differs; stripping would display two identical values,
     // and the collide guard must render both raw instead
     await page.goto("/plainuser/vs/collide");
-    await expect(page.locator(".foot")).toContainText("1 differ · 2 shared");
+    await expect(page.locator(".foot")).toContainText("1 differ");
+    await expect(page.locator(".foot")).toContainText("2 shared");
     await expect(page.locator("tr.changed .theirs")).toHaveText("github.com/plain/dots");
     await expect(page.locator("tr.changed .yours")).toHaveText("https://github.com/plain/dots");
   });
