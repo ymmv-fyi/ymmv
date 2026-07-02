@@ -14,7 +14,7 @@
 export const RESERVED_ROUTES = ["api", "login", "logout"] as const;
 
 /** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous. */
-export const CLI_VERBS = ["login", "logout", "set", "delete", "view", "help"] as const;
+export const CLI_VERBS = ["login", "logout", "set", "unset", "delete", "view", "help"] as const;
 
 /** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated). */
 export const RESERVED: readonly string[] = [...new Set<string>([...RESERVED_ROUTES, ...CLI_VERBS])];
