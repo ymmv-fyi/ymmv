@@ -133,6 +133,40 @@ describe("pollForToken state machine", () => {
     expect(sleep).toHaveBeenCalledTimes(5);
   });
 
+  it("keeps polling through a THROWN fetch (wifi blip) instead of crashing the login", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(json({ access_token: "gho_x" }));
+    const token = await pollForToken(DC, {
+      fetch: fn as unknown as typeof fetch,
+      sleep,
+      now: at0,
+    });
+    expect(token).toBe("gho_x");
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("persistent thrown failures trip the cap WITH the last cause in the message", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const netErr = new TypeError("fetch failed");
+    (netErr as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND github.com");
+    const fn = vi.fn().mockRejectedValue(netErr);
+    await expect(
+      pollForToken(DC, { fetch: fn as unknown as typeof fetch, sleep, now: at0 }),
+    ).rejects.toThrow(/isn't responding.*last error: getaddrinfo ENOTFOUND github\.com/is);
+    expect(sleep).toHaveBeenCalledTimes(5);
+  });
+
+  it("requestDeviceCode: a network failure reads as can't-reach github.com", async () => {
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const { requestDeviceCode } = await import("../src/device-flow.js");
+    await expect(requestDeviceCode({ fetch: fn as unknown as typeof fetch })).rejects.toThrow(
+      /can't reach github\.com — check your connection/,
+    );
+  });
+
   it("throws a friendly error on access_denied", async () => {
     await expect(
       pollForToken(DC, { fetch: fetchSeq({ error: "access_denied" }), sleep: noSleep, now: at0 }),

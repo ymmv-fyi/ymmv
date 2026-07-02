@@ -1,4 +1,5 @@
 import { BASE } from "./config.js";
+import { safeFetch } from "./http.js";
 
 // The CLI<->Worker auth contract. Kept in its own module (imported by device-flow.ts AND index.ts)
 // so api.ts can import login() for 401/409 reauth without a device-flow <-> api import cycle.
@@ -11,15 +12,22 @@ export interface MintResult {
 /** Exchange a GitHub access token for a minted ymmv token (the Worker verifies the token's audience
  *  via GitHub token introspection). */
 export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
-  const res = await fetch(`${BASE}/api/v1/auth/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ access_token: accessToken }),
-    // Never follow a redirect: a 30x must fail (the existing `!res.ok` guard rejects the resulting
-    // opaqueredirect), not re-POST the GitHub access_token to the redirect target or read a
-    // redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
-    redirect: "manual",
-  });
+  // safeFetch: the mint runs right after the user approved on GitHub — a wifi blip here must say
+  // "can't reach", not leak a raw fetch TypeError. (revokeYmmvToken stays unwrapped: logout() owns
+  // its friendlier retry message for ANY throw.)
+  const res = await safeFetch(
+    `${BASE}/api/v1/auth/token`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ access_token: accessToken }),
+      // Never follow a redirect: a 30x must fail (the existing `!res.ok` guard rejects the resulting
+      // opaqueredirect), not re-POST the GitHub access_token to the redirect target or read a
+      // redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
+      redirect: "manual",
+    },
+    BASE,
+  );
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     if (res.status === 503) {
