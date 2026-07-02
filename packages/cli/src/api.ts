@@ -55,7 +55,8 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   // The caller merged `profile` for the handle ITS login resolved moments ago. If the token store
   // now resolves to a different account (a concurrent `ymmv login`), sending would publish that
   // merge onto the wrong profile — refuse instead of silently substituting the new handle. The
-  // 401/409 retry below is exempt: re-login there is a fresh, user-interactive proof of identity.
+  // 409 retry below is exempt (re-login is the sanctioned rebind for a stale handle); the 401
+  // retry re-checks the bound handle after its re-login.
   if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
     throw new Error(
       "the stored login changed while this command was running — re-run it under the current account.",
@@ -65,9 +66,20 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   if (res.status === 401 || res.status === 409) {
     // 401: token revoked/expired. 409: the local handle went stale after a GitHub rename. Both heal
     // by re-logging-in (re-mint + refresh the bound handle), then retry once.
-    if (res.status === 401) await deleteToken();
+    const was401 = res.status === 401;
+    if (was401) await deleteToken();
     await login();
     cred = await ensureLogin();
+    // A 401 re-auth proves the SAME account again — the server never disputed the handle, so a
+    // re-mint bound to a DIFFERENT one means a different GitHub account authorized in the browser
+    // tab. Retrying would publish this account's merge onto that one: refuse. (409 is the
+    // opposite — the handle IS the dispute, so a changed handle is the expected heal.)
+    if (was401 && (cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
+      throw new Error(
+        `the re-login bound a different account ("${sanitizeValue(cred.handle ?? "")}", not ` +
+          `"${profile.handle}") — nothing was published. Re-run under the account you meant.`,
+      );
+    }
     res = await send(cred);
     if (res.status === 401) throw new Error("authentication failed — run `ymmv login`.");
     if (res.status === 409) {
