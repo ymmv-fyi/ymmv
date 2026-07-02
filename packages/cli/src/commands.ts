@@ -107,7 +107,7 @@ async function promptEntries(
   prompter: Prompter,
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
-  console.log(`\n  ${c.faint}Enter keeps [value] · "-" clears${c.reset}`);
+  console.log(`\n  ${c.faint}Enter to keep, "-" to clear${c.reset}`);
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
     const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
@@ -129,9 +129,9 @@ async function promptEntries(
  *               └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
  *                    ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
  *                    ├─ y ──► POST ► Published
- *                    ├─ n ──► "Aborted — nothing published."  exit 0
+ *                    ├─ n ──► "Aborted. Nothing published."  exit 0
  *                    ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
- *                    └─ ^C ─► PromptAborted ► "Aborted — nothing published."  exit 130
+ *                    └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
  */
 export async function publish(io: InteractiveIO): Promise<void> {
   // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
@@ -233,14 +233,14 @@ export async function publish(io: InteractiveIO): Promise<void> {
         return;
       }
       if (ans === "n") {
-        console.log("Aborted — nothing published.");
+        console.log("Aborted. Nothing published.");
         return;
       }
       values = await promptEntries(values, io.prompter); // "e": edit, prefilled with current answers
     }
   } catch (e) {
     if (e instanceof PromptAborted) {
-      console.log("\nAborted — nothing published.");
+      console.log("\nAborted. Nothing published.");
       process.exitCode = 130;
       return;
     }
@@ -349,14 +349,14 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       go = await io.prompter.confirm(`Delete ${target}? This is permanent`, false);
     } catch (e) {
       if (e instanceof PromptAborted) {
-        console.log("\nCancelled — nothing deleted.");
+        console.log("\nCancelled. Nothing deleted.");
         process.exitCode = 130;
         return;
       }
       throw e;
     }
     if (!go) {
-      console.log("Cancelled — nothing deleted.");
+      console.log("Cancelled. Nothing deleted.");
       return;
     }
   }
