@@ -19,12 +19,13 @@ import {
   entriesFromMap,
   unknownEntries,
 } from "./profile-ops.js";
-import type { Prompter } from "./prompt.js";
+import { PromptAborted, type Prompter } from "./prompt.js";
 import {
   colorEnabled,
   displayUrl,
   notFound,
   nudge,
+  palette,
   renderDiff,
   renderProfile,
   sanitizeValue,
@@ -79,21 +80,39 @@ function newProfile(handle: string, entries: Entry[], extras: Profile["extras"])
   };
 }
 
-/** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key). */
+/** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key).
+ *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
   prompter: Prompter,
-): Promise<Entry[]> {
+): Promise<Map<CuratedKey, string>> {
+  const c = palette(colorEnabled());
+  console.log(`\n  ${c.faint}Enter keeps [value] · "-" clears${c.reset}`);
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
     const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
     const value = answer === "-" ? "" : answer;
     if (value) chosen.set(key, value);
   }
-  return entriesFromMap(chosen);
+  return chosen;
 }
 
-/** `ymmv` (default) — detect → show → confirm/edit → upsert. Detection never blocks. */
+/**
+ * `ymmv` (default) — detect → card-first confirm/edit → upsert. Detection never blocks.
+ *
+ *   ymmv (publish)
+ *     ├─ non-TTY, no -y ──────────────► refuse (needs -y), exit 1
+ *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ► POST            (no prompts)
+ *     └─ interactive
+ *          ├─ no existing profile ────► guided 13 prompts (hint line once)
+ *          └─ existing profile ───────► (skip prompts)
+ *               └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
+ *                    ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
+ *                    ├─ y ──► POST ► Published
+ *                    ├─ n ──► "Aborted — nothing published."  exit 0
+ *                    ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
+ *                    └─ ^C ─► PromptAborted ► "Aborted — nothing published."  exit 130
+ */
 export async function publish(io: InteractiveIO): Promise<void> {
   // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
   // consent gate `ymmv delete` enforces. Detection fills most of a profile now; a scripted bare
@@ -127,46 +146,86 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // Keys a newer taxonomy published that this build doesn't know: carried through verbatim (the
   // upsert is a full replace — rebuilding from our compiled-in key list alone would delete them).
   const carried = unknownEntries(existing);
-
-  let entries = entriesFromMap(defaults);
   const extras = existing?.extras ?? [];
-  if (io.interactive && io.prompter) {
-    entries = await promptEntries(defaults, io.prompter);
-  }
-  entries = [...entries, ...carried];
+  const color = colorEnabled();
+  const site = displayUrl(BASE);
 
-  const profile = newProfile(handle, entries, extras);
-  console.log(renderProfile(profile, { color: colorEnabled(), site: displayUrl(BASE) }));
-  if (carried.length > 0) {
-    // renderProfile shows only the keys this build knows — list what's riding along instead of
-    // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
-    const s = carried.length === 1 ? "" : "s";
-    console.log(`(+${carried.length} newer field${s} kept as-is — upgrade ymmv-cli to edit them)`);
-    for (const e of carried) {
-      console.log(`    ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
+  // Preview card + its notes, recomputed per render: an edit pass can create or remove the
+  // duplicate-extra condition, so the hints must describe THIS iteration's entries.
+  const showCard = (entries: Entry[]): void => {
+    console.log(
+      renderProfile(newProfile(handle, entries, extras), { color, site, mode: "preview" }),
+    );
+    if (carried.length > 0) {
+      // renderProfile shows only the keys this build knows — list what's riding along instead of
+      // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
+      const s = carried.length === 1 ? "" : "s";
+      console.log(
+        `(+${carried.length} newer field${s} kept as-is — upgrade ymmv-cli to edit them)`,
+      );
+      for (const e of carried) {
+        console.log(`    ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
+      }
     }
-  }
-  // Migration nudge: pre-0.5 profiles carried Theme/Prompt/… as free-form extras (the documented
-  // escape hatch the curated keys replaced). Once a curated field holds the value, the old extra
-  // only duplicates the row on the page and in diffs — point at the cleanup, never auto-delete.
-  const publishedLabels = new Set(
-    entries.filter((e) => isCuratedKey(e.key)).map((e) => KEY_LABELS[e.key].toLowerCase()),
-  );
-  for (const x of extras) {
-    if (publishedLabels.has(x.label.trim().toLowerCase())) {
-      const label = sanitizeValue(x.label.trim());
-      console.log(`(extra "${label}" duplicates a curated field — ymmv unset --extra "${label}")`);
+    // Migration nudge: pre-0.5 profiles carried Theme/Prompt/… as free-form extras (the documented
+    // escape hatch the curated keys replaced). Once a curated field holds the value, the old extra
+    // only duplicates the row on the page and in diffs — point at the cleanup, never auto-delete.
+    const publishedLabels = new Set(
+      entries.filter((e) => isCuratedKey(e.key)).map((e) => KEY_LABELS[e.key].toLowerCase()),
+    );
+    for (const x of extras) {
+      if (publishedLabels.has(x.label.trim().toLowerCase())) {
+        const label = sanitizeValue(x.label.trim());
+        console.log(
+          `(extra "${label}" duplicates a curated field — ymmv unset --extra "${label}")`,
+        );
+      }
     }
+  };
+
+  let values = defaults;
+  const assemble = (): Entry[] => [...entriesFromMap(values), ...carried];
+
+  // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
+  // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
+  if (!io.interactive || !io.prompter || io.yes) {
+    const entries = assemble();
+    showCard(entries);
+    await publishProfile(newProfile(handle, entries, extras));
+    return;
   }
 
-  if (io.interactive && io.prompter && !io.yes) {
-    const go = await io.prompter.confirm(`Publish to ymmv.fyi/${handle}?`, true);
-    if (!go) {
-      console.log("Aborted — nothing published.");
+  try {
+    // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
+    // card first — Enter republishes as-is, e edits.
+    if (!existing) values = await promptEntries(values, io.prompter);
+    for (;;) {
+      const entries = assemble();
+      showCard(entries);
+      const ans = await io.prompter.choice(
+        `Publish to ${site}/${handle}?`,
+        ["y", "n", "e"],
+        "y",
+        "Y/n/e=edit",
+      );
+      if (ans === "y") {
+        await publishProfile(newProfile(handle, entries, extras));
+        return;
+      }
+      if (ans === "n") {
+        console.log("Aborted — nothing published.");
+        return;
+      }
+      values = await promptEntries(values, io.prompter); // "e": edit, prefilled with current answers
+    }
+  } catch (e) {
+    if (e instanceof PromptAborted) {
+      console.log("\nAborted — nothing published.");
+      process.exitCode = 130;
       return;
     }
+    throw e;
   }
-  await publishProfile(profile);
 }
 
 /** `ymmv <handle>` — view a profile: own→diff, logged-in-no-profile→nudge, unknown→friendly. */
@@ -267,7 +326,17 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const go = await io.prompter.confirm(`Delete ${target}? This is permanent`, false);
+    let go: boolean;
+    try {
+      go = await io.prompter.confirm(`Delete ${target}? This is permanent`, false);
+    } catch (e) {
+      if (e instanceof PromptAborted) {
+        console.log("\nCancelled — nothing deleted.");
+        process.exitCode = 130;
+        return;
+      }
+      throw e;
+    }
     if (!go) {
       console.log("Cancelled — nothing deleted.");
       return;
