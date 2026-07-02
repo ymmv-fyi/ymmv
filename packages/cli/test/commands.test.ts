@@ -3,12 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ensureLogin/publishProfile resolve identity through the token store; mock it so no real login or
 // disk IO happens, and stub global fetch per branch. device-flow is mocked as insurance against an
-// accidental login() (it should never be reached when loadToken returns a credential).
+// accidental login() (it should never be reached when loadToken returns a credential). detect is
+// mocked so card-first publishes (which POST the merged defaults directly) never leak this
+// machine's real environment into asserted request bodies.
 vi.mock("../src/token-store.js");
 vi.mock("../src/device-flow.js");
+vi.mock("../src/detect.js");
 
 import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
-import type { Prompter } from "../src/prompt.js";
+import { detectStack } from "../src/detect.js";
+import { PromptAborted, type Prompter } from "../src/prompt.js";
 import { deleteToken, loadToken } from "../src/token-store.js";
 
 function prof(
@@ -25,6 +29,7 @@ const fail = (status: number) => new Response("err", { status }); // a real erro
 let logs: string[];
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(detectStack).mockReturnValue(new Map());
   logs = [];
   vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
     logs.push(a.join(" "));
@@ -104,7 +109,7 @@ describe("publish", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("hints when a legacy extra duplicates a curated field, and only then", async () => {
+  it("hints when a legacy extra duplicates a curated field — recomputed per edit pass", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const fetchFn = vi
       .fn()
@@ -124,14 +129,21 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const prompter: Prompter = {
       ask: vi.fn(async (label: string) => (label === "Theme" ? "Catppuccin" : "")),
-      confirm: vi.fn().mockResolvedValue(true),
-      choice: vi.fn().mockResolvedValue("y"),
+      confirm: vi.fn(),
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
-    const out = logs.join("\n");
-    expect(out).toMatch(/extra "Theme" duplicates a curated field — ymmv unset --extra "Theme"/);
-    expect(out).not.toMatch(/extra "Keyboard" duplicates/);
+    const hint = /extra "Theme" duplicates a curated field — ymmv unset --extra "Theme"/;
+    // The card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo.
+    const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
+    expect(logs.filter(isCard).length).toBe(2); // card before the edit pass, card after
+    // No Theme value on the first card → no hint; the edit sets Theme → the SECOND card hints.
+    const firstHint = logs.findIndex((l) => hint.test(l));
+    const secondCard = logs.map(isCard).lastIndexOf(true);
+    expect(firstHint).toBeGreaterThan(secondCard);
+    expect(logs.filter((l) => hint.test(l)).length).toBe(1);
+    expect(logs.join("\n")).not.toMatch(/extra "Keyboard" duplicates/);
   });
 
   it("interactive: the edited values are what get published", async () => {
@@ -156,7 +168,31 @@ describe("publish", () => {
 
   // A newer taxonomy's keys (unknown to this build) must survive a bare publish — the upsert is a
   // full replace, so dropping them here would delete them server-side.
-  it("interactive: carries unknown keys through verbatim, without prompting for them", async () => {
+  it("republish: carries unknown keys through verbatim with zero prompts (card-first)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [foreign, { key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn();
+    const prompter: Prompter = {
+      ask,
+      confirm: vi.fn(),
+      choice: vi.fn().mockResolvedValue("y"),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toContainEqual(foreign);
+    expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
+    expect(ask).not.toHaveBeenCalled(); // card-first: Enter-to-publish, no field walk
+    expect(logs.join("\n")).toMatch(/\+1 newer field kept as-is/);
+    expect(logs.join("\n")).toMatch(/launcher = Raycast/); // carried rows are listed, not hidden
+  });
+
+  it("republish + e: the edit pass walks all curated keys, never the carried ones", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
     const fetchFn = vi
@@ -167,8 +203,8 @@ describe("publish", () => {
     const ask = vi.fn(async (_label: string, def?: string) => def ?? "");
     const prompter: Prompter = {
       ask,
-      confirm: vi.fn().mockResolvedValue(true),
-      choice: vi.fn().mockResolvedValue("y"),
+      confirm: vi.fn(),
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
       close: vi.fn(),
     };
     await publish({ interactive: true, yes: false, prompter });
@@ -177,8 +213,130 @@ describe("publish", () => {
     expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one prompt per curated key, no more
     expect(ask.mock.calls.some((c) => /launcher/i.test(String(c[0])))).toBe(false);
-    expect(logs.join("\n")).toMatch(/\+1 newer field kept as-is/);
-    expect(logs.join("\n")).toMatch(/launcher = Raycast/); // carried rows are listed, not hidden
+  });
+
+  it("republish: card-first — existing values POST as-is on y, preview shows gap rows", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn();
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter: Prompter = { ask, confirm: vi.fn(), choice, close: vi.fn() };
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).not.toHaveBeenCalled();
+    expect(choice).toHaveBeenCalledWith(
+      "Publish to ymmv.fyi/me?",
+      ["y", "n", "e"],
+      "y",
+      "Y/n/e=edit",
+    );
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
+    const out = logs.join("\n");
+    expect(out).toMatch(/ymmv\.fyi\/me/); // breadcrumb
+    expect(out).toMatch(/Font\s+—/); // preview gap row for a never-set key
+    expect(out).not.toMatch(/updated/); // preview never claims a timestamp
+  });
+
+  // REGRESSION (behavior fix): -y on a TTY used to walk all 13 prompts despite help's
+  // "publish without prompts". It must now publish the merged defaults with zero interaction.
+  it("-y interactive: no prompts, no confirm — preview card then POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn();
+    const choice = vi.fn();
+    const prompter: Prompter = { ask, confirm: vi.fn(), choice, close: vi.fn() };
+    await publish({ interactive: true, yes: true, prompter });
+    expect(ask).not.toHaveBeenCalled();
+    expect(choice).not.toHaveBeenCalled();
+    expect(fetchFn.mock.calls.some((c) => (c[1] as RequestInit)?.method === "POST")).toBe(true);
+    expect(logs.join("\n")).toMatch(/ymmv\.fyi\/me/); // the preview card still shows what shipped
+  });
+
+  it("e-loop: edits land in the POST body and a second card renders", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Zed" : (def ?? ""),
+    );
+    const prompter: Prompter = {
+      ask,
+      confirm: vi.fn(),
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([{ key: "editor", value: "Zed" }]);
+    expect(logs.filter((l) => l.includes("  ymmv.fyi/me\n")).length).toBe(2);
+  });
+
+  it('e-loop: clearing with "-" surfaces as a — gap row on the next card', async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "-" : (def ?? ""),
+    );
+    const prompter: Prompter = {
+      ask,
+      confirm: vi.fn(),
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("n"),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    const secondCard = logs.slice(logs.map((l) => l.includes("  ymmv.fyi/me\n")).indexOf(true) + 1);
+    expect(secondCard.join("\n")).toMatch(/Editor\s+—/); // cleared → explicit gap, not silence
+    expect(secondCard.join("\n")).not.toContain("Vim");
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+  });
+
+  it("Ctrl+C at a field prompt: Aborted line, exit 130, no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // first publish → prompts run
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter: Prompter = {
+      ask: vi.fn().mockRejectedValue(new PromptAborted()),
+      confirm: vi.fn(),
+      choice: vi.fn(),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+    expect(process.exitCode).toBe(130);
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("Ctrl+C at the publish choice: same clean abort", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter: Prompter = {
+      ask: vi.fn(),
+      confirm: vi.fn(),
+      choice: vi.fn().mockRejectedValue(new PromptAborted()),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/Aborted — nothing published\./);
+    expect(process.exitCode).toBe(130);
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
 
   it("non-interactive: carries unknown keys too, and stays silent when there are none", async () => {
@@ -465,5 +623,22 @@ describe("delete", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
     expect(logs.join("\n")).toMatch(/Cancelled/);
+  });
+
+  it("Ctrl+C at the delete confirm: Cancelled line, exit 130, nothing touched", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter: Prompter = {
+      ask: vi.fn(),
+      confirm: vi.fn().mockRejectedValue(new PromptAborted()),
+      choice: vi.fn(),
+      close: vi.fn(),
+    };
+    await runDelete({ interactive: true, yes: false, prompter });
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(deleteToken).not.toHaveBeenCalled();
+    expect(logs.join("\n")).toMatch(/Cancelled — nothing deleted\./);
+    expect(process.exitCode).toBe(130);
   });
 });
