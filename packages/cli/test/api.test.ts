@@ -42,4 +42,13 @@ describe("fetchProfileJson", () => {
     stubFetch({ ...profile, entries: null }, 200);
     await expect(fetchProfileJson("carol")).rejects.toThrow(ProfileParseError);
   });
+
+  it("a network-level failure surfaces as can't-reach with the cause, never raw fetch failed", async () => {
+    const netErr = new TypeError("fetch failed");
+    (netErr as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND ymmv.fyi");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(netErr));
+    await expect(fetchProfileJson("carol")).rejects.toThrow(
+      /can't reach .*check your connection.*ENOTFOUND/,
+    );
+  });
 });

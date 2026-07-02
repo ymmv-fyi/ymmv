@@ -1,6 +1,7 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
+import { safeFetch } from "./http.js";
 import { sanitizeValue } from "./render.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
@@ -30,14 +31,18 @@ export async function ensureLogin(): Promise<StoredToken> {
 
 export async function publishProfile(profile: Profile): Promise<void> {
   const send = (c: StoredToken) =>
-    fetch(`${BASE}/api/v1/profile`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${c.token}` },
-      // Send the login-bound handle, never a caller-guessed one — the official client never claims
-      // a handle it doesn't own.
-      body: JSON.stringify({ ...profile, handle: c.handle ?? profile.handle }),
-      redirect: "manual", // a mutation must never follow a redirect into a false success
-    });
+    safeFetch(
+      `${BASE}/api/v1/profile`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${c.token}` },
+        // Send the login-bound handle, never a caller-guessed one — the official client never claims
+        // a handle it doesn't own.
+        body: JSON.stringify({ ...profile, handle: c.handle ?? profile.handle }),
+        redirect: "manual", // a mutation must never follow a redirect into a false success
+      },
+      BASE,
+    );
 
   let cred = await ensureLogin();
   // The caller merged `profile` for the handle ITS login resolved moments ago. If the token store
@@ -84,7 +89,7 @@ export async function publishProfile(profile: Profile): Promise<void> {
  *  nothing edge-caches Worker responses today, but if a cache rule ever fronts /api/v1/u/*, a stale
  *  read here would make the full-replace publish silently drop writes made moments earlier. */
 export async function fetchProfileJson(handle: string): Promise<Profile | null> {
-  const res = await fetch(`${BASE}/api/v1/u/${encodeURIComponent(handle)}`);
+  const res = await safeFetch(`${BASE}/api/v1/u/${encodeURIComponent(handle)}`, undefined, BASE);
   if (res.status === 404) return null;
   if (!res.ok) {
     throw new Error(`fetch failed: ${res.status} ${await res.text()}`);
@@ -104,11 +109,15 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
  */
 export async function deleteProfile(): Promise<void> {
   const cred = await ensureLogin();
-  const res = await fetch(`${BASE}/api/v1/profile`, {
-    method: "DELETE",
-    headers: { authorization: `Bearer ${cred.token}` },
-    redirect: "manual",
-  });
+  const res = await safeFetch(
+    `${BASE}/api/v1/profile`,
+    {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${cred.token}` },
+      redirect: "manual",
+    },
+    BASE,
+  );
   if (res.status === 401) {
     throw new Error("session expired — run `ymmv login`, then `ymmv delete` again.");
   }

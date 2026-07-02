@@ -1,5 +1,6 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
+import { causeText, safeFetch } from "./http.js";
 import { saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
@@ -30,11 +31,16 @@ export interface PollDeps {
 /** Request a device + user code from GitHub. */
 export async function requestDeviceCode(deps: PollDeps = {}): Promise<DeviceCode> {
   const doFetch = deps.fetch ?? globalThis.fetch;
-  const res = await doFetch(DEVICE_CODE_URL, {
-    method: "POST",
-    headers: { accept: "application/json" },
-    body: new URLSearchParams({ client_id: GITHUB_CLIENT_ID }),
-  });
+  const res = await safeFetch(
+    DEVICE_CODE_URL,
+    {
+      method: "POST",
+      headers: { accept: "application/json" },
+      body: new URLSearchParams({ client_id: GITHUB_CLIENT_ID }),
+    },
+    "github.com",
+    doFetch,
+  );
   if (!res.ok) {
     throw new Error(`device code request failed: ${res.status} ${await res.text()}`);
   }
@@ -59,30 +65,42 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   // failure (a corporate proxy 403/407, a GitHub outage) fails fast with a clear message instead of
   // hanging silently until the code expires. The real OAuth errors below stay fatal.
   let transientFailures = 0;
+  let lastCause = "";
   const MAX_TRANSIENT_FAILURES = 5;
   while (now() < deadline) {
     await sleep(interval * 1000);
-    const res = await doFetch(TOKEN_URL, {
-      method: "POST",
-      headers: { accept: "application/json" },
-      body: new URLSearchParams({
-        client_id: GITHUB_CLIENT_ID,
-        device_code: dc.device_code,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      }),
-    });
+    // A THROWN fetch (wifi blip, DNS hiccup mid-poll) is the same class of transient as a proxy
+    // 5xx — flow it into the counter instead of crashing a login the user already approved.
+    let res: Response | undefined;
+    try {
+      res = await doFetch(TOKEN_URL, {
+        method: "POST",
+        headers: { accept: "application/json" },
+        body: new URLSearchParams({
+          client_id: GITHUB_CLIENT_ID,
+          device_code: dc.device_code,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
+    } catch (err) {
+      lastCause = causeText(err);
+    }
     let tok: { access_token?: string; error?: string; interval?: number } | undefined;
-    if (res.ok) {
+    if (res?.ok) {
       try {
         tok = (await res.json()) as { access_token?: string; error?: string; interval?: number };
       } catch {
         tok = undefined;
+        lastCause = "unexpected response body";
       }
+    } else if (res) {
+      lastCause = `HTTP ${res.status}`;
     }
     if (tok === undefined) {
       if (++transientFailures >= MAX_TRANSIENT_FAILURES) {
         throw new Error(
-          "GitHub isn't responding to the login poll — check your connection and run `ymmv login` again.",
+          "GitHub isn't responding to the login poll — check your connection and run " +
+            `\`ymmv login\` again.${lastCause ? ` (last error: ${lastCause})` : ""}`,
         );
       }
       continue;
