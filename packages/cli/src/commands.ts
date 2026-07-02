@@ -22,6 +22,7 @@ import {
 import type { Prompter } from "./prompt.js";
 import {
   colorEnabled,
+  displayUrl,
   notFound,
   nudge,
   renderDiff,
@@ -135,7 +136,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
   entries = [...entries, ...carried];
 
   const profile = newProfile(handle, entries, extras);
-  console.log(renderProfile(profile, { color: colorEnabled() }));
+  console.log(renderProfile(profile, { color: colorEnabled(), site: displayUrl(BASE) }));
   if (carried.length > 0) {
     // renderProfile shows only the keys this build knows — list what's riding along instead of
     // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
@@ -189,13 +190,13 @@ export async function view(handle: string): Promise<void> {
     }
     if (!mine) {
       // Logged in but haven't published — show theirs plus the one amber nudge.
-      console.log(renderProfile(theirs, { color: c }));
+      console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
       console.log(nudge(c));
       return;
     }
     // Viewing your own handle: just show it (no self-diff).
   }
-  console.log(renderProfile(theirs, { color: c }));
+  console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
 }
 
 /** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish. */
