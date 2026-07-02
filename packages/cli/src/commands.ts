@@ -9,10 +9,10 @@ import {
 } from "@ymmv/shared";
 import { deleteProfile, ensureLogin, fetchProfileJson, publishProfile } from "./api.js";
 import { detectStack } from "./detect.js";
-import { applySet, buildDefaults, entriesFromMap } from "./profile-ops.js";
+import { applySet, applyUnset, buildDefaults, entriesFromMap } from "./profile-ops.js";
 import type { Prompter } from "./prompt.js";
-import { notFound, nudge, renderDiff, renderProfile, useColor } from "./render.js";
-import type { SetTarget } from "./resolve.js";
+import { notFound, nudge, renderDiff, renderProfile, sanitizeValue, useColor } from "./render.js";
+import type { SetTarget, UnsetTarget } from "./resolve.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
@@ -40,6 +40,20 @@ function requireHandle(cred: StoredToken): string | null {
   );
   process.exitCode = 1;
   return null;
+}
+
+/**
+ * Refuse a read-modify-write when the pre-write read resolved to a DIFFERENT handle than the
+ * login-bound one (fetchProfileJson follows the 301 a GitHub rename leaves behind). Republishing
+ * would silently rebind the account to the stale handle — re-login is the only sanctioned rebind.
+ */
+function assertHandleUnchanged(existing: Profile | null, handle: string): void {
+  if (existing && existing.handle.toLowerCase() !== handle.toLowerCase()) {
+    throw new Error(
+      `this login is bound to "${handle}" but your profile now lives at ` +
+        `"${sanitizeValue(existing.handle)}" — run \`ymmv login\` to refresh, then retry.`,
+    );
+  }
 }
 
 function newProfile(handle: string, entries: Entry[], extras: Profile["extras"]): Profile {
@@ -77,6 +91,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // read failure. Swallowing the throw would let a transient error look like "no profile", and the
   // upsert (server does delete-then-insert) would then clobber every curated key + extra. Abort.
   const existing = await fetchProfileJson(handle);
+  assertHandleUnchanged(existing, handle);
   const defaults = buildDefaults(existing, detected);
 
   let entries = entriesFromMap(defaults);
@@ -136,12 +151,47 @@ export async function runSet(target: SetTarget): Promise<void> {
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
   // truncated profile. fetchProfileJson returns null only for a genuine 404.
   const existing = await fetchProfileJson(handle);
+  assertHandleUnchanged(existing, handle);
   const { entries, extras } = applySet(existing, target);
   await publishProfile(newProfile(handle, entries, extras));
   if (target.kind === "curated") {
     console.log(`Set ${KEY_LABELS[target.key]} = ${target.value}.`);
   } else {
     console.log(`Set extra ${target.label} = ${target.value}.`);
+  }
+}
+
+/** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST. */
+export async function runUnset(target: UnsetTarget): Promise<void> {
+  const cred = await ensureLogin();
+  const handle = requireHandle(cred);
+  if (!handle) return;
+  // NOT caught (same reason as publish): a transient read failure must abort, never republish a
+  // truncated profile. fetchProfileJson returns null only for a genuine 404.
+  const existing = await fetchProfileJson(handle);
+  assertHandleUnchanged(existing, handle);
+  if (!existing) {
+    // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
+    console.log("No profile yet — run `ymmv` to publish one.");
+    return;
+  }
+  const { entries, extras, removed } = applyUnset(existing, target);
+  if (!removed) {
+    console.log(
+      target.kind === "curated"
+        ? `${KEY_LABELS[target.key]} is not set.`
+        : `No extra "${target.label}".`,
+    );
+    return; // idempotent no-op: exit 0, and crucially no network write
+  }
+  await publishProfile(newProfile(handle, entries, extras));
+  // removed.* comes off the wire (unlike runSet's echo of the user's own argv) — sanitize it.
+  if (target.kind === "curated") {
+    console.log(`Removed ${KEY_LABELS[target.key]} (was "${sanitizeValue(removed.value)}").`);
+  } else {
+    console.log(
+      `Removed extra "${sanitizeValue(removed.label)}" (was "${sanitizeValue(removed.value)}").`,
+    );
   }
 }
 
