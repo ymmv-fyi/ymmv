@@ -143,6 +143,16 @@ describe("publish auto-reauth", () => {
     expect(res.handle).not.toContain(esc);
   });
 
+  it("REFUSES the 401 retry when re-login binds a DIFFERENT account (no cross-account clobber)", async () => {
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce({ base: "B", token: "t", handle: "carol" }) // pre-send login
+      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" }); // after the 401 re-login
+    const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/different account.*mallory/i);
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the retry POST never went out
+  });
+
   it("throws after a second auth failure (no infinite loop)", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
