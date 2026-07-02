@@ -9,7 +9,13 @@ import {
   type Profile,
   SCHEMA_VERSION,
 } from "@ymmv/shared";
-import { deleteProfile, ensureLogin, fetchProfileJson, publishProfile } from "./api.js";
+import {
+  deleteProfile,
+  ensureLogin,
+  fetchProfileJson,
+  type PublishResult,
+  publishProfile,
+} from "./api.js";
 import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
 import {
@@ -23,6 +29,7 @@ import { PromptAborted, type Prompter } from "./prompt.js";
 import {
   colorEnabled,
   displayUrl,
+  link,
   notFound,
   nudge,
   palette,
@@ -78,6 +85,19 @@ function newProfile(handle: string, entries: Entry[], extras: Profile["extras"])
     extras,
     updated_at: new Date().toISOString(),
   };
+}
+
+/** The publish confirmation — composed here, not in the network layer (IO at the edges). */
+function printPublished(res: PublishResult, color: boolean): void {
+  console.log(`Published ${res.handle} → ${link(res.url, color)}`);
+}
+
+/** Faint pointer at the live page, appended to set/unset confirmations. Never amber — it repeats
+ *  on every mutation; amber stays for links worth following + diff-differences. */
+function pagePointer(handle: string): string {
+  const color = colorEnabled();
+  const c = palette(color);
+  return ` ${c.faint}→ ${color ? displayUrl(BASE) : BASE}/${handle}${c.reset}`;
 }
 
 /** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key).
@@ -191,7 +211,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
   if (!io.interactive || !io.prompter || io.yes) {
     const entries = assemble();
     showCard(entries);
-    await publishProfile(newProfile(handle, entries, extras));
+    printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
     return;
   }
 
@@ -209,7 +229,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
         "Y/n/e=edit",
       );
       if (ans === "y") {
-        await publishProfile(newProfile(handle, entries, extras));
+        printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
         return;
       }
       if (ans === "n") {
@@ -268,12 +288,12 @@ export async function runSet(target: SetTarget): Promise<void> {
   const existing = await fetchProfileJson(handle);
   assertHandleUnchanged(existing, handle);
   const { entries, extras } = applySet(existing, target);
-  await publishProfile(newProfile(handle, entries, extras));
-  if (target.kind === "curated") {
-    console.log(`Set ${KEY_LABELS[target.key]} = ${target.value}.`);
-  } else {
-    console.log(`Set extra ${target.label} = ${target.value}.`);
-  }
+  const res = await publishProfile(newProfile(handle, entries, extras));
+  const line =
+    target.kind === "curated"
+      ? `Set ${KEY_LABELS[target.key]} = ${target.value}.`
+      : `Set extra ${target.label} = ${target.value}.`;
+  console.log(`${line}${pagePointer(res.handle)}`);
 }
 
 /** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST. */
@@ -299,15 +319,13 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
     );
     return; // idempotent no-op: exit 0, and crucially no network write
   }
-  await publishProfile(newProfile(handle, entries, extras));
+  const res = await publishProfile(newProfile(handle, entries, extras));
   // removed.* comes off the wire (unlike runSet's echo of the user's own argv) — sanitize it.
-  if (target.kind === "curated") {
-    console.log(`Removed ${KEY_LABELS[target.key]} (was "${sanitizeValue(removed.value)}").`);
-  } else {
-    console.log(
-      `Removed extra "${sanitizeValue(removed.label)}" (was "${sanitizeValue(removed.value)}").`,
-    );
-  }
+  const line =
+    target.kind === "curated"
+      ? `Removed ${KEY_LABELS[target.key]} (was "${sanitizeValue(removed.value)}").`
+      : `Removed extra "${sanitizeValue(removed.label)}" (was "${sanitizeValue(removed.value)}").`;
+  console.log(`${line}${pagePointer(res.handle)}`);
 }
 
 /** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */

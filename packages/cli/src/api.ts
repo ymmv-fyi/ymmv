@@ -29,7 +29,14 @@ export async function ensureLogin(): Promise<StoredToken> {
   return fresh;
 }
 
-export async function publishProfile(profile: Profile): Promise<void> {
+/** What a successful publish resolved to — the CALLER composes any user-facing message
+ *  (IO stays at the command edges; this network layer never prints). */
+export interface PublishResult {
+  handle: string;
+  url: string;
+}
+
+export async function publishProfile(profile: Profile): Promise<PublishResult> {
   const send = (c: StoredToken) =>
     safeFetch(
       `${BASE}/api/v1/profile`,
@@ -75,9 +82,9 @@ export async function publishProfile(profile: Profile): Promise<void> {
   }
   const data = (await res.json()) as { handle?: unknown };
   // The confirmation echoes wire data: shape-check + sanitize the server-returned handle before
-  // printing (a non-first-party origin could inject terminal escapes here).
+  // it can reach a terminal (a non-first-party origin could inject terminal escapes here).
   const shown = typeof data.handle === "string" ? sanitizeValue(data.handle) : profile.handle;
-  console.log(`Published ${shown} -> ${BASE}/${shown}`);
+  return { handle: shown, url: `${BASE}/${shown}` };
 }
 
 /** Fetch a public profile as JSON. Returns null on 404 (no profile / reserved); throws on real
