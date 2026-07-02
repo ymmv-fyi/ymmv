@@ -100,7 +100,7 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
     if (tok === undefined) {
       if (++transientFailures >= MAX_TRANSIENT_FAILURES) {
         throw new Error(
-          "GitHub isn't responding to the login poll — check your connection and run " +
+          "GitHub isn't responding to the login poll. Check your connection and run " +
             `\`ymmv login\` again.${lastCause ? ` (last error: ${lastCause})` : ""}`,
         );
       }
@@ -117,12 +117,12 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
       case "access_denied":
         throw new Error("Authorization denied. Run `ymmv login` to try again.");
       case "expired_token":
-        throw new Error("Device code expired — run `ymmv login` again.");
+        throw new Error("Device code expired. Run `ymmv login` again.");
       default:
         throw new Error(`device flow failed: ${tok.error ?? "unknown error"}`);
     }
   }
-  throw new Error("Device code expired — run `ymmv login` again.");
+  throw new Error("Device code expired. Run `ymmv login` again.");
 }
 
 /** Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
@@ -133,7 +133,7 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   // blocking on the ~15-minute GitHub poll. (publish/set/delete reach here via ensureLogin.)
   if (!process.stdin.isTTY) {
     throw new Error(
-      "Device login needs an interactive terminal — run `ymmv login` in a real terminal " +
+      "Device login needs an interactive terminal. Run `ymmv login` in a real terminal " +
         "(a piped or CI shell can't complete the GitHub device flow).",
     );
   }
@@ -158,6 +158,6 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   console.log(
     handle
       ? `  Logged in as ${handle}.\n`
-      : "  Logged in — no handle bound (your GitHub username is a reserved word).\n",
+      : "  Logged in. No handle bound (your GitHub username is a reserved word).\n",
   );
 }

@@ -31,12 +31,12 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
     if (res.status === 503) {
-      throw new Error(body.message ?? "GitHub is unavailable — run `ymmv login` again shortly.");
+      throw new Error(body.message ?? "GitHub is unavailable. Run `ymmv login` again shortly.");
     }
     if (res.status === 429) {
       // The mint endpoint is rate-limited (per identity + per IP). Surface the server's hint.
       const retry = res.headers.get("retry-after");
-      const msg = body.message ?? "too many login attempts — slow down and try again shortly";
+      const msg = body.message ?? "too many login attempts. Slow down and try again shortly";
       throw new Error(retry ? `${msg} (retry in ${retry}s)` : msg);
     }
     throw new Error(`login failed: ${res.status} ${body.error ?? ""}`.trim());

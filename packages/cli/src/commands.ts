@@ -72,7 +72,7 @@ function assertHandleUnchanged(existing: Profile | null, handle: string): void {
   if (existing && existing.handle.toLowerCase() !== handle.toLowerCase()) {
     throw new Error(
       `this login is bound to "${handle}" but your profile now lives at ` +
-        `"${sanitizeValue(existing.handle)}" — run \`ymmv login\` to refresh, then retry.`,
+        `"${sanitizeValue(existing.handle)}". Run \`ymmv login\` to refresh, then retry.`,
     );
   }
 }
@@ -180,9 +180,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
       // renderProfile shows only the keys this build knows — list what's riding along instead of
       // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
       const s = carried.length === 1 ? "" : "s";
-      console.log(
-        `(+${carried.length} newer field${s} kept as-is — upgrade ymmv-cli to edit them)`,
-      );
+      console.log(`(+${carried.length} newer field${s} kept as-is; upgrade ymmv-cli to edit them)`);
       for (const e of carried) {
         console.log(`    ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
       }
@@ -196,9 +194,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
     for (const x of extras) {
       if (publishedLabels.has(x.label.trim().toLowerCase())) {
         const label = sanitizeValue(x.label.trim());
-        console.log(
-          `(extra "${label}" duplicates a curated field — ymmv unset --extra "${label}")`,
-        );
+        console.log(`(extra "${label}" duplicates a curated field; ymmv unset --extra "${label}")`);
       }
     }
   };
@@ -307,7 +303,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   assertHandleUnchanged(existing, handle);
   if (!existing) {
     // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
-    console.log("No profile yet — run `ymmv` to publish one.");
+    console.log("No profile yet. Run `ymmv` to publish one.");
     return;
   }
   const { entries, extras, removed } = applyUnset(existing, target);

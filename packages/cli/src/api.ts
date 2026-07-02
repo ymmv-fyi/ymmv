@@ -9,7 +9,7 @@ import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
  *  the edge WAF block page is non-JSON, so fall back to a generic line. */
 async function rateLimitMessage(res: Response): Promise<string> {
   const retry = res.headers.get("retry-after");
-  let msg = "rate limited — too many requests";
+  let msg = "rate limited, too many requests";
   try {
     const body = (await res.json()) as { message?: string };
     if (typeof body?.message === "string" && body.message) msg = body.message;
@@ -25,7 +25,7 @@ export async function ensureLogin(): Promise<StoredToken> {
   if (existing) return existing;
   await login();
   const fresh = await loadToken();
-  if (!fresh) throw new Error("login did not persist a token — run `ymmv login`.");
+  if (!fresh) throw new Error("login did not persist a token. Run `ymmv login`.");
   return fresh;
 }
 
@@ -59,7 +59,7 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   // retry re-checks the bound handle after its re-login.
   if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
     throw new Error(
-      "the stored login changed while this command was running — re-run it under the current account.",
+      "the stored login changed while this command was running. Re-run it under the current account.",
     );
   }
   let res = await send(cred);
@@ -77,11 +77,11 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
     if (was401 && (cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
       throw new Error(
         `the re-login bound a different account ("${sanitizeValue(cred.handle ?? "")}", not ` +
-          `"${profile.handle}") — nothing was published. Re-run under the account you meant.`,
+          `"${profile.handle}"). Nothing was published. Re-run under the account you meant.`,
       );
     }
     res = await send(cred);
-    if (res.status === 401) throw new Error("authentication failed — run `ymmv login`.");
+    if (res.status === 401) throw new Error("authentication failed. Run `ymmv login`.");
     if (res.status === 409) {
       throw new Error(
         "that handle is taken by another account (your GitHub handle may have been reused).",
@@ -138,7 +138,7 @@ export async function deleteProfile(): Promise<void> {
     BASE,
   );
   if (res.status === 401) {
-    throw new Error("session expired — run `ymmv login`, then `ymmv delete` again.");
+    throw new Error("session expired. Run `ymmv login`, then `ymmv delete` again.");
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
