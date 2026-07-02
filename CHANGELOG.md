@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.4.0] - 2026-07-02
 
 ### Added
 - **`ymmv unset <key>` removes a curated field from your profile.** `ymmv unset --extra "Keyboard"`
