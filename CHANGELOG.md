@@ -2,6 +2,47 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **Three new curated keys: `prompt`, `theme`, `version-manager`.** Prompt renderer (Starship,
+  Oh My Posh, …), colorscheme (Catppuccin, Gruvbox, …), and version manager (mise, nvm, …) are
+  first-class, diffable fields now. API consumers: `entries[].key` gains the three new values —
+  additive, same response shape.
+- **Detection covers much more of the stack:**
+  - Window manager on Linux: Hyprland, Sway, i3, niri via their sockets; GNOME, KDE Plasma,
+    COSMIC, Cinnamon, MATE, XFCE, LXQt, Budgie, Pantheon, Unity via XDG session vars.
+  - AI tool, when publishing from inside one: Claude Code, Cursor, Codex, Gemini CLI, opencode,
+    Amp, GitHub Copilot.
+  - Prompt renderer: Starship, Oh My Posh, Powerlevel10k, Spaceship, Tide.
+  - Version manager: mise, asdf, nvm, fnm, Volta, proto, pyenv, rbenv.
+  - Browser from `$BROWSER`; dispatchers (`xdg-open` and friends) are ignored, not published.
+  - More terminals: kitty, GNOME Terminal, GNOME Console, Tilix, Terminator, ConEmu, mintty,
+    xterm, foot, JetBrains, and Cursor (distinguished from VS Code). Exact self-identifying
+    `$TERM` values (`xterm-kitty`, `foot`, `alacritty`, `xterm-ghostty`) count as a last resort;
+    generic terminfo names still never do.
+  - Editor, inferred from the surrounding host when `$VISUAL`/`$EDITOR` are unset: Neovim/Vim
+    terminals, Emacs, VS Code, Cursor, Zed.
+  - Linux distro names: `os` reads `/etc/os-release`, so a profile says "Arch Linux" instead of
+    "Linux". WSL labeling is unchanged.
+
+### Changed
+- **Non-interactive `ymmv` now requires `-y`.** Without a terminal there is no confirm step, so
+  the explicit flag is the consent — `ymmv delete` already worked this way. Interactive publishes
+  are unchanged.
+- **Publish flags duplicate extras.** When a free-form extra (`Theme=…`) duplicates a curated
+  field, publish prints the `ymmv unset --extra` cleanup hint.
+
+### Fixed
+- **Top-level cmd.exe sessions no longer detect as "PowerShell".** `PSModulePath` is machine-wide
+  on Windows; the detector now reads its first segment (PowerShell prepends the user's Documents
+  module dir) and recognizes cmd by its own `PROMPT`. Nested sessions still inherit the parent's
+  markers (a cmd started from PowerShell reads as PowerShell) — confirm-prompt correctable.
+- **A bare `ymmv` republish no longer drops fields published by a newer CLI.** Unknown keys ride
+  through the full-replace publish verbatim and are listed under the preview. CLIs 0.4.0 and older
+  still rebuild from their own key list — update before republishing, or a bare `ymmv` from an old
+  install drops the new fields (`set`/`unset` were never affected).
+
 ## [0.4.0] - 2026-07-02
 
 ### Added

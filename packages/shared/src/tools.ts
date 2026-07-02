@@ -75,15 +75,91 @@ export const TOOLS: Tool[] = [
   { key: "terminal", canonical: "Ghostty", envTokens: ["ghostty"] },
   { key: "terminal", canonical: "Hyper", envTokens: ["hyper"] },
   { key: "terminal", canonical: "Rio", envTokens: ["rio"] },
-  { key: "terminal", canonical: "kitty", envTokens: ["kitty"] },
+  { key: "terminal", canonical: "kitty", envTokens: ["kitty"] }, // kitty refuses TERM_PROGRAM (its issue #3317); detect.ts probes KITTY_WINDOW_ID instead — token kept for the day that changes
   { key: "terminal", canonical: "Tabby", envTokens: ["tabby"] },
   { key: "terminal", canonical: "Warp", envTokens: ["warpterminal"] }, // `warpterminal` env id ≠ typed "Warp"
+  { key: "terminal", canonical: "GNOME Console", envTokens: ["kgx"] }, // $TERM_PROGRAM=kgx since GNOME 45
+  { key: "terminal", canonical: "mintty", envTokens: ["mintty"] }, // Git Bash/MSYS2 console, ≥3.1.5
+  { key: "terminal", canonical: "Zed", envTokens: ["zed"] }, // Zed's built-in terminal (~0.145+)
+
+  // ── browser (envTokens mirror BROWSER_NAMES: $BROWSER basenames) ──────────
+  { key: "browser", canonical: "Firefox", envTokens: ["firefox"], aliases: ["ff"] },
+  // Hyphenated Linux binary names double as diff aliases (kde/plasma precedent): unlike `vi`,
+  // each unambiguously names exactly that browser, so a TYPED "google-chrome" should diff-equal
+  // a DETECTED "Chrome".
+  {
+    key: "browser",
+    canonical: "Chrome",
+    envTokens: ["chrome", "google-chrome"],
+    aliases: ["google chrome", "google-chrome"], // NOT Chromium — distinct browser
+  },
+  {
+    key: "browser",
+    canonical: "Edge",
+    envTokens: ["msedge", "microsoft-edge"],
+    aliases: ["microsoft edge", "microsoft-edge"],
+  },
+  {
+    key: "browser",
+    canonical: "Chromium",
+    envTokens: ["chromium", "chromium-browser"],
+    aliases: ["chromium-browser"],
+  },
+  {
+    key: "browser",
+    canonical: "Brave",
+    envTokens: ["brave", "brave-browser"],
+    aliases: ["brave-browser"],
+  },
+  { key: "browser", canonical: "LibreWolf", envTokens: ["librewolf"] },
+  {
+    key: "browser",
+    canonical: "Vivaldi",
+    envTokens: ["vivaldi", "vivaldi-stable"],
+    aliases: ["vivaldi-stable"],
+  },
+  { key: "browser", canonical: "Zen", envTokens: ["zen", "zen-browser"], aliases: ["zen-browser"] },
+  { key: "browser", canonical: "qutebrowser", envTokens: ["qutebrowser"] },
+
+  // ── window-manager (envTokens mirror WM_NAMES: XDG_CURRENT_DESKTOP list entries +
+  //    DESKTOP_SESSION basenames, lowercased). Deliberate: canonical names are what users put on
+  //    profiles — the DE name (GNOME, KDE Plasma), not its compositor (Mutter, KWin). Compositors
+  //    with their own socket vars (Hyprland/Sway/i3/niri) are ALSO probed directly in detect.ts;
+  //    WMs with no env footprint at all (river, bspwm, dwm, Qtile, awesome) have no tokens — a
+  //    dead token would only inflate the pinned detector fixtures. ──────────
+  { key: "window-manager", canonical: "GNOME", envTokens: ["gnome"] },
+  {
+    key: "window-manager",
+    canonical: "KDE Plasma",
+    envTokens: ["kde", "plasma"],
+    aliases: ["kde", "plasma"],
+  },
+  { key: "window-manager", canonical: "Hyprland", envTokens: ["hyprland"] },
+  { key: "window-manager", canonical: "Sway", envTokens: ["sway"] },
+  { key: "window-manager", canonical: "i3", envTokens: ["i3"] },
+  { key: "window-manager", canonical: "niri", envTokens: ["niri"] },
+  { key: "window-manager", canonical: "COSMIC", envTokens: ["cosmic"] },
+  { key: "window-manager", canonical: "Cinnamon", envTokens: ["cinnamon", "x-cinnamon"] },
+  { key: "window-manager", canonical: "MATE", envTokens: ["mate"] },
+  { key: "window-manager", canonical: "XFCE", envTokens: ["xfce"] },
+  { key: "window-manager", canonical: "LXQt", envTokens: ["lxqt"] },
+  { key: "window-manager", canonical: "Budgie", envTokens: ["budgie"] },
+  { key: "window-manager", canonical: "Pantheon", envTokens: ["pantheon"] },
+  { key: "window-manager", canonical: "Unity", envTokens: ["unity"] },
+
+  // ── prompt (presence-detected in detect.ts — entries exist for diff aliases only; fold
+  //    already equates case/space variants, so single-word tools need no entry) ──
+  { key: "prompt", canonical: "Powerlevel10k", aliases: ["p10k"] }, // NOT p9k — distinct predecessor
+  { key: "prompt", canonical: "Oh My Posh", aliases: ["oh-my-posh", "omp"] }, // hyphens survive fold
+
+  // ── theme (never detected — aliases for spellings fold can't equate: hyphens + the é) ──
+  { key: "theme", canonical: "Rosé Pine", aliases: ["rose pine", "rose-pine"] },
+  { key: "theme", canonical: "Tokyo Night", aliases: ["tokyo-night"] },
+  { key: "theme", canonical: "One Dark", aliases: ["one-dark"] },
 
   // ── diff-only synonyms (no detector for these fields) ─────────────────────
-  { key: "browser", canonical: "Firefox", aliases: ["ff"] },
-  { key: "browser", canonical: "Chrome", aliases: ["google chrome"] }, // NOT Chromium — distinct browser
-  { key: "browser", canonical: "Edge", aliases: ["microsoft edge"] },
   { key: "os", canonical: "macOS", aliases: ["osx", "os x", "mac"] },
   { key: "os", canonical: "Windows", aliases: ["win"] },
+  { key: "os", canonical: "Arch Linux", aliases: ["arch"] }, // os-release NAME= vs what people type
   { key: "multiplexer", canonical: "GNU Screen", aliases: ["screen"] }, // matches detector's "GNU Screen"
 ];

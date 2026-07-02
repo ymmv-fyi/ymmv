@@ -154,6 +154,20 @@ describe("publish + read round-trip", () => {
     expect(typeof p.updated_at).toBe("string");
   });
 
+  it("round-trips the three 13-key-taxonomy additions through POST validation", async () => {
+    await publish(
+      TOKEN,
+      profile("alice", [
+        { key: "version-manager", value: "mise" }, // submitted in reverse on purpose
+        { key: "theme", value: "Gruvbox" },
+        { key: "prompt", value: "Starship" },
+      ]),
+    );
+    const p = await readProfile("alice");
+    expect(p.entries.map((e) => e.key)).toEqual(["prompt", "theme", "version-manager"]);
+    expect(p.entries.map((e) => e.value)).toEqual(["Starship", "Gruvbox", "mise"]);
+  });
+
   it("dedupes duplicate keys (last wins)", async () => {
     await publish(
       TOKEN,

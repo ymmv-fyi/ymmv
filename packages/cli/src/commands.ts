@@ -1,15 +1,23 @@
+import { readFileSync, statSync } from "node:fs";
 import {
   CURATED_KEYS,
   type CuratedKey,
   diff,
   type Entry,
+  isCuratedKey,
   KEY_LABELS,
   type Profile,
   SCHEMA_VERSION,
 } from "@ymmv/shared";
 import { deleteProfile, ensureLogin, fetchProfileJson, publishProfile } from "./api.js";
 import { detectStack } from "./detect.js";
-import { applySet, applyUnset, buildDefaults, entriesFromMap } from "./profile-ops.js";
+import {
+  applySet,
+  applyUnset,
+  buildDefaults,
+  entriesFromMap,
+  unknownEntries,
+} from "./profile-ops.js";
 import type { Prompter } from "./prompt.js";
 import { notFound, nudge, renderDiff, renderProfile, sanitizeValue, useColor } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
@@ -82,26 +90,69 @@ async function promptEntries(
 
 /** `ymmv` (default) — detect → show → confirm/edit → upsert. Detection never blocks. */
 export async function publish(io: InteractiveIO): Promise<void> {
+  // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
+  // consent gate `ymmv delete` enforces. Detection fills most of a profile now; a scripted bare
+  // `ymmv` silently adding newly detected public fields would betray "nothing publishes until
+  // you confirm". Checked before login so a refused CI run can't trigger a device flow either.
+  if (!io.interactive && !io.yes) {
+    console.error("Non-interactive publish needs -y (nothing publishes unconfirmed): ymmv -y");
+    process.exitCode = 1;
+    return;
+  }
   const cred = await ensureLogin();
   const handle = requireHandle(cred);
   if (!handle) return;
 
-  const detected = detectStack(process.env, process.platform);
+  // The injected reader is detection's one sanctioned file read (/etc/os-release — see DetectOpts).
+  // Bounded: refuse non-regular files (a FIFO would hang readFileSync) and anything over 64 KiB
+  // (a real os-release is <1 KiB) — linuxDistro() catches the throw and falls back to "Linux".
+  const detected = detectStack(process.env, process.platform, {
+    readTextFile: (p) => {
+      const st = statSync(p);
+      if (!st.isFile() || st.size > 64 * 1024) throw new Error("not a readable os-release");
+      return readFileSync(p, "utf8");
+    },
+  });
   // NOT caught: fetchProfileJson returns null only on a 404 (no profile yet) and THROWS on a real
   // read failure. Swallowing the throw would let a transient error look like "no profile", and the
   // upsert (server does delete-then-insert) would then clobber every curated key + extra. Abort.
   const existing = await fetchProfileJson(handle);
   assertHandleUnchanged(existing, handle);
   const defaults = buildDefaults(existing, detected);
+  // Keys a newer taxonomy published that this build doesn't know: carried through verbatim (the
+  // upsert is a full replace — rebuilding from our compiled-in key list alone would delete them).
+  const carried = unknownEntries(existing);
 
   let entries = entriesFromMap(defaults);
   const extras = existing?.extras ?? [];
   if (io.interactive && io.prompter) {
     entries = await promptEntries(defaults, io.prompter);
   }
+  entries = [...entries, ...carried];
 
   const profile = newProfile(handle, entries, extras);
   console.log(renderProfile(profile, { color: colorEnabled() }));
+  if (carried.length > 0) {
+    // renderProfile shows only the keys this build knows — list what's riding along instead of
+    // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
+    const s = carried.length === 1 ? "" : "s";
+    console.log(`(+${carried.length} newer field${s} kept as-is — upgrade ymmv-cli to edit them)`);
+    for (const e of carried) {
+      console.log(`    ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
+    }
+  }
+  // Migration nudge: pre-0.5 profiles carried Theme/Prompt/… as free-form extras (the documented
+  // escape hatch the curated keys replaced). Once a curated field holds the value, the old extra
+  // only duplicates the row on the page and in diffs — point at the cleanup, never auto-delete.
+  const publishedLabels = new Set(
+    entries.filter((e) => isCuratedKey(e.key)).map((e) => KEY_LABELS[e.key].toLowerCase()),
+  );
+  for (const x of extras) {
+    if (publishedLabels.has(x.label.trim().toLowerCase())) {
+      const label = sanitizeValue(x.label.trim());
+      console.log(`(extra "${label}" duplicates a curated field — ymmv unset --extra "${label}")`);
+    }
+  }
 
   if (io.interactive && io.prompter && !io.yes) {
     const go = await io.prompter.confirm(`Publish to ymmv.fyi/${handle}?`, true);

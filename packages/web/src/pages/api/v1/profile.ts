@@ -11,9 +11,10 @@ import { authenticateRequest } from "../../../lib/auth.ts";
 import { checkWriteRateLimit } from "../../../lib/rate-limit.ts";
 import { handleBindStatements, isUniqueViolation } from "../../../lib/users.ts";
 
-// Conservative input caps — curated entries are naturally ≤ 10 after dedup, but bound the
-// pre-dedup count, the free-form extras, and any value length so one write can't bloat D1 or every
-// future read of the profile.
+// Conservative input caps — curated entries are naturally ≤ CURATED_KEYS.length (13) after dedup
+// (plus any newer-taxonomy keys a skewed client carries through verbatim), but bound the pre-dedup
+// count, the free-form extras, and any value length so one write can't bloat D1 or every future
+// read of the profile.
 const MAX_ENTRIES = 50;
 const MAX_EXTRAS = 32;
 const MAX_LABEL = 64;

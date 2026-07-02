@@ -11,6 +11,7 @@ const HELP = `ymmv — terminal-native developer tool-stack profiles (ymmv.fyi)
 
 Usage:
   ymmv                      detect your stack, confirm, and publish your profile
+  ymmv -y                   publish without prompts (required when stdin isn't a TTY)
   ymmv <handle>             view a profile — logged in, see the diff vs yours
   ymmv view <handle>        explicit view (when a handle collides with a verb)
   ymmv set <key> <value>    set one curated key
@@ -21,8 +22,8 @@ Usage:
   ymmv login | logout       GitHub device-flow auth
   ymmv help | --version
 
-Curated keys: editor, os, shell, terminal, browser, window-manager, font,
-              multiplexer, dotfiles, ai-tool
+Curated keys: editor, os, shell, prompt, terminal, browser, window-manager,
+              font, theme, multiplexer, version-manager, dotfiles, ai-tool
 
 Respects NO_COLOR. Point YMMV_API at a dev Worker to target one.
 Publish your own: npx ymmv-cli`;

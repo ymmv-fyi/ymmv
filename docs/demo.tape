@@ -27,6 +27,8 @@ Enter             # OS
 Sleep 1s
 Enter             # Shell
 Sleep 1s
+Enter             # Prompt
+Sleep 1s
 Enter             # Terminal
 Sleep 1s
 Type "Zen"        # Browser
@@ -37,7 +39,12 @@ Sleep 1s
 Type "Lilex"      # Font
 Enter
 Sleep 1s
+Type "Catppuccin" # Theme
+Enter
+Sleep 1s
 Enter             # Multiplexer
+Sleep 1s
+Enter             # Version manager
 Sleep 1s
 Type "github.com/bardisty/dotfiles"   # Dotfiles
 Enter

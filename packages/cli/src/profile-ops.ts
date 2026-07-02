@@ -1,4 +1,11 @@
-import { CURATED_KEYS, type CuratedKey, type Entry, type Extra, type Profile } from "@ymmv/shared";
+import {
+  CURATED_KEYS,
+  type CuratedKey,
+  type Entry,
+  type Extra,
+  isCuratedKey,
+  type Profile,
+} from "@ymmv/shared";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
 
 // Pure profile transforms shared by the write commands (publish/set/unset). No IO — given the
@@ -30,6 +37,17 @@ export function entriesFromMap(map: Map<CuratedKey, string>): Entry[] {
     const value = map.get(key);
     return value ? [{ key, value }] : [];
   });
+}
+
+/**
+ * Entries whose keys this CLI build doesn't recognize — set by a NEWER client/server taxonomy.
+ * Bare publish is a full replace built from the compiled-in CURATED_KEYS, so without carrying
+ * these through verbatim, an older CLI would silently delete a newer field on republish. They can
+ * only ever originate from the server (reads return server-curated keys), so re-POSTing them is
+ * always accepted. Never prompted, never defaulted — just preserved.
+ */
+export function unknownEntries(existing: Profile | null): Entry[] {
+  return (existing?.entries ?? []).filter((e) => !isCuratedKey(e.key));
 }
 
 /**
