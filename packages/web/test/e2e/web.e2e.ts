@@ -168,7 +168,8 @@ test.describe("the 3-column diff", () => {
     const res = await page.goto("/antfu/vs/bardisty");
     // both sides live → the long-lived edge policy (the nudge test pins the short side)
     expect(res?.headers()["cache-control"]).toContain("s-maxage=30");
-    await expect(page.locator(".foot")).toContainText("6 differ · 4 shared");
+    // 13-key taxonomy: theme + version-manager differ, prompt shared (seed.sql arithmetic)
+    await expect(page.locator(".foot")).toContainText("8 differ · 5 shared");
 
     const changedYours = page.locator("tr.changed .yours").first();
     const changedTheirs = page.locator("tr.changed .theirs").first();

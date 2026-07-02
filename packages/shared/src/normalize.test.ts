@@ -52,6 +52,25 @@ describe("canonical()", () => {
     expect(canonical("editor", "vi")).not.toBe(canonical("editor", "Vim"));
     expect(canonical("terminal", "apple_terminal")).toBe("apple_terminal"); // not "terminal"
   });
+  it("theme aliases bridge what fold can't: hyphens and the é in Rosé Pine", () => {
+    // Explicit code point (composed é, U+00E9) so the source can't be silently re-normalized,
+    // and the premise is asserted, not assumed: fold alone does NOT equate é with e — the alias
+    // is load-bearing.
+    const ROSE = `Ros${String.fromCharCode(0x00e9)} Pine`;
+    expect(fold("Rose Pine")).not.toBe(fold(ROSE));
+    expect(canonical("theme", "rose-pine")).toBe(fold(ROSE));
+    expect(canonical("theme", "Rose Pine")).toBe(fold(ROSE));
+    expect(canonical("theme", "tokyo-night")).toBe(fold("Tokyo Night"));
+    expect(canonical("theme", "tokyonight")).toBe(fold("Tokyo Night")); // fold alone equates this one
+    expect(canonical("prompt", "p10k")).toBe(fold("Powerlevel10k"));
+    expect(canonical("prompt", "oh-my-posh")).toBe(fold("Oh My Posh"));
+  });
+  it("hyphenated browser binary names are diff aliases (typed = detected)", () => {
+    expect(canonical("browser", "google-chrome")).toBe(fold("Chrome"));
+    expect(canonical("browser", "microsoft-edge")).toBe(fold("Edge"));
+    expect(canonical("browser", "brave-browser")).toBe(fold("Brave"));
+    expect(canonical("browser", "zen-browser")).toBe(fold("Zen"));
+  });
   it("collapses empty/whitespace-only input per key kind", () => {
     expect(canonical("editor", "")).toBe("");
     expect(canonical("editor", "   ")).toBe("");

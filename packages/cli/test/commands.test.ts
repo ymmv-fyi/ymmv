@@ -1,4 +1,4 @@
-import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import { CURATED_KEYS, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ensureLogin/publishProfile resolve identity through the token store; mock it so no real login or
@@ -90,9 +90,47 @@ describe("publish", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: null });
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    await publish({ interactive: false, yes: false });
+    await publish({ interactive: false, yes: true }); // -y so the non-TTY consent gate passes
     expect(fetchFn).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+  });
+
+  it("non-interactive without -y: refuses before login (no device flow, no network, exit 1)", async () => {
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: false });
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(loadToken).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("hints when a legacy extra duplicates a curated field, and only then", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof(
+            "me",
+            [],
+            [
+              { label: "Theme", value: "Nord" },
+              { label: "Keyboard", value: "HHKB" },
+            ],
+          ),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter: Prompter = {
+      ask: vi.fn(async (label: string) => (label === "Theme" ? "Catppuccin" : "")),
+      confirm: vi.fn().mockResolvedValue(true),
+      close: vi.fn(),
+    };
+    await publish({ interactive: true, yes: false, prompter });
+    const out = logs.join("\n");
+    expect(out).toMatch(/extra "Theme" duplicates a curated field — ymmv unset --extra "Theme"/);
+    expect(out).not.toMatch(/extra "Keyboard" duplicates/);
   });
 
   it("interactive: the edited values are what get published", async () => {
@@ -112,6 +150,48 @@ describe("publish", () => {
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]);
     expect(body.handle).toBe("me");
+  });
+
+  // A newer taxonomy's keys (unknown to this build) must survive a bare publish — the upsert is a
+  // full replace, so dropping them here would delete them server-side.
+  it("interactive: carries unknown keys through verbatim, without prompting for them", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [foreign, { key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (_label: string, def?: string) => def ?? "");
+    const prompter: Prompter = { ask, confirm: vi.fn().mockResolvedValue(true), close: vi.fn() };
+    await publish({ interactive: true, yes: false, prompter });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toContainEqual(foreign);
+    expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one prompt per curated key, no more
+    expect(ask.mock.calls.some((c) => /launcher/i.test(String(c[0])))).toBe(false);
+    expect(logs.join("\n")).toMatch(/\+1 newer field kept as-is/);
+    expect(logs.join("\n")).toMatch(/launcher = Raycast/); // carried rows are listed, not hidden
+  });
+
+  it("non-interactive: carries unknown keys too, and stays silent when there are none", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [foreign])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })) // POST (carry run)
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST (clean run)
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toContainEqual(foreign);
+    expect(logs.join("\n")).toMatch(/newer field/);
+
+    logs.length = 0;
+    await publish({ interactive: false, yes: true });
+    expect(logs.join("\n")).not.toMatch(/newer field/);
   });
 
   it("interactive: declining the confirm publishes nothing", async () => {

@@ -2,8 +2,9 @@
 
 **Share your dev tool-stack from the terminal.**
 
-Editor, OS, shell, terminal, browser, font (and more) — published to a clean
-page at `ymmv.fyi/<handle>` in about 10 seconds.
+Editor, OS, shell, terminal, theme, AI tool (and more), published to a
+clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:
+[ymmv.fyi/bardisty](https://ymmv.fyi/bardisty).
 
 ![Running npx ymmv-cli to detect, confirm, and publish a dev stack to a live ymmv.fyi page](docs/demo.gif)
 
@@ -14,40 +15,74 @@ npx ymmv-cli           # detect your stack, confirm, go live at ymmv.fyi/<you>
 npx ymmv-cli bardisty  # view someone's stack in the terminal
 ```
 
-First run includes a one-time GitHub sign-in (the device flow you know from `gh`
-/ `npm login`, ~10s). Every update after that is instant.
+First run includes a one-time GitHub sign-in. Every update after that is
+instant. Works on macOS, Linux, Windows, and WSL.
 
 ## What you get
 
 - **A clean, shareable page** at `ymmv.fyi/<handle>`.
-- **Auto-detected** — it reads your shell, OS, terminal, and editor, then pre-fills; you just confirm.
-- **Instant updates** — re-run any time; your page refreshes in seconds.
-- **Diffs** — view someone's profile while you're logged in, and you'll see how your stack compares:
+- **Auto-detected.** It reads your OS, shell, prompt, terminal, editor, window manager,
+  version manager, and AI tool from the environment, then pre-fills; you just confirm.
+- **Instant updates.** Re-run any time; your page refreshes in seconds.
+- **Nothing publishes until you confirm.** Detection only pre-fills, and `ymmv delete`
+  removes everything.
+- **Diffs.** View someone's profile while you're logged in, and you'll see how your stack compares:
 
   ```
-              theirs         yours
-  editor      Neovim         VS Code
-  shell       fish           zsh
-  font        Berkeley Mono  JetBrains Mono
-  wm          AeroSpace      —
+            bardisty  you
+  ~ Editor  Zed       VS Code
+  = Shell   bash      bash
+  ~ Theme   Gruvbox   Catppuccin
+  ~ Font    Lilex     JetBrains Mono
+
+    3 differ · 1 shared — your mileage may vary
   ```
 
   Also on the web: type a handle into the `diff vs` box on any profile page, or
-  go straight to `https://ymmv.fyi/<them>/vs/<you>`.
+  go straight to `ymmv.fyi/<them>/vs/<you>`.
 
-- **Open data** — every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
+- **Open data.** Every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
 ## Commands
 
 Run with `npx ymmv-cli` (no install), or `npm i -g ymmv-cli` once for the short `ymmv`:
 
-- `ymmv` — detect, confirm, and publish (re-run any time to update)
-- `ymmv <handle>` — view a profile, or diff it against yours when you're logged in
-- `ymmv set editor Neovim` — change one value
-- `ymmv set --extra "Keyboard=HHKB"` — add a free-form line of your own
-- `ymmv unset editor` — remove one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
-- `ymmv delete` — remove your profile
-- `ymmv login` / `ymmv logout` — sign in / out
+- `ymmv` detects, confirms, and publishes (re-run any time to update)
+- `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
+- `ymmv set editor Neovim` changes one value
+- `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own
+- `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
+- `ymmv delete` removes your profile
+- `ymmv login` / `ymmv logout` sign in / out
+
+## Developing
+
+Node 22+ and pnpm. Three packages: `shared` (types, tool catalog, diff engine),
+`cli` (the `ymmv-cli` npm package), and `web` (Astro on Cloudflare Workers + D1).
+
+```sh
+pnpm install
+pnpm build     # all packages; @ymmv/shared first, cli and web depend on it
+pnpm dev       # hot-reloading site at localhost:4321
+```
+
+The full gate, same as CI:
+
+```sh
+pnpm lint && pnpm build && pnpm typecheck && pnpm test
+pnpm --filter @ymmv/web exec playwright install chromium   # once
+pnpm --filter @ymmv/web test:e2e                           # for web changes
+```
+
+Two more workflows worth knowing:
+
+- **Try your local CLI:** `node packages/cli/dist/cli.js` after a build. Point
+  `YMMV_API` at a local Worker to keep writes off production.
+- **Browse the site with real data:** `pnpm --filter @ymmv/web e2e:serve` runs a
+  seeded local Worker (real D1 + bindings) at `localhost:8788`.
+
+Versions are tag-driven: every `package.json` stays at `0.0.0` and CI stamps the
+real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
 
 ## License
 

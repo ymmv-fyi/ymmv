@@ -1,6 +1,12 @@
-import { type CuratedKey, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import { type CuratedKey, type Entry, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { applySet, applyUnset, buildDefaults, entriesFromMap } from "../src/profile-ops.js";
+import {
+  applySet,
+  applyUnset,
+  buildDefaults,
+  entriesFromMap,
+  unknownEntries,
+} from "../src/profile-ops.js";
 
 function prof(entries: Profile["entries"] = [], extras: Profile["extras"] = []): Profile {
   return { schema_version: SCHEMA_VERSION, handle: "me", entries, extras, updated_at: "x" };
@@ -30,6 +36,46 @@ describe("entriesFromMap", () => {
       ]),
     );
     expect(out.map((e) => e.key)).toEqual(["editor", "shell"]);
+  });
+});
+
+// A newer CLI/server taxonomy can publish keys this build doesn't know. Bare publish is a full
+// replace, so those keys must ride through verbatim or an old CLI silently deletes them.
+describe("unknownEntries", () => {
+  const foreign = [
+    { key: "launcher", value: "Raycast" } as unknown as Entry,
+    { key: "hairstyle", value: "mohawk" } as unknown as Entry,
+  ];
+  it("null profile → []", () => {
+    expect(unknownEntries(null)).toEqual([]);
+  });
+  it("all-curated profile → []", () => {
+    expect(unknownEntries(prof([{ key: "editor", value: "Vim" }]))).toEqual([]);
+  });
+  it("returns only the foreign entries, verbatim, order preserved", () => {
+    const p = prof([foreign[0] as Entry, { key: "editor", value: "Vim" }, foreign[1] as Entry]);
+    expect(unknownEntries(p)).toEqual([foreign[0], foreign[1]]);
+  });
+  it("buildDefaults never leaks a foreign key into the prompt defaults", () => {
+    const d = buildDefaults(prof([foreign[0] as Entry, { key: "editor", value: "Vim" }]), map([]));
+    expect([...d.keys()]).toEqual(["editor"]);
+  });
+  // set/unset republish the full profile too — pin that their preservation of newer-taxonomy
+  // keys is a contract, not an accident of copying existing.entries verbatim.
+  it("applySet keeps foreign entries through the full-replace republish", () => {
+    const { entries } = applySet(prof([foreign[0] as Entry]), {
+      kind: "curated",
+      key: "editor",
+      value: "Vim",
+    });
+    expect(entries).toContainEqual(foreign[0]);
+  });
+  it("applyUnset keeps foreign entries when removing another key", () => {
+    const { entries } = applyUnset(prof([foreign[0] as Entry, { key: "editor", value: "Vim" }]), {
+      kind: "curated",
+      key: "editor",
+    });
+    expect(entries).toEqual([foreign[0]]);
   });
 });
 
