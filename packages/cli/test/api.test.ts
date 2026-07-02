@@ -48,7 +48,7 @@ describe("fetchProfileJson", () => {
     (netErr as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND ymmv.fyi");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(netErr));
     await expect(fetchProfileJson("carol")).rejects.toThrow(
-      /can't reach .*Check your connection.*ENOTFOUND/,
+      /Can't reach .*Check your connection.*ENOTFOUND/,
     );
   });
 });

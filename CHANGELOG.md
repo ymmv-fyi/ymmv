@@ -22,7 +22,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   `Published` echo is gone).
 
 ### Fixed
-- **Offline errors are readable:** `can't reach ymmv.fyi. Check your connection (…)` instead
+- **Offline errors are readable:** `Can't reach ymmv.fyi. Check your connection (…)` instead
   of a raw `fetch failed`, and a network blip no longer kills a login you already approved.
 - **A 401-retry publish can no longer land on a different GitHub account** when the re-login
   binds one; it refuses instead of silently overwriting.

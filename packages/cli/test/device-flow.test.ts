@@ -163,7 +163,7 @@ describe("pollForToken state machine", () => {
     const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
     const { requestDeviceCode } = await import("../src/device-flow.js");
     await expect(requestDeviceCode({ fetch: fn as unknown as typeof fetch })).rejects.toThrow(
-      /can't reach github\.com\. Check your connection/,
+      /Can't reach github\.com\. Check your connection/,
     );
   });
 

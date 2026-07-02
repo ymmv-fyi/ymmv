@@ -123,7 +123,7 @@ export function resolveArg(argv: string[]): Command {
 
   // Anything else: an unknown flag is an error; otherwise it's a bare handle to view.
   if (first.startsWith("-")) {
-    return { kind: "error", message: `unknown option "${first}". Run \`ymmv help\`.` };
+    return { kind: "error", message: `Unknown option "${first}". Run \`ymmv help\`.` };
   }
   if (!isValidHandle(first)) {
     return {

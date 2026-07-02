@@ -71,7 +71,7 @@ function requireHandle(cred: StoredToken): string | null {
 function assertHandleUnchanged(existing: Profile | null, handle: string): void {
   if (existing && existing.handle.toLowerCase() !== handle.toLowerCase()) {
     throw new Error(
-      `this login is bound to "${handle}" but your profile now lives at ` +
+      `This login is bound to "${handle}" but your profile now lives at ` +
         `"${sanitizeValue(existing.handle)}". Run \`ymmv login\` to refresh, then retry.`,
     );
   }

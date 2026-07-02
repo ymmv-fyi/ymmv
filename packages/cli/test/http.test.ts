@@ -9,14 +9,14 @@ describe("safeFetch", () => {
     await expect(
       safeFetch("https://ymmv.fyi/api", undefined, "https://ymmv.fyi", fetchFn),
     ).rejects.toThrow(
-      /can't reach https:\/\/ymmv\.fyi\. Check your connection \(getaddrinfo ENOTFOUND ymmv\.fyi\)/,
+      /Can't reach https:\/\/ymmv\.fyi\. Check your connection \(getaddrinfo ENOTFOUND ymmv\.fyi\)/,
     );
   });
 
   it("wraps NON-TypeError throws too (TLS/proxy/bad-URL class), keeping the cause chain", async () => {
     const fetchFn = vi.fn().mockRejectedValue(new Error("self-signed certificate"));
     const p = safeFetch("https://x", undefined, "https://x", fetchFn);
-    await expect(p).rejects.toThrow(/can't reach https:\/\/x\..*self-signed certificate/);
+    await expect(p).rejects.toThrow(/Can't reach https:\/\/x\..*self-signed certificate/);
     await p.catch((e: Error) => {
       expect((e.cause as Error).message).toBe("self-signed certificate");
     });
