@@ -75,8 +75,9 @@ const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length >
   </tbody>
 </table>
 
-<div class="foot">
-  {result.differ} differ · {result.shared} shared ·{" "}
+<div class="foot diff-foot">
+  <span><b>{result.differ}</b> differ</span>
+  <span><b>{result.shared}</b> shared</span>
   <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
 </div>
 

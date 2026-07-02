@@ -285,6 +285,18 @@ a {
 .foot a:hover {
   color: var(--accent);
 }
+/* diff foot: counts read left (numbers in ink via .foot b, words faint), the one action sits
+   right. Whitespace does the separating — no glyph separators. 24px ≈ three mono spaces at 13px,
+   the same gap the CLI footer uses. */
+.diff-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.diff-foot a {
+  margin-left: auto;
+}
 /* secondary "make your own" CTA under the profile foot — dimmer than the contextual command
    above it (faint label, muted command) so it reads as the quieter, second-rank action */
 .cta {
