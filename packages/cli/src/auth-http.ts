@@ -36,7 +36,7 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     if (res.status === 429) {
       // The mint endpoint is rate-limited (per identity + per IP). Surface the server's hint.
       const retry = res.headers.get("retry-after");
-      const msg = body.message ?? "too many login attempts. Slow down and try again shortly";
+      const msg = body.message ?? "Too many login attempts. Slow down and try again shortly";
       throw new Error(retry ? `${msg} (retry in ${retry}s)` : msg);
     }
     throw new Error(`login failed: ${res.status} ${body.error ?? ""}`.trim());

@@ -25,7 +25,7 @@ export async function ensureLogin(): Promise<StoredToken> {
   if (existing) return existing;
   await login();
   const fresh = await loadToken();
-  if (!fresh) throw new Error("login did not persist a token. Run `ymmv login`.");
+  if (!fresh) throw new Error("Login did not persist a token. Run `ymmv login`.");
   return fresh;
 }
 
@@ -59,7 +59,7 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   // retry re-checks the bound handle after its re-login.
   if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
     throw new Error(
-      "the stored login changed while this command was running. Re-run it under the current account.",
+      "The stored login changed while this command was running. Re-run it under the current account.",
     );
   }
   let res = await send(cred);
@@ -76,12 +76,12 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
     // opposite — the handle IS the dispute, so a changed handle is the expected heal.)
     if (was401 && (cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
       throw new Error(
-        `the re-login bound a different account ("${sanitizeValue(cred.handle ?? "")}", not ` +
+        `The re-login bound a different account ("${sanitizeValue(cred.handle ?? "")}", not ` +
           `"${profile.handle}"). Nothing was published. Re-run under the account you meant.`,
       );
     }
     res = await send(cred);
-    if (res.status === 401) throw new Error("authentication failed. Run `ymmv login`.");
+    if (res.status === 401) throw new Error("Authentication failed. Run `ymmv login`.");
     if (res.status === 409) {
       throw new Error(
         "that handle is taken by another account (your GitHub handle may have been reused).",
@@ -138,7 +138,7 @@ export async function deleteProfile(): Promise<void> {
     BASE,
   );
   if (res.status === 401) {
-    throw new Error("session expired. Run `ymmv login`, then `ymmv delete` again.");
+    throw new Error("Session expired. Run `ymmv login`, then `ymmv delete` again.");
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
