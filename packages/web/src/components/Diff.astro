@@ -76,14 +76,14 @@ const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length >
 </table>
 
 <div class="foot">
-  {result.differ} differ · {result.shared} shared — <b>your mileage may vary</b> ·{" "}
+  {result.differ} differ · {result.shared} shared: <b>your mileage may vary</b> ·{" "}
   <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
 </div>
 
 {
   hasExtras && (
     <>
-      <h2 class="group-h">Extras — not compared</h2>
+      <h2 class="group-h">Extras (not compared)</h2>
       {/* Same URL treatment as the profile page (safeHref link + full-URL title). <bdi> isolates
           each untrusted run so a bidi control in a label can't visually reorder the "label = value"
           line (the CLI strips bidi outright; a shared web sanitizer is a follow-up). */}

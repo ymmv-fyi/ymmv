@@ -24,7 +24,7 @@ Viewing someone while you're logged in diffs their stack against yours:
 ~ Theme   Gruvbox   Catppuccin
 ~ Font    Lilex     JetBrains Mono
 
-  3 differ · 1 shared — your mileage may vary
+  3 differ · 1 shared: your mileage may vary
 ```
 
 Install once for the short `ymmv` command:
