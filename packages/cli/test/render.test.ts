@@ -135,7 +135,7 @@ describe("renderDiff", () => {
     const out = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
     expect(out).toContain(`${AMBER}fish`); // theirs column ambers too — a difference is symmetric
     expect(out).toContain(`${AMBER}zsh`);
-    expect(out).toMatch(/1 differ · 1 shared — your mileage may vary/);
+    expect(out).toMatch(/1 differ · 1 shared: your mileage may vary/);
   });
 
   it("NO_COLOR mode: zero ANSI; `~`/`=` symbols carry which rows differ", () => {

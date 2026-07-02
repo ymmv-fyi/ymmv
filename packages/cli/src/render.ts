@@ -267,7 +267,7 @@ export function renderDiff(
   lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, c));
   lines.push(
     "",
-    `  ${c.faint}${result.differ} differ · ${result.shared} shared — your mileage may vary${c.reset}`,
+    `  ${c.faint}${result.differ} differ · ${result.shared} shared: your mileage may vary${c.reset}`,
     "",
   );
   return lines.join("\n");
