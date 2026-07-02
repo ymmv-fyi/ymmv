@@ -60,7 +60,7 @@ describe("view — the 3 branches", () => {
         .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "shell", value: "zsh" }]))), // mine
     );
     await view("antfu");
-    expect(logs.join("\n")).toMatch(/your mileage may vary/);
+    expect(logs.join("\n")).toMatch(/differs from/); // the diff title line
   });
 
   it("logged in WITHOUT a profile → plain view + amber nudge", async () => {
@@ -86,7 +86,7 @@ describe("view — the 3 branches", () => {
     const out = logs.join("\n");
     expect(out).toMatch(/antfu/);
     expect(out).not.toMatch(/publish yours to diff/);
-    expect(out).not.toMatch(/your mileage may vary/);
+    expect(out).not.toMatch(/differs from/); // no diff title on a plain view
   });
 });
 
