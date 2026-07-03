@@ -15,6 +15,14 @@ import {
 //   • Output sanitization: every profile value is UNTRUSTED — strip ANSI/control sequences
 //     before printing so a crafted value can't move the cursor, recolor the screen, or inject lines.
 //
+// Output convention: every user-facing output unit — card, diff, prompt, confirmation, note block,
+// error — begins with exactly ONE blank line and is indented two spaces; units never carry trailing
+// blank lines (console.log terminates the line). The render* builders return whole units; every
+// other print wraps in message(). The bin entry (cli.ts) prints the single closing blank line
+// before the shell prompt — to stdout on success, to stderr on a non-zero exit so failed runs
+// leave stdout byte-clean for pipes. Exceptions: `ymmv help` and `--version` stay flush-left
+// (reference surfaces, read by pipes as much as by people; help is byte-pinned by its snapshot).
+//
 // All control bytes are built from char codes (never typed literally) so the source stays pure ASCII.
 
 type Env = Record<string, string | undefined>;
@@ -32,6 +40,20 @@ export const NO_CODES: Codes = { amber: "", faint: "", bold: "", reset: "" };
 
 export function palette(color: boolean): Codes {
   return color ? CODES : NO_CODES;
+}
+
+/**
+ * A user-facing message as a standard output unit: a leading blank line, every non-empty line
+ * indented two spaces (empty interior lines stay empty — no whitespace-only lines). Callers pass
+ * text with no trailing newline — console.log/console.error terminate the line, so units never
+ * stack trailing blanks. Splits on \r?\n: authored strings are \n-only and wire text loses \r in
+ * sanitizeValue, but the bin catch prints arbitrary Error.message, which may carry CRLF.
+ */
+export function message(text: string): string {
+  return `\n${text
+    .split(/\r?\n/)
+    .map((l) => (l ? `  ${l}` : l))
+    .join("\n")}`;
 }
 
 // ANSI/VT escape sequences (CSI, OSC, …) — the well-known `ansi-regex` pattern, built via char
@@ -196,7 +218,6 @@ export function renderProfile(
   if (!preview) {
     lines.push("", `  ${c.faint}updated ${relTime(profile.updated_at, opts.now)}${c.reset}`);
   }
-  lines.push("");
   return lines.join("\n");
 }
 
@@ -269,14 +290,14 @@ export function renderDiff(
   }
 
   lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, c));
-  lines.push("", `  ${c.faint}${result.differ} differ   ${result.shared} shared${c.reset}`, "");
+  lines.push("", `  ${c.faint}${result.differ} differ   ${result.shared} shared${c.reset}`);
   return lines.join("\n");
 }
 
 /** Logged-in-but-no-profile nudge (the one amber call-to-action, link-like). */
 export function nudge(color: boolean): string {
   const c = palette(color);
-  return `\n  ${c.amber}publish yours to diff →${c.reset} run ${c.bold}ymmv${c.reset}\n`;
+  return `\n  ${c.amber}publish yours to diff →${c.reset} run ${c.bold}ymmv${c.reset}`;
 }
 
 /** Friendly "unknown handle" message (the arg is already handle-validated; sanitize defensively).
@@ -284,6 +305,6 @@ export function nudge(color: boolean): string {
 export function notFound(handle: string, color: boolean, base: string): string {
   return (
     `\n  no ymmv profile for "${sanitizeValue(handle)}" yet.\n` +
-    `  publish one at ${link(base, color)} with: npx ymmv-cli\n`
+    `  publish one at ${link(base, color)} with: npx ymmv-cli`
   );
 }

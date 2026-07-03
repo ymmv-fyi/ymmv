@@ -4,8 +4,15 @@
 // silently broke `npm i -g` on Linux/macOS/WSL: npm symlinks the bin, so argv[1] is the symlink path
 // while import.meta.url is the realpath, they never match, and main() never ran.
 import { main } from "./index.js";
+import { message } from "./render.js";
 
-main(process.argv.slice(2)).catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
-});
+main(process.argv.slice(2))
+  .catch((err: unknown) => {
+    console.error(message(err instanceof Error ? err.message : String(err)));
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    // The one closing blank line before the shell prompt (render.ts convention). On a non-zero
+    // exit it goes to stderr, so failure-only runs leave stdout byte-clean for pipes/captures.
+    (process.exitCode ? process.stderr : process.stdout).write("\n");
+  });

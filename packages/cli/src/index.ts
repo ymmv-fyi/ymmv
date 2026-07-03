@@ -4,7 +4,7 @@ import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import { makePrompter } from "./prompt.js";
-import { type Codes, colorEnabled, palette } from "./render.js";
+import { type Codes, colorEnabled, message, palette } from "./render.js";
 import { resolveArg } from "./resolve.js";
 import { deleteToken, loadToken, peekBase } from "./token-store.js";
 
@@ -39,9 +39,11 @@ async function logout(): Promise<void> {
   if (!stored) {
     const otherBase = await peekBase();
     console.log(
-      otherBase && otherBase !== BASE
-        ? `Not logged in to ${BASE} (a token for ${otherBase} exists; set YMMV_API to that to log out of it).`
-        : "Not logged in.",
+      message(
+        otherBase && otherBase !== BASE
+          ? `Not logged in to ${BASE} (a token for ${otherBase} exists; set YMMV_API to that to log out of it).`
+          : "Not logged in.",
+      ),
     );
     return;
   }
@@ -50,13 +52,15 @@ async function logout(): Promise<void> {
     revoked = await revokeYmmvToken(stored.token);
   } catch {
     console.error(
-      "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected.",
+      message(
+        "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected.",
+      ),
     );
     process.exitCode = 1;
     return;
   }
   await deleteToken();
-  console.log(revoked ? "Logged out." : "Logged out (no active session on this server).");
+  console.log(message(revoked ? "Logged out." : "Logged out (no active session on this server)."));
 }
 
 function printVersion(): void {
@@ -103,7 +107,7 @@ export async function main(argv: string[]): Promise<void> {
       await login();
       // Standalone login only — an ensureLogin() mid-publish must not say "run ymmv" while it runs.
       const c = palette(colorEnabled());
-      console.log(`  ${c.faint}next: run ymmv to publish your stack${c.reset}`);
+      console.log(message(`${c.faint}next: run ymmv to publish your stack${c.reset}`));
       break;
     }
     case "logout":
@@ -116,7 +120,7 @@ export async function main(argv: string[]): Promise<void> {
       printVersion();
       break;
     case "error":
-      console.error(cmd.message);
+      console.error(message(cmd.message));
       process.exitCode = 1;
       break;
   }

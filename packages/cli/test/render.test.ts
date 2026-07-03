@@ -4,6 +4,7 @@ import {
   displayUrl,
   isHttpUrl,
   link,
+  message,
   notFound,
   nudge,
   relTime,
@@ -312,5 +313,40 @@ describe("nudge / notFound", () => {
     expect(out).toContain("publish one at https://ymmv.fyi with: npx ymmv-cli");
     expect(out).not.toContain(ESC);
     expect(notFound("ghost", true, "https://ymmv.fyi")).toContain(`${AMBER}ymmv.fyi`);
+  });
+});
+
+describe("output units (spacing convention)", () => {
+  it("message() opens with one blank line and indents the text two spaces", () => {
+    expect(message("Published x")).toBe("\n  Published x");
+  });
+  it("message() indents every non-empty line of a multi-line text", () => {
+    expect(message("a\nb")).toBe("\n  a\n  b");
+  });
+  it("message() leaves empty interior lines empty (no whitespace-only lines)", () => {
+    expect(message("a\n\nb")).toBe("\n  a\n\n  b");
+  });
+  it("message() normalizes CRLF (a thrown Error.message may carry it)", () => {
+    expect(message("a\r\nb")).toBe("\n  a\n  b");
+  });
+  it("every render builder returns a unit: one leading blank line, no trailing newline", () => {
+    const p: Profile = {
+      schema_version: 1,
+      handle: "carol",
+      entries: [{ key: "editor", value: "Zed" }],
+      extras: [],
+      updated_at: "2026-07-02T09:00:00.000Z",
+    };
+    const units = [
+      renderProfile(p, { color: false, site: "ymmv.fyi" }),
+      renderProfile(p, { color: false, site: "ymmv.fyi", mode: "preview" }),
+      renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" }),
+      nudge(false),
+      notFound("ghost", false, "https://ymmv.fyi"),
+    ];
+    for (const unit of units) {
+      expect(unit).toMatch(/^\n(?!\n)/); // exactly one leading blank line
+      expect(unit).not.toMatch(/\n$/); // console.log terminates the line — no self-carried blank
+    }
   });
 });

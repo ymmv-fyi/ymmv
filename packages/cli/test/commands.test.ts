@@ -34,14 +34,18 @@ function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
 const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
 
 let logs: string[];
+let errs: string[];
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(detectStack).mockReturnValue(new Map());
   logs = [];
+  errs = [];
   vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
     logs.push(a.join(" "));
   });
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+    errs.push(a.join(" "));
+  });
   process.exitCode = undefined;
 });
 afterEach(() => {
@@ -81,6 +85,8 @@ describe("view — the 3 branches", () => {
     );
     await view("antfu");
     expect(logs.join("\n")).toMatch(/publish yours to diff/);
+    // Junction pin: exactly ONE blank line between the card's updated line and the nudge.
+    expect(logs.join("\n")).toMatch(/updated 2026-01-01\n\n {2}publish yours to diff/);
   });
 
   it("logged out → plain view, no nudge/diff", async () => {
@@ -105,6 +111,10 @@ describe("publish", () => {
     await publish({ interactive: false, yes: true }); // -y so the non-TTY consent gate passes
     expect(fetchFn).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+    expect(errs).toContain(
+      "\n  Your GitHub username is a reserved word, so no handle is bound. " +
+        "Rename on GitHub, then run `ymmv login` again.",
+    );
   });
 
   it("non-interactive without -y: refuses before login (no device flow, no network, exit 1)", async () => {
@@ -114,6 +124,9 @@ describe("publish", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(loadToken).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+    expect(errs).toContain(
+      "\n  Non-interactive publish needs -y (nothing publishes unconfirmed): ymmv -y",
+    );
   });
 
   it("hints when a legacy extra duplicates a curated field — recomputed per edit pass", async () => {
@@ -165,6 +178,28 @@ describe("publish", () => {
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]);
     expect(body.handle).toBe("me");
+  });
+
+  it("prints carried + dup-extra notes as ONE unit with 4-space carried rows", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [foreign, { key: "editor", value: "Vim" }], [{ label: "Editor", value: "X" }]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({ choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    // Both notes share one output unit; carried rows sit two spaces deeper than the note line.
+    expect(logs).toContain(
+      "\n  (+1 newer field kept as-is; upgrade ymmv-cli to edit them)" +
+        "\n    launcher = Raycast" +
+        '\n  (extra "Editor" duplicates a curated field; ymmv unset --extra "Editor")',
+    );
   });
 
   // A newer taxonomy's keys (unknown to this build) must survive a bare publish — the upsert is a
@@ -220,7 +255,8 @@ describe("publish", () => {
     );
     const prompter = stubPrompter({ choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toMatch(/Published me → https:\/\/ymmv\.fyi\/me/);
+    // Exact pin: the confirmation is a standard output unit (leading blank + 2-space indent).
+    expect(logs).toContain("\n  Published me → https://ymmv.fyi/me");
   });
 
   it("republish: card-first — existing values POST as-is on y, preview shows gap rows", async () => {
@@ -266,6 +302,8 @@ describe("publish", () => {
     expect(choice).not.toHaveBeenCalled();
     expect(fetchFn.mock.calls.some((c) => (c[1] as RequestInit)?.method === "POST")).toBe(true);
     expect(logs.join("\n")).toMatch(/ymmv\.fyi\/me/); // the preview card still shows what shipped
+    // Junction pin: exactly ONE blank line between the card's last row and the confirmation.
+    expect(logs.join("\n")).toMatch(/AI Tool +—\n\n {2}Published me/);
   });
 
   it("e-loop: edits land in the POST body and a second card renders", async () => {
@@ -315,7 +353,8 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ ask: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
+    // ^C variant: a newline closes the interrupted prompt line, then the standard unit.
+    expect(logs).toContain("\n\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -328,7 +367,7 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ choice: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
+    expect(logs).toContain("\n\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -364,7 +403,8 @@ describe("publish", () => {
     await publish({ interactive: true, yes: false, prompter });
     // GET happened, but no POST
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
-    expect(logs.join("\n")).toMatch(/Aborted/);
+    // Decline (typed "n"): the standard unit, no extra prompt-closing newline.
+    expect(logs).toContain("\n  Aborted. Nothing published.");
   });
 
   it("aborts (no POST) when loading the existing profile transiently fails", async () => {
@@ -401,7 +441,7 @@ describe("set", () => {
       ]),
     );
     // ONE line: the confirmation ends with a pointer at the live page — no separate Published echo.
-    expect(logs.join("\n")).toMatch(/Set Shell = zsh\. → https:\/\/ymmv\.fyi\/me/);
+    expect(logs).toContain("\n  Set Shell = zsh. → https://ymmv.fyi/me");
     expect(logs.join("\n")).not.toMatch(/Published/);
   });
 
@@ -466,7 +506,7 @@ describe("unset", () => {
     await runUnset({ kind: "curated", key: "shell" });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
-    expect(logs.join("\n")).toMatch(/Removed Shell \(was "zsh"\)\. → https:\/\/ymmv\.fyi\/me/);
+    expect(logs).toContain('\n  Removed Shell (was "zsh"). → https://ymmv.fyi/me');
     expect(logs.join("\n")).not.toMatch(/Published/);
   });
 
@@ -480,7 +520,7 @@ describe("unset", () => {
     await runUnset({ kind: "extra", label: "keyboard" });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.extras).toEqual([]);
-    expect(logs.join("\n")).toMatch(/Removed extra "Keyboard" \(was "HHKB"\)\./);
+    expect(logs).toContain('\n  Removed extra "Keyboard" (was "HHKB"). → https://ymmv.fyi/me');
   });
 
   it("curated no-op: not set → message, exit 0, and NO network write", async () => {
@@ -491,7 +531,7 @@ describe("unset", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "multiplexer" });
     expect(noPost(fetchFn)).toBe(true);
-    expect(logs.join("\n")).toMatch(/Multiplexer is not set\./);
+    expect(logs).toContain("\n  Multiplexer is not set.");
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -501,7 +541,7 @@ describe("unset", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "extra", label: "Keyboard" });
     expect(noPost(fetchFn)).toBe(true);
-    expect(logs.join("\n")).toMatch(/No extra "Keyboard"\./);
+    expect(logs).toContain('\n  No extra "Keyboard".');
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -511,7 +551,7 @@ describe("unset", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "editor" });
     expect(noPost(fetchFn)).toBe(true);
-    expect(logs.join("\n")).toMatch(/No profile yet/);
+    expect(logs).toContain("\n  No profile yet. Run `ymmv` to publish one.");
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -594,6 +634,10 @@ describe("delete", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+    expect(errs).toContain(
+      "\n  Refusing to delete ymmv.fyi/me without confirmation. " +
+        "Re-run with -y to confirm: ymmv delete -y",
+    );
   });
 
   it("non-interactive WITH -y: deletes server-side, then drops the now-dead local token", async () => {
@@ -601,7 +645,7 @@ describe("delete", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
     await runDelete({ interactive: false, yes: true });
     expect(deleteToken).toHaveBeenCalledTimes(1);
-    expect(logs.join("\n")).toMatch(/Deleted ymmv\.fyi\/me/);
+    expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
   });
 
   it("interactive: a 'no' at the confirm cancels without touching anything", async () => {
@@ -612,7 +656,7 @@ describe("delete", () => {
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
-    expect(logs.join("\n")).toMatch(/Cancelled/);
+    expect(logs).toContain("\n  Cancelled. Nothing deleted.");
   });
 
   it("Ctrl+C at the delete confirm: Cancelled line, exit 130, nothing touched", async () => {
@@ -623,7 +667,7 @@ describe("delete", () => {
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
-    expect(logs.join("\n")).toMatch(/Cancelled\. Nothing deleted\./);
+    expect(logs).toContain("\n\n  Cancelled. Nothing deleted.");
     expect(process.exitCode).toBe(130);
   });
 });

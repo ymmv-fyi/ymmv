@@ -107,17 +107,26 @@ export function makePrompter(): Prompter {
       const answer = (await question(promptLine(label, def, color))).trim();
       return answer === "" ? (clean ?? "") : answer;
     },
+    // Prompts are output units (render.ts convention): confirm/choice open with the unit's one
+    // blank line here — never in the caller's question string. Field ask()s stay tight: the
+    // 13-key walk is a single unit opened by its hint line.
     async confirm(q, defYes) {
-      const answer = (await question(`  ${q} ${c.faint}[${defYes ? "Y/n" : "y/N"}]${c.reset} `))
+      const answer = (await question(`\n  ${q} ${c.faint}[${defYes ? "Y/n" : "y/N"}]${c.reset} `))
         .trim()
         .toLowerCase();
       if (answer === "") return defYes;
       return answer === "y" || answer === "yes";
     },
     async choice(q, keys, def, hint) {
+      let prefix = "\n";
       for (;;) {
-        const hit = matchChoice(await question(`  ${q} ${c.faint}[${hint}]${c.reset} `), keys, def);
+        const hit = matchChoice(
+          await question(`${prefix}  ${q} ${c.faint}[${hint}]${c.reset} `),
+          keys,
+          def,
+        );
         if (hit !== null) return hit;
+        prefix = ""; // a re-ask continues the same question — stays tight under the failed answer
       }
     },
     close() {

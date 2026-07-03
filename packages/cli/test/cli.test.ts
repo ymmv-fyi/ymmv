@@ -23,10 +23,18 @@ const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 }
 const status = (code: number, body: unknown = {}) =>
   new Response(JSON.stringify(body), { status: code });
 
+let logs: string[];
+let errs: string[];
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, "log").mockImplementation(() => {});
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  logs = [];
+  errs = [];
+  vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+    logs.push(a.join(" "));
+  });
+  vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+    errs.push(a.join(" "));
+  });
   process.exitCode = undefined;
 });
 afterEach(() => {
@@ -57,19 +65,53 @@ describe("ymmv logout", () => {
     await main(["logout"]);
     expect(revokeYmmvToken).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
+    expect(logs).toContain("\n  Not logged in.");
+  });
+
+  it("names the other base when the stored token is scoped elsewhere", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(peekBase).mockResolvedValue("https://staging.example");
+    await main(["logout"]);
+    expect(logs).toContain(
+      "\n  Not logged in to https://ymmv.fyi (a token for https://staging.example exists; " +
+        "set YMMV_API to that to log out of it).",
+    );
+    expect(deleteToken).not.toHaveBeenCalled();
+  });
+
+  it("notes when the server had no active session for the revoked token", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(revokeYmmvToken).mockResolvedValue(false);
+    await main(["logout"]);
+    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(logs).toContain("\n  Logged out (no active session on this server).");
+  });
+
+  it("prints the revoke-unreachable warning as an indented unit on stderr", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("offline"));
+    await main(["logout"]);
+    expect(errs).toContain(
+      "\n  Couldn't reach the server to revoke. Your token is still active. " +
+        "Run `ymmv logout` again when connected.",
+    );
+  });
+});
+
+describe("arg errors through main()", () => {
+  it("prints an unknown option as an indented unit on stderr with exit 1", async () => {
+    await main(["--bogus"]);
+    expect(errs).toContain('\n  Unknown option "--bogus". Run `ymmv help`.');
+    expect(process.exitCode).toBe(1);
   });
 });
 
 describe("ymmv login", () => {
   it("prints the next-step hint after a STANDALONE login only", async () => {
     vi.mocked(login).mockResolvedValue(undefined);
-    const logs: string[] = [];
-    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
-      logs.push(a.join(" "));
-    });
     await main(["login"]);
     expect(login).toHaveBeenCalledTimes(1);
-    expect(logs.join("\n")).toMatch(/next: run ymmv to publish your stack/);
+    expect(logs).toContain("\n  next: run ymmv to publish your stack");
   });
 });
 
