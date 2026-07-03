@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.6.0] - 2026-07-02
 
 ### Added
 - **Republishing is one keypress.** `ymmv` shows your merged profile card first; Enter
@@ -208,6 +208,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.6.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.5.0
 [0.4.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.3.0
