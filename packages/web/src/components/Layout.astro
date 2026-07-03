@@ -2,7 +2,7 @@
 // The page shell: head + design-system CSS + self-hosted fonts + the dark-primary theme system.
 // Every page renders inside this. User-controlled text is passed through Astro's auto-escaping
 // {expression} interpolation — NEVER set:html on a profile field.
-import "../styles/fonts.css";
+import { Font } from "astro:assets";
 import "../styles/ymmv.css";
 
 interface Props {
@@ -52,22 +52,12 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    {/* Preload the fonts used above the fold so the typeset readout paints fast. */}
-    <link
-      rel="preload"
-      href="/fonts/cabinet-grotesk-800.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
-    <link
-      rel="preload"
-      href="/fonts/general-sans-500.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin
-    />
-    <link rel="preload" href="/fonts/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
+    {/* Fonts via Astro's Fonts API: each <Font> injects the inlined @font-face + size-matched fallback
+        + a preload for the above-the-fold file. Mono preload is scoped to the latin subset; latin-ext
+        stays on demand via unicode-range. */}
+    <Font cssVariable="--font-display" preload />
+    <Font cssVariable="--font-sans" preload={[{ weight: 500 }]} />
+    <Font cssVariable="--font-mono" preload={[{ subset: "latin" }]} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />

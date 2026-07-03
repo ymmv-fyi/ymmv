@@ -6,9 +6,8 @@
  */
 
 :root {
-  --font-display: "Cabinet Grotesk", system-ui, sans-serif;
-  --font-sans: "General Sans", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  /* Font vars (--font-display, --font-sans, --font-mono) come from Astro's Fonts API; see
+     astro.config.mjs and the <Font> tags in Layout.astro. It emits them with metric-matched fallbacks. */
 
   /* spacing scale (4px base) */
   --sp-sm: 8px;
