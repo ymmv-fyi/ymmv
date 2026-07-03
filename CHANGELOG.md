@@ -2,6 +2,20 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **Every CLI message shares the card's spacing.** Confirmations (`Published`, `Set`, `Removed`,
+  `Deleted`), aborts, login/logout lines, notes, and errors print indented two spaces with one
+  blank line of separation, and every run ends with a single blank line. `ymmv help` and
+  `ymmv --version` keep their flush-left layout.
+- **Failed runs keep stdout clean.** Errors and their closing blank line go to stderr, so
+  piping or capturing a failed command's stdout yields nothing instead of a stray blank line.
+
+### Fixed
+- Rate-limit messages no longer echo a malformed `retry-after` header: the retry hint prints
+  only for the standard seconds form.
+
 ## [0.6.0] - 2026-07-02
 
 ### Added
