@@ -34,6 +34,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # Cache the fonts Astro downloads at build (Fontshare + Google) so a cold runner reuses them
+      # instead of re-fetching every run; a provider outage then can't fail a cached build.
+      - name: Cache Astro font downloads
+        uses: actions/cache@v4
+        with:
+          path: packages/web/node_modules/.astro/fonts
+          key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
+          restore-keys: astro-fonts-${{ runner.os }}-
       # build before typecheck: cross-package type resolution needs each
       # workspace dep's built dist/ (shared → cli/web).
       - run: pnpm -r build
@@ -55,5 +63,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # shared must be built (web imports its dist) before the e2e webServer runs `astro build`.
       - run: pnpm --filter @ymmv/shared build
+      - name: Cache Astro font downloads
+        uses: actions/cache@v4
+        with:
+          path: packages/web/node_modules/.astro/fonts
+          key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
+          restore-keys: astro-fonts-${{ runner.os }}-
       - run: pnpm --filter @ymmv/web exec playwright install --with-deps chromium
       - run: pnpm --filter @ymmv/web test:e2e

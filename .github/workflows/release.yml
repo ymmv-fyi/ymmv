@@ -87,6 +87,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # Cache the fonts Astro downloads at build (Fontshare + Google) so the release build reuses them
+      # instead of re-fetching; a provider outage then can't fail a cached build on the deploy path.
+      - name: Cache Astro font downloads
+        uses: actions/cache@v4
+        with:
+          path: packages/web/node_modules/.astro/fonts
+          key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
+          restore-keys: astro-fonts-${{ runner.os }}-
       - run: pnpm -r build
       - run: pnpm typecheck
       - run: pnpm test
@@ -152,6 +160,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ymmv/shared build
+      - name: Cache Astro font downloads
+        uses: actions/cache@v4
+        with:
+          path: packages/web/node_modules/.astro/fonts
+          key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
+          restore-keys: astro-fonts-${{ runner.os }}-
       # Astro 7 bakes env at build time (CLOUDFLARE_ENV) — one build per environment. Scope
       # CLOUDFLARE_ENV to THIS step only: it selects the env for the baked config (name + bindings +
       # routes). If it also reached `wrangler deploy` below, wrangler would re-apply the env to the
