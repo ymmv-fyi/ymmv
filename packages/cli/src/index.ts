@@ -31,7 +31,6 @@ ${c.faint}Usage:${c.reset}
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool
 
-${c.faint}Respects NO_COLOR. Point YMMV_API at a dev Worker to target one.${c.reset}
 Publish your own: ${c.bold}npx ymmv-cli${c.reset}`;
 
 // `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke can't reach the

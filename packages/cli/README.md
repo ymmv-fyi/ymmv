@@ -50,6 +50,9 @@ via npm Trusted Publishing, with provenance.
 
 Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
+Color output respects `NO_COLOR`; set `YMMV_API` to point the CLI at a different Worker
+(development).
+
 ## License
 
 MIT. Source + issues: <https://github.com/ymmv-fyi/ymmv>.

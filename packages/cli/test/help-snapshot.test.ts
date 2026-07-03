@@ -23,7 +23,6 @@ Usage:
 Curated keys: editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool
 
-Respects NO_COLOR. Point YMMV_API at a dev Worker to target one.
 Publish your own: npx ymmv-cli`;
 
 describe("help", () => {
