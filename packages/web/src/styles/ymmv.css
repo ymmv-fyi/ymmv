@@ -271,6 +271,15 @@ a {
   font-size: 13px;
   color: var(--faint);
 }
+/* On a live profile the foot is the "what next" zone (view · make yours · diff vs). Give it a real
+   footer boundary — a hairline like the landing footer — so it reads as a footer instead of floating
+   under the table. Scoped via :has(.install) so the diff-foot (counts) and the landing example ($
+   line) keep their borderless look. */
+.foot:has(.install) {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+}
 /* the foot command is a CLI invocation, not a link or a diff-difference — keep amber scarce
    (reserved for links + "you differ"); the command reads as emphasis in plain ink */
 .foot b {
@@ -343,9 +352,17 @@ a {
   padding: 0 2px;
   cursor: pointer;
   position: relative;
+  transition:
+    color 0.18s,
+    transform 0.12s var(--ease-out);
 }
 .diff-cta .go:hover {
   color: var(--accent);
+}
+/* press feedback — the submit arrow is a pressable control, so confirm the click landed (matches
+   the .theme-toggle press-scale). :active fires on touch too, so no hover gate. */
+.diff-cta .go:active {
+  transform: scale(0.97);
 }
 /* invisible hit-area extension, same trick as .theme-toggle — ~20px glyph → ≥44px touch target */
 .diff-cta .go::after {
@@ -411,6 +428,12 @@ a {
   font-size: 14px;
   width: 30%;
   padding-right: var(--sp-sm);
+  /* Hanging indent: when a two-word label ("Version Manager") wraps on a narrow screen, its second
+     line aligns under the first word instead of falling back under the amber dot. text-indent
+     cancels the padding on line 1, so the dot + first line don't move (no change on desktop or
+     non-wrapping rows). 15px = dot width (6px) + its margin-right (9px). */
+  padding-left: 15px;
+  text-indent: -15px;
 }
 .diff .theirs,
 .diff .yours {
@@ -643,6 +666,29 @@ a {
 .sample .handle {
   font-size: clamp(34px, 6vw, 42px);
 }
+/* The preview cards frame the profile/diff in extra padding, so on phones their inner content is
+   tighter than the full-bleed pages. Trim the side padding and rebalance the in-card diff columns:
+   a slightly wider label so the one long single-word label ("Multiplexer") stays on its value's
+   line, but value columns kept wide enough that two full mono values (e.g. "macOS 15.2") don't
+   abut. Scoped to .sample so the live /vs/ page keeps its 30/35/35 split. */
+@media (max-width: 430px) {
+  .sample {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .sample .diff thead td,
+  .sample .diff .k {
+    width: 34%;
+  }
+  .sample .diff thead th {
+    width: 33%;
+  }
+  /* trailing gap so a value that fills the left column (e.g. "Claude Code") keeps clear of the
+     right column — it wraps like the other two-word values instead of abutting */
+  .sample .diff .theirs {
+    padding-right: var(--sp-sm);
+  }
+}
 .site-foot {
   margin-top: 72px;
   padding-top: 20px;
@@ -660,10 +706,20 @@ a {
 .site-foot a:hover {
   color: var(--accent);
 }
-/* Footer: surface-grouped (terminal / web / meta). label | command·url | note.
+/* Footer eyebrow — same register as the section labels (.group-h/.example-label). The border-top
+   above is the divider, so it carries no trailing rule of its own. */
+.foot-h {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 18px;
+}
+/* A man-page quick reference: label | command | note.
    Mobile-first: the note STACKS under its command (separated by line + the muted→faint color
-   step) so the two never run together. At ≥560px it becomes the tabular layout — command and
-   note inline, notes aligned at a shared tab stop. */
+   step) so the two never run together. At ≥560px it becomes a true tabular cheat-sheet — every
+   command and every note lands on a shared tab stop across all groups. */
 .site-foot .fg {
   display: grid;
   grid-template-columns: 6em 1fr;
@@ -693,18 +749,28 @@ a {
   color: var(--muted);
 }
 @media (min-width: 560px) {
+  /* three shared columns: label | command | note. `display: contents` drops each .fl's command +
+     note into the parent grid so they align to one tab stop across every group; the label sits on
+     the group's first row and any extra rows indent under an empty col 1. */
   .site-foot .fg {
+    grid-template-columns: 6em 16em 1fr;
     row-gap: 4px;
   }
   .site-foot .fg + .fg {
     margin-top: 14px;
   }
-  .site-foot .fl {
-    display: block;
+  .site-foot .g {
+    grid-row: 1;
   }
-  .site-foot .fl code {
-    display: inline-block;
-    min-width: 16.5em;
+  .site-foot .fl {
+    display: contents;
+  }
+  .site-foot .fl code,
+  .site-foot .fl a {
+    grid-column: 2;
+  }
+  .site-foot .fl .n {
+    grid-column: 3;
   }
 }
 
@@ -735,11 +801,13 @@ a {
     animation: none;
   }
   .theme-toggle,
-  .install {
+  .install,
+  .diff-cta .go {
     transition: none;
   }
   .theme-toggle:active,
-  .install[data-copy-ready]:active {
+  .install[data-copy-ready]:active,
+  .diff-cta .go:active {
     transform: none;
   }
   /* copy glyph still crossfades on success, but without the scale movement */

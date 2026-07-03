@@ -63,6 +63,60 @@ test.describe("landing", () => {
     await expect(stack).toContainText("Dotfiles");
     await expect(stack).toContainText("github.com/octocat/dotfiles");
   });
+
+  test("renders an example diff (octocat vs hubot) with counts, handles, and a missing row", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const diff = page.locator("table.diff");
+    await expect(diff).toBeVisible();
+    // both handles head the two value columns
+    await expect(diff.locator("thead")).toContainText("octocat");
+    await expect(diff.locator("thead")).toContainText("hubot");
+    // 7 differ / 6 shared — the hubot persona math (also catches any accidental alias-fold)
+    const foot = page.locator(".diff-foot");
+    await expect(foot).toContainText("7 differ");
+    await expect(foot).toContainText("6 shared");
+    // the example diff is static → no live "swap" navigation
+    await expect(foot.locator("a")).toHaveCount(0);
+    // dotfiles: octocat has it (left/theirs), hubot doesn't → em-dash on the right (yours) cell
+    const dotfiles = diff.locator("tbody tr", { hasText: "Dotfiles" });
+    await expect(dotfiles.locator(".theirs")).toContainText("github.com/octocat/dotfiles");
+    await expect(dotfiles.locator(".yours .missing")).toHaveText("—");
+    // example mode suppresses the "Extras (not compared)" block — octocat carries a Keyboard extra,
+    // so this guards that the !example gate (not an empty-extras coincidence) is what hides it
+    await expect(page.locator("table.extras-dim")).toHaveCount(0);
+  });
+
+  test("spends amber only on the differing rows of the example diff", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/");
+    const diff = page.locator("table.diff");
+    const changedColor = await diff
+      .locator("tr.changed .yours")
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+    const sameColor = await diff
+      .locator("tr.same .yours")
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+    expect(changedColor).toBe("rgb(232, 163, 61)"); // amber on a difference
+    expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
+  });
+
+  test("keeps a single h1 (the wordmark) despite the added example diff", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("h1")).toHaveCount(1);
+    await expect(page.locator("h1")).toHaveClass(/wordmark/);
+  });
+
+  test("the footer is a labelled quick reference", async ({ page }) => {
+    await page.goto("/");
+    const foot = page.locator(".site-foot");
+    await expect(foot.locator(".foot-h")).toContainText("Reference");
+    await expect(foot).toContainText("json"); // the data-row note is filled in
+    await expect(foot).toContainText("code + issues"); // the source-row note
+  });
 });
 
 test.describe("routing", () => {

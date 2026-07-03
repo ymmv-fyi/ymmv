@@ -8,6 +8,11 @@
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
 // only on differing rows (presence, not just hue), and each row carries a visually-hidden
 // "differs:"/"same:" prefix for screen readers. Header + row-label cells are real <th>.
+//
+// `example`: the landing-page sample diff (not a live /vs/ page). Like Profile.astro's `example`,
+// it downgrades the <h1> to <p> and renders the handles/swap as plain text (no navigation, no 2nd
+// <h1>), and it suppresses the uncompared-extras block. A live diff passes no `example` and is
+// byte-for-byte unchanged.
 import type { DiffResult } from "@ymmv/shared";
 import { displayUrl, urlTitle } from "../lib/display-value.ts";
 import { safeHref } from "../lib/safe-href.ts";
@@ -16,15 +21,17 @@ interface Props {
   result: DiffResult;
   theirs: string; // the profile being viewed (the [handle])
   mine: string; // the viewer ("you")
+  example?: boolean; // landing sample: plain-text handles, no swap, no extras
 }
-const { result, theirs, mine } = Astro.props;
+const { result, theirs, mine, example = false } = Astro.props;
 const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length > 0;
+const HeadingTag = example ? "p" : "h1";
 ---
 
-<h1 class="url">
-  how <b><a href={`/${encodeURIComponent(theirs)}`}>{theirs}</a></b> differs from{" "}
-  <b><a href={`/${encodeURIComponent(mine)}`}>{mine}</a></b>
-</h1>
+<HeadingTag class="url">
+  how <b>{example ? theirs : <a href={`/${encodeURIComponent(theirs)}`}>{theirs}</a>}</b> differs from{" "}
+  <b>{example ? mine : <a href={`/${encodeURIComponent(mine)}`}>{mine}</a>}</b>
+</HeadingTag>
 
 <table class="diff">
   <thead>
@@ -78,11 +85,15 @@ const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length >
 <div class="foot diff-foot">
   <span><b>{result.differ}</b> differ</span>
   <span><b>{result.shared}</b> shared</span>
-  <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
+  {
+    !example && (
+      <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
+    )
+  }
 </div>
 
 {
-  hasExtras && (
+  !example && hasExtras && (
     <>
       <h2 class="group-h">Extras (not compared)</h2>
       {/* Same URL treatment as the profile page (safeHref link + full-URL title). <bdi> isolates
