@@ -81,4 +81,11 @@ describe("wireText", () => {
     expect(out.endsWith("…")).toBe(true);
     expect(wireText("short")).toBe("short");
   });
+
+  it("coerces non-string wire values — the error path must never itself throw", () => {
+    // A malformed body like {"message": 123} reaches wireText through truthiness-only callers.
+    expect(wireText(123)).toBe("123");
+    expect(wireText(null)).toBe("null");
+    expect(wireText({ nested: true })).toBe("[object Object]");
+  });
 });

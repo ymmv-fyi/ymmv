@@ -30,10 +30,12 @@ export function causeText(err: unknown): string {
   return sanitizeValue(text);
 }
 
-/** Wire-derived text bound for an error message: sanitized (origin/middlebox bytes print raw
- *  via console.error) and capped — a proxy block page can be a whole HTML document. */
-export function wireText(text: string): string {
-  const clean = sanitizeValue(text);
+/** Wire-derived text bound for an error message: coerced (a malformed body can put a number or
+ *  object where a string belongs — the error path must never itself throw), sanitized
+ *  (origin/middlebox bytes print raw via console.error), and capped — a proxy block page can be
+ *  a whole HTML document. */
+export function wireText(text: unknown): string {
+  const clean = sanitizeValue(String(text));
   return clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
 }
 
