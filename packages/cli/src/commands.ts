@@ -124,14 +124,14 @@ async function promptEntries(
  *     ├─ non-TTY, no -y ──────────────► refuse (needs -y), exit 1
  *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ► POST            (no prompts)
  *     └─ interactive
- *          ├─ no existing profile ────► guided 13 prompts (hint line once)
- *          └─ existing profile ───────► (skip prompts)
- *               └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
- *                    ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
- *                    ├─ y ──► POST ► Published
- *                    ├─ n ──► "Aborted. Nothing published."  exit 0
- *                    ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
- *                    └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
+ *          ├─ no existing profile ────► guided 13 prompts (hint line once) ─┐
+ *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
+ *          └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
+ *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
+ *               ├─ y ──► POST ► Published
+ *               ├─ n ──► "Aborted. Nothing published."  exit 0
+ *               ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
+ *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
  */
 export async function publish(io: InteractiveIO): Promise<void> {
   // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
@@ -219,7 +219,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
       const entries = assemble();
       showCard(entries);
       const ans = await io.prompter.choice(
-        `Publish to ${site}/${handle}?`,
+        `Publish to ${site}/${sanitizeValue(handle)}?`,
         ["y", "n", "e"],
         "y",
         "Y/n/e=edit",
@@ -327,7 +327,9 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
 /** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */
 export async function runDelete(io: InteractiveIO): Promise<void> {
   const cred = await ensureLogin();
-  const target = cred.handle ? `ymmv.fyi/${cred.handle}` : "your profile";
+  // BASE-derived like every other printed page reference — consent for a permanent delete must
+  // name the host actually being hit (YMMV_API can point this at a dev/staging Worker).
+  const target = cred.handle ? `${displayUrl(BASE)}/${sanitizeValue(cred.handle)}` : "your profile";
 
   // Destructive: require explicit consent. Interactive → confirm prompt; non-interactive (pipe / CI
   // / no TTY) → REFUSE unless -y was passed. Never hard-delete a profile with neither a prompt nor an

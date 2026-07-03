@@ -47,6 +47,10 @@ describe("useColor", () => {
   it("FORCE_COLOR=0 force-disables color even on a TTY (supports-color convention)", () => {
     expect(useColor({ FORCE_COLOR: "0" }, true)).toBe(false);
   });
+  it("TERM=dumb disables color on a TTY, but an explicit FORCE_COLOR still wins", () => {
+    expect(useColor({ TERM: "dumb" }, true)).toBe(false);
+    expect(useColor({ TERM: "dumb", FORCE_COLOR: "1" }, false)).toBe(true);
+  });
   it("otherwise follows the TTY state", () => {
     expect(useColor({}, true)).toBe(true);
     expect(useColor({}, false)).toBe(false);

@@ -1,6 +1,6 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
-import { causeText, safeFetch } from "./http.js";
+import { causeText, safeFetch, wireText } from "./http.js";
 import { colorEnabled, link, palette, sanitizeValue } from "./render.js";
 import { saveToken } from "./token-store.js";
 
@@ -43,9 +43,21 @@ export async function requestDeviceCode(deps: PollDeps = {}): Promise<DeviceCode
     doFetch,
   );
   if (!res.ok) {
-    throw new Error(`device code request failed: ${res.status} ${await res.text()}`);
+    throw new Error(`device code request failed: ${res.status} ${wireText(await res.text())}`);
   }
-  return (await res.json()) as DeviceCode;
+  // Shape-check before use: a captive-portal/proxy 200 with the wrong body must read as a clear
+  // error, not crash link() on undefined or turn a missing expires_in into a NaN deadline.
+  const data = (await res.json().catch(() => null)) as Partial<DeviceCode> | null;
+  if (
+    !data ||
+    typeof data.device_code !== "string" ||
+    typeof data.user_code !== "string" ||
+    typeof data.verification_uri !== "string" ||
+    typeof data.expires_in !== "number"
+  ) {
+    throw new Error("GitHub sent an unexpected device-code response. Run `ymmv login` again.");
+  }
+  return data as DeviceCode;
 }
 
 /**
@@ -119,7 +131,7 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
       case "expired_token":
         throw new Error("Device code expired. Run `ymmv login` again.");
       default:
-        throw new Error(`device flow failed: ${tok.error ?? "unknown error"}`);
+        throw new Error(`device flow failed: ${wireText(tok.error ?? "unknown error")}`);
     }
   }
   throw new Error("Device code expired. Run `ymmv login` again.");
@@ -141,9 +153,13 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   const color = colorEnabled();
   const c = palette(color);
   // user_code/verification_uri come off the wire — sanitize/link like every other print surface.
+  // Linkify ONLY a github.com https URI: a middlebox-minted 200 must not turn this line into a
+  // first-party-looking clickable target (file://, lookalike host); anything else prints inert.
+  const verifyUri = /^https:\/\/github\.com\//.test(dc.verification_uri)
+    ? link(dc.verification_uri, color)
+    : sanitizeValue(dc.verification_uri);
   console.log(
-    `\n  Open ${link(dc.verification_uri, color)} and enter code: ` +
-      `${c.bold}${sanitizeValue(dc.user_code)}${c.reset}`,
+    `\n  Open ${verifyUri} and enter code: ${c.bold}${sanitizeValue(dc.user_code)}${c.reset}`,
   );
   console.log(`  ${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}\n`);
   const accessToken = await pollForToken(dc, deps);

@@ -17,7 +17,8 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **The card and diff match the web page:** `ymmv.fyi/<handle>` header, `updated 3h ago`, a
   title line over the diff, uppercase column headers. With `YMMV_API` set, every printed URL
   shows that Worker's host.
-- **`ymmv -y` skips the prompts entirely**, as help always said: card, then publish.
+- **`ymmv -y` skips the prompts entirely**, as help always said: card, then publish. Detection
+  can re-fill a field you previously cleared; run `ymmv` interactively when that matters.
 - **`set`/`unset` reply with one line** ending in a pointer at your live page (the extra
   `Published` echo is gone).
 

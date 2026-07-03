@@ -1,7 +1,7 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
-import { safeFetch } from "./http.js";
+import { safeFetch, wireText } from "./http.js";
 import { sanitizeValue } from "./render.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
@@ -12,7 +12,7 @@ async function rateLimitMessage(res: Response): Promise<string> {
   let msg = "rate limited, too many requests";
   try {
     const body = (await res.json()) as { message?: string };
-    if (typeof body?.message === "string" && body.message) msg = body.message;
+    if (typeof body?.message === "string" && body.message) msg = wireText(body.message);
   } catch {
     // non-JSON body (e.g. the edge WAF block page) — keep the generic message
   }
@@ -54,9 +54,8 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   let cred = await ensureLogin();
   // The caller merged `profile` for the handle ITS login resolved moments ago. If the token store
   // now resolves to a different account (a concurrent `ymmv login`), sending would publish that
-  // merge onto the wrong profile — refuse instead of silently substituting the new handle. The
-  // 409 retry below is exempt (re-login is the sanctioned rebind for a stale handle); the 401
-  // retry re-checks the bound handle after its re-login.
+  // merge onto the wrong profile — refuse instead of silently substituting the new handle. Both
+  // auth-retry paths below re-check the bound handle after their re-login.
   if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
     throw new Error(
       "The stored login changed while this command was running. Re-run it under the current account.",
@@ -70,14 +69,19 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
     if (was401) await deleteToken();
     await login();
     cred = await ensureLogin();
-    // A 401 re-auth proves the SAME account again — the server never disputed the handle, so a
-    // re-mint bound to a DIFFERENT one means a different GitHub account authorized in the browser
-    // tab. Retrying would publish this account's merge onto that one: refuse. (409 is the
-    // opposite — the handle IS the dispute, so a changed handle is the expected heal.)
-    if (was401 && (cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
+    // NEVER retry a pre-reauth merge under a different identity. 401: the server never disputed
+    // the handle, so a re-mint bound to a different one means a different GitHub account
+    // authorized in the browser tab. 409: the merge was built from a read of the OLD handle —
+    // which after a rename may be a squatter's profile — so retrying under the newly bound
+    // handle would publish that stale (possibly stranger-seeded) merge onto it. In both cases:
+    // refuse; a fresh run re-reads under the current handle and rebuilds the merge correctly.
+    if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
+      const bound = sanitizeValue(cred.handle ?? "");
       throw new Error(
-        `The re-login bound a different account ("${sanitizeValue(cred.handle ?? "")}", not ` +
-          `"${profile.handle}"). Nothing was published. Re-run under the account you meant.`,
+        was401
+          ? `The re-login bound a different account ("${bound}", not ` +
+              `"${sanitizeValue(profile.handle)}"). Nothing was published. Re-run under the account you meant.`
+          : `Your login now binds "${bound}". Nothing was published. Re-run the command to publish under it.`,
       );
     }
     res = await send(cred);
@@ -90,7 +94,7 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
-    throw new Error(`publish failed: ${res.status} ${await res.text()}`);
+    throw new Error(`publish failed: ${res.status} ${wireText(await res.text())}`);
   }
   const data = (await res.json()) as { handle?: unknown };
   // The confirmation echoes wire data: shape-check + sanitize the server-returned handle before
@@ -111,7 +115,7 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
   const res = await safeFetch(`${BASE}/api/v1/u/${encodeURIComponent(handle)}`, undefined, BASE);
   if (res.status === 404) return null;
   if (!res.ok) {
-    throw new Error(`fetch failed: ${res.status} ${await res.text()}`);
+    throw new Error(`fetch failed: ${res.status} ${wireText(await res.text())}`);
   }
   // Validate at the boundary instead of a bare `as Profile` cast: a non-conforming origin (YMMV_API
   // override / MITM) returning e.g. `entries:null` must surface as a typed ProfileParseError, not a
@@ -142,6 +146,6 @@ export async function deleteProfile(): Promise<void> {
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
-    throw new Error(`delete failed: ${res.status} ${await res.text()}`);
+    throw new Error(`delete failed: ${res.status} ${wireText(await res.text())}`);
   }
 }

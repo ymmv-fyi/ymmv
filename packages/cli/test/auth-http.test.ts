@@ -55,6 +55,41 @@ describe("mintYmmvToken", () => {
       expect.objectContaining({ redirect: "manual" }),
     );
   });
+
+  it("a thrown fetch reads as can't-reach, never a raw TypeError (post-approval moment)", async () => {
+    const err = new TypeError("fetch failed");
+    (err as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND ymmv.fyi");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(err));
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(
+      /Can't reach .*Check your connection.*ENOTFOUND/,
+    );
+  });
+
+  it("a 200 with a token-less body throws instead of poisoning the token store", async () => {
+    // A middlebox 200 `{}` used to cast straight through; saveToken would then overwrite a
+    // previously valid token.json with a token-less blob, destroying an existing login.
+    stubFetch({}, 200);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
+  });
+
+  it("a 200 with a non-JSON body throws the same clear error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>portal</html>", { status: 200 })),
+    );
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
+  });
+
+  it("sanitizes the minted handle at the boundary — every downstream print inherits it clean", async () => {
+    const esc = String.fromCharCode(0x1b);
+    stubFetch({ token: "ymmv_x", handle: `car${esc}[31mol` }, 200);
+    expect(await mintYmmvToken("gho_x")).toEqual({ token: "ymmv_x", handle: "carol" });
+  });
+
+  it("preserves a null handle (reserved GitHub username)", async () => {
+    stubFetch({ token: "ymmv_x", handle: null }, 200);
+    expect(await mintYmmvToken("gho_x")).toEqual({ token: "ymmv_x", handle: null });
+  });
 });
 
 describe("revokeYmmvToken", () => {

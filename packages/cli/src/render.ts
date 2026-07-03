@@ -63,12 +63,15 @@ export function sanitizeValue(value: string): string {
 
 /**
  * Should we emit ANSI color? NO_COLOR wins outright (its mere presence disables color, per
- * no-color.org); then an explicit FORCE_COLOR; otherwise color only on a real TTY.
+ * no-color.org); then an explicit FORCE_COLOR; then TERM=dumb disables (ecosystem convention —
+ * dumb terminals render CSI as garbage, and the restyle styles nearly every line); otherwise
+ * color only on a real TTY.
  */
 export function useColor(env: Env, isTTY: boolean): boolean {
   if (env.NO_COLOR !== undefined) return false;
   // FORCE_COLOR convention (supports-color): "0" force-DISABLES, any other value force-enables.
   if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== "0";
+  if (env.TERM === "dumb") return false;
   return isTTY;
 }
 
@@ -98,8 +101,9 @@ export function isHttpUrl(value: string): boolean {
 }
 
 // Terminals known to mishandle (not ignore) unknown OSC sequences — never emit OSC-8 there.
-// Everything else gets the link when color is on; non-supporting-but-sane terminals drop the
-// sequence and show the text. Contingency if reality disagrees: grow this into an env sniff here.
+// TERM=dumb is already colorless via useColor(); it stays listed as defense-in-depth for
+// FORCE_COLOR=1 runs. Everything else gets the link when color is on; non-supporting-but-sane
+// terminals drop the sequence and show the text. Contingency: grow this into an env sniff here.
 const NO_OSC8_TERMS = new Set(["linux", "dumb"]);
 
 /**

@@ -103,24 +103,21 @@ describe("publish auto-reauth", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
-  it("on 409 (stale handle): re-logs-in WITHOUT deleting, retries once with the REFRESHED handle+token", async () => {
+  it("on 409 (stale handle): re-logs-in WITHOUT deleting, then REFUSES the rebound retry", async () => {
     vi.mocked(loadToken)
       .mockResolvedValueOnce({ base: "B", token: "t", handle: "old" })
       .mockResolvedValue({ base: "B", token: "t2", handle: "new" });
-    const fetchFn = vi
-      .fn()
-      .mockResolvedValueOnce(status(409, { error: "handle_taken" }))
-      .mockResolvedValueOnce(ok({ handle: "new" }));
+    const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_taken" }));
     vi.stubGlobal("fetch", fetchFn);
-    // the caller merged this profile while bound to "old" — the 409 heals it via re-login
-    await publishProfile({ ...PROFILE, handle: "old" });
+    // The caller merged this profile from a read of "old" — which after a rename may be a
+    // squatter's profile. Publishing that pre-reauth merge under the newly bound "new" would be
+    // a silent cross-identity write; a fresh run re-reads under "new" and merges correctly.
+    await expect(publishProfile({ ...PROFILE, handle: "old" })).rejects.toThrow(
+      /now binds "new".*Re-run the command/,
+    );
     expect(deleteToken).not.toHaveBeenCalled();
     expect(login).toHaveBeenCalledTimes(1);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    // the retry must use the post-login credential, not the stale one
-    const retryInit = fetchFn.mock.calls[1]?.[1] as RequestInit;
-    expect(JSON.parse(retryInit.body as string).handle).toBe("new");
-    expect(retryInit.headers).toMatchObject({ authorization: "Bearer t2" });
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the stale-merge retry POST never went out
   });
 
   it("refuses the FIRST send when the stored login no longer matches the merged profile", async () => {
