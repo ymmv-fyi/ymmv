@@ -21,9 +21,7 @@ Usage:
   ymmv help | --version
 
 Curated keys: editor, os, shell, prompt, terminal, browser, window-manager,
-              font, theme, multiplexer, version-manager, dotfiles, ai-tool
-
-Publish your own: npx ymmv-cli`;
+              font, theme, multiplexer, version-manager, dotfiles, ai-tool`;
 
 describe("help", () => {
   it("plain rendering is byte-identical to the historic unstyled text", () => {
