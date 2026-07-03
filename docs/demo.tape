@@ -18,7 +18,7 @@ Set BorderRadius 12
 # --- publish: detect, confirm, go live ----------------------------------------
 Type "ymmv"
 Enter
-Sleep 2s          # detector runs, then the confirm screen appears
+Sleep 2s          # detector runs, then the field prompts appear (first publish: guided walk)
 
 # Enter keeps the detected value; typing overrides it. Fields in CURATED_KEYS order.
 Enter                       # Editor
@@ -51,8 +51,8 @@ Enter
 Sleep 1s
 Type "Claude Code, Codex"   # AI tools
 Enter
-Sleep 2s          # POST → live at ymmv.fyi/bardisty
-Enter
+Sleep 2s          # preview card + publish prompt render
+Enter             # accept → POST → live at ymmv.fyi/bardisty
 
 Sleep 4s
 

@@ -54,10 +54,11 @@ collision). Surfaced by the CLI-restyle eng review outside voice (2026-07-02).
 **Priority:** P4
 No CLI fetch sets a timeout — a dead-but-open connection (hung proxy, packet loss after SYN)
 hangs any command forever with no output. After the restyle, `safeFetch` (`packages/cli/src/
-http.ts`) is the single choke point: `init.signal ??= AbortSignal.timeout(30_000)` plus a
-poll-aware exception for the GitHub device flow (its long-poll pacing must not be cut short) is
-the whole change, and the failure then routes through the existing can't-reach message. Surfaced
-by the CLI-restyle eng review test trace (2026-07-02).
+http.ts`) is the choke point for every call except logout's `revokeYmmvToken` (raw `fetch` in
+`auth-http.ts`): `init.signal ??= AbortSignal.timeout(30_000)`, routing the revoke call through
+`safeFetch`, plus a poll-aware exception for the GitHub device flow (its long-poll pacing must
+not be cut short) is the whole change, and the failure then routes through the existing
+can't-reach message. Surfaced by the CLI-restyle eng review test trace (2026-07-02).
 
 ### Uncached read path for RMW mutations
 **Priority:** P4

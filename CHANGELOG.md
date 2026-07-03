@@ -10,7 +10,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   blank line of separation, and every run ends with a single blank line. `ymmv help` and
   `ymmv --version` keep their flush-left layout.
 - **Failed runs keep stdout clean.** Errors and their closing blank line go to stderr, so
-  piping or capturing a failed command's stdout yields nothing instead of a stray blank line.
+  piping or capturing a failed command's stdout doesn't pick up a stray blank line.
 
 ### Fixed
 - **Rate-limit messages no longer echo a malformed `retry-after` header:** the retry hint prints
