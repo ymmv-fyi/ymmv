@@ -29,9 +29,7 @@ ${c.faint}Usage:${c.reset}
   ymmv help | --version
 
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
-              font, theme, multiplexer, version-manager, dotfiles, ai-tool
-
-Publish your own: ${c.bold}npx ymmv-cli${c.reset}`;
+              font, theme, multiplexer, version-manager, dotfiles, ai-tool`;
 
 // `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke can't reach the
 // server, KEEP the local token (deleting it would orphan a still-active token; revoke-all is post-v1)
