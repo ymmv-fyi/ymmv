@@ -21,35 +21,35 @@ Enter
 Sleep 2s          # detector runs, then the confirm screen appears
 
 # Enter keeps the detected value; typing overrides it. Fields in CURATED_KEYS order.
-Enter             # Editor
+Enter                       # Editor
 Sleep 1s
-Enter             # OS
+Enter                       # OS
 Sleep 1s
-Enter             # Shell
+Enter                       # Shell
 Sleep 1s
-Enter             # Prompt
+Enter                       # Prompt
 Sleep 1s
-Enter             # Terminal
+Enter                       # Terminal
 Sleep 1s
-Type "Zen"        # Browser
+Type "Zen"                  # Browser
 Enter
 Sleep 1s
-Enter             # Window manager
+Enter                       # Window manager
 Sleep 1s
-Type "Lilex"      # Font
+Type "Lilex"                # Font
 Enter
 Sleep 1s
-Type "Catppuccin" # Theme
+Type "Gruvbox"              # Theme
 Enter
 Sleep 1s
-Enter             # Multiplexer
+Enter                       # Multiplexer
 Sleep 1s
-Enter             # Version manager
+Enter                       # Version manager
 Sleep 1s
-Type "github.com/bardisty/dotfiles"   # Dotfiles
+Type "https://git.io/etc"   # Dotfiles
 Enter
 Sleep 1s
-Type "Claude Code, Codex"             # AI tools
+Type "Claude Code, Codex"   # AI tools
 Enter
 Sleep 2s          # POST → live at ymmv.fyi/bardisty
 Enter
