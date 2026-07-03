@@ -2,7 +2,7 @@
 
 **Share your dev tool-stack from the terminal.**
 
-Editor, OS, shell, terminal, theme, AI tool (and more), published to a
+Editor, OS, shell, terminal, theme (and more), published to a
 clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:
 [ymmv.fyi/bardisty](https://ymmv.fyi/bardisty).
 
