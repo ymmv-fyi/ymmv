@@ -1,12 +1,12 @@
- # ymmv
- 
- What ymmv is: "Your Mileage May Vary" - terminal-native developer tool-stack
- profiles. Publish your dev environment (editor/os/shell/prompt/terminal/
- browser/wm/font/theme/multiplexer/version-manager/dotfiles/ai-tool) from a
- CLI (npx ymmv-cli), get a page at ymmv.fyi/<handle>, and diff your stack
- against anyone's. Stack: TypeScript CLI (npm/npx), Astro 7 web on Cloudflare
- Workers + D1.
- 
+# ymmv
+
+What ymmv is: "Your Mileage May Vary" - terminal-native developer tool-stack
+profiles. Publish your dev environment (editor/os/shell/prompt/terminal/
+browser/wm/font/theme/multiplexer/version-manager/dotfiles/ai-tool) from a
+CLI (npx ymmv-cli), get a page at ymmv.fyi/<handle>, and diff your stack
+against anyone's. Stack: TypeScript CLI (npm/npx), Astro 7 web on Cloudflare
+Workers + D1.
+
 ## Global rules (embed in every session)
 
 - **Gates, in order:**
