@@ -270,6 +270,21 @@ describe("renderProfile", () => {
     expect(out).not.toContain("Version Manager");
   });
 
+  it("renders extras rows and linkifies URL extras like curated values", () => {
+    const p: Profile = {
+      ...FULLISH,
+      extras: [
+        { label: "Keyboard", value: "HHKB" },
+        { label: "Blog", value: "https://ex.io/b" },
+      ],
+    };
+    const plain = renderProfile(p, { color: false, site: SITE, now: at(NOW) });
+    expect(plain).toMatch(/Keyboard\s+HHKB/);
+    expect(plain).toContain("https://ex.io/b"); // full URL when color is off
+    const color = renderProfile(p, { color: true, site: SITE, now: at(NOW) });
+    expect(color).toContain(`${AMBER}ex.io/b`); // URL extras get the link treatment too
+  });
+
   it("preview mode lists all 13 curated labels, marks gaps with —, and drops updated", () => {
     const out = renderProfile(FULLISH, {
       color: false,

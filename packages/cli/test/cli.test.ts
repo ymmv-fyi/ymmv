@@ -155,6 +155,20 @@ describe("publish auto-reauth", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
     await expect(publishProfile(PROFILE)).rejects.toThrow(/authentication failed/i);
   });
+
+  it("second 409 after a same-handle re-login reads as handle-taken (no infinite loop)", async () => {
+    // Same handle re-minted → the rebind guard passes → retry → 409 again → final verdict.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_taken" })));
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+    expect(login).toHaveBeenCalledTimes(1); // exactly one heal attempt
+  });
+
+  it("a generic POST failure surfaces as publish failed with status and capped body", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("boom", { status: 500 })));
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/publish failed: 500 boom/);
+  });
 });
 
 describe("deleteProfile", () => {
