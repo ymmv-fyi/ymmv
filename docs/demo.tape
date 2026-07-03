@@ -22,43 +22,48 @@ Sleep 2s          # detector runs, then the field prompts appear (first publish:
 
 # Enter keeps the detected value; typing overrides it. Fields in CURATED_KEYS order.
 Enter                       # Editor
-Sleep 1s
+Sleep 500ms
 Enter                       # OS
-Sleep 1s
+Sleep 500ms
 Enter                       # Shell
-Sleep 1s
+Sleep 500ms
 Enter                       # Prompt
-Sleep 1s
+Sleep 500ms
 Enter                       # Terminal
-Sleep 1s
+Sleep 500ms
 Type "Zen"                  # Browser
 Enter
-Sleep 1s
+Sleep 500ms
 Enter                       # Window manager
-Sleep 1s
+Sleep 500ms
 Type "Lilex"                # Font
 Enter
-Sleep 1s
+Sleep 500ms
 Type "Gruvbox"              # Theme
 Enter
-Sleep 1s
+Sleep 500ms
 Enter                       # Multiplexer
-Sleep 1s
+Sleep 500ms
 Enter                       # Version manager
-Sleep 1s
+Sleep 500ms
 Type "https://git.io/etc"   # Dotfiles
 Enter
-Sleep 1s
+Sleep 500ms
 Type "Claude Code, Codex"   # AI tools
 Enter
 Sleep 2s          # preview card + publish prompt render
 Enter             # accept → POST → live at ymmv.fyi/bardisty
 
-Sleep 4s
+Sleep 2s
 
 # --- view the profile you just published --------------------------------------
 Type "ymmv bardisty"
 Enter
+
 Sleep 4s          # prints your profile (viewing someone else adds a diff vs yours)
 
-Sleep 2s
+# --- view a diff --------------------------------------------------------------
+Type "ymmv lottiedottieda"
+Enter
+
+Sleep 6s
