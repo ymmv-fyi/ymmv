@@ -298,3 +298,36 @@ test.describe("long values + safety", () => {
     expect(await page.locator('a[href^="javascript:"]').count()).toBe(0);
   });
 });
+
+test.describe("fonts (Astro Fonts API)", () => {
+  test("self-hosts and preloads the three above-the-fold faces", async ({ page, request }) => {
+    await page.goto("/antfu");
+
+    // Exactly three preloads: display (Cabinet Grotesk 800), sans (General Sans 500), mono (Geist Mono
+    // latin). If a build-time provider fetch degrades a family it emits zero faces and its preload
+    // vanishes, so this count is the tripwire for a silent font-degradation build.
+    const preloads = page.locator('link[rel="preload"][as="font"]');
+    await expect(preloads).toHaveCount(3);
+    const hrefs = await preloads.evaluateAll((ls) => ls.map((l) => l.getAttribute("href") ?? ""));
+    expect(hrefs.every((h) => h.startsWith("/_astro/fonts/") && h.endsWith(".woff2"))).toBe(true);
+
+    // The hashed woff2 actually serves, same-origin (no runtime third-party request).
+    const font = await request.get(hrefs[0]);
+    expect(font.status()).toBe(200);
+    expect(font.headers()["content-type"]).toContain("font/woff2");
+
+    // The Fonts API owns --font-display/-sans/-mono; ymmv.css consumes them. Verify the real families
+    // are wired (a renamed cssVariable or a dropped <Font> would break this).
+    const vars = await page.evaluate(() => {
+      const r = getComputedStyle(document.documentElement);
+      return [
+        r.getPropertyValue("--font-display"),
+        r.getPropertyValue("--font-sans"),
+        r.getPropertyValue("--font-mono"),
+      ];
+    });
+    expect(vars[0]).toContain("Cabinet Grotesk");
+    expect(vars[1]).toContain("General Sans");
+    expect(vars[2]).toContain("Geist Mono");
+  });
+});
