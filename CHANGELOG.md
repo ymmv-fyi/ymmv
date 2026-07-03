@@ -13,7 +13,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   piping or capturing a failed command's stdout yields nothing instead of a stray blank line.
 
 ### Fixed
-- Rate-limit messages no longer echo a malformed `retry-after` header: the retry hint prints
+- **Rate-limit messages no longer echo a malformed `retry-after` header:** the retry hint prints
   only for the standard seconds form.
 
 ## [0.6.0] - 2026-07-02
