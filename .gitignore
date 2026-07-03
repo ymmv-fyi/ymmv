@@ -35,6 +35,12 @@ pnpm-debug.log*
 # gstack local tooling state
 .gstack/
 
+# Claude Code local config (skills, workflows, settings)
+.claude/
+
+# Claude codebase-audit reports (/audit-codebase + /plan-from-audit)
+.audits/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
