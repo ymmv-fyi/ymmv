@@ -23,7 +23,7 @@ Workers + D1.
   for API consumers.
 - **Flag every manual step explicitly:** Cloudflare Worker secrets/env, D1
   migrations (new file in `packages/web/migrations` + apply local for tests
-  **and** prod on deploy), the `RL_WRITE` binding, npm publish (tag-driven OIDC
+  **and** prod on deploy), the `RL_WRITE`/`RL_AUTH` bindings, npm publish (tag-driven OIDC
   `release.yml`), DNS.
 - **Versioning is tag-driven - NEVER bump a version.** There is no VERSION file,
   and all four `package.json`s are intentionally `0.0.0` (CI runs `npm pkg set
