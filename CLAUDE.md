@@ -33,6 +33,15 @@ Workers + D1.
   `package.json` `version` is a bug** - leave them at `0.0.0`. (This is the one
   place the generic gstack `/ship` "bump VERSION" step does NOT apply to this
   repo.)
+- **CHANGELOG is the CLI release log, not the web's.** `CHANGELOG.md` stages the
+  tag-driven `ymmv-cli` train: the `[Unreleased]` section accumulates CLI changes
+  until a maintainer cuts a `vX.Y.Z` tag - that is what "unreleased" means here.
+  **Pure Worker/web changes get NO entry** - the web deploys by hand (not by tag; see
+  the manual deploy runbook), so it is live the moment it ships and there is no
+  "unreleased" web state to stage. Log a Worker change ONLY when it rides along with a
+  CLI change in the **same tagged release** (e.g. a `@ymmv/shared` wire-format bump
+  that touches both surfaces). Landing/UI/copy reworks are never a CHANGELOG entry.
+  And only **notable** changes - never background/invisible ones.
 - **DB-test parity:** web unit tests run in workerd and apply migrations
   per-suite - a new column needs both a migration **and** the test seed
   (`packages/web/test/e2e/seed.sql`) updated.
