@@ -30,6 +30,7 @@ import {
   colorEnabled,
   displayUrl,
   link,
+  message,
   notFound,
   nudge,
   palette,
@@ -56,8 +57,10 @@ export interface InteractiveIO {
 function requireHandle(cred: StoredToken): string | null {
   if (cred.handle) return cred.handle;
   console.error(
-    "Your GitHub username is a reserved word, so no handle is bound. " +
-      "Rename on GitHub, then run `ymmv login` again.",
+    message(
+      "Your GitHub username is a reserved word, so no handle is bound. " +
+        "Rename on GitHub, then run `ymmv login` again.",
+    ),
   );
   process.exitCode = 1;
   return null;
@@ -89,7 +92,7 @@ function newProfile(handle: string, entries: Entry[], extras: Profile["extras"])
 
 /** The publish confirmation — composed here, not in the network layer (IO at the edges). */
 function printPublished(res: PublishResult, color: boolean): void {
-  console.log(`Published ${res.handle} → ${link(res.url, color)}`);
+  console.log(message(`Published ${res.handle} → ${link(res.url, color)}`));
 }
 
 /** Faint pointer at the live page, appended to set/unset confirmations. Never amber — it repeats
@@ -107,7 +110,7 @@ async function promptEntries(
   prompter: Prompter,
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
-  console.log(`\n  ${c.faint}Enter to keep, "-" to clear${c.reset}`);
+  console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
     const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
@@ -139,7 +142,9 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // `ymmv` silently adding newly detected public fields would betray "nothing publishes until
   // you confirm". Checked before login so a refused CI run can't trigger a device flow either.
   if (!io.interactive && !io.yes) {
-    console.error("Non-interactive publish needs -y (nothing publishes unconfirmed): ymmv -y");
+    console.error(
+      message("Non-interactive publish needs -y (nothing publishes unconfirmed): ymmv -y"),
+    );
     process.exitCode = 1;
     return;
   }
@@ -176,13 +181,14 @@ export async function publish(io: InteractiveIO): Promise<void> {
     console.log(
       renderProfile(newProfile(handle, entries, extras), { color, site, mode: "preview" }),
     );
+    const notes: string[] = [];
     if (carried.length > 0) {
       // renderProfile shows only the keys this build knows — list what's riding along instead of
       // previewing a lie. Values came off the wire, so they get the same sanitize-before-print.
       const s = carried.length === 1 ? "" : "s";
-      console.log(`(+${carried.length} newer field${s} kept as-is; upgrade ymmv-cli to edit them)`);
+      notes.push(`(+${carried.length} newer field${s} kept as-is; upgrade ymmv-cli to edit them)`);
       for (const e of carried) {
-        console.log(`    ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
+        notes.push(`  ${sanitizeValue(e.key)} = ${sanitizeValue(e.value)}`);
       }
     }
     // Migration nudge: pre-0.5 profiles carried Theme/Prompt/… as free-form extras (the documented
@@ -194,9 +200,11 @@ export async function publish(io: InteractiveIO): Promise<void> {
     for (const x of extras) {
       if (publishedLabels.has(x.label.trim().toLowerCase())) {
         const label = sanitizeValue(x.label.trim());
-        console.log(`(extra "${label}" duplicates a curated field; ymmv unset --extra "${label}")`);
+        notes.push(`(extra "${label}" duplicates a curated field; ymmv unset --extra "${label}")`);
       }
     }
+    // One notes unit, separate from the card (tests index cards by their breadcrumb line).
+    if (notes.length > 0) console.log(message(notes.join("\n")));
   };
 
   let values = defaults;
@@ -229,14 +237,15 @@ export async function publish(io: InteractiveIO): Promise<void> {
         return;
       }
       if (ans === "n") {
-        console.log("Aborted. Nothing published.");
+        console.log(message("Aborted. Nothing published."));
         return;
       }
       values = await promptEntries(values, io.prompter); // "e": edit, prefilled with current answers
     }
   } catch (e) {
     if (e instanceof PromptAborted) {
-      console.log("\nAborted. Nothing published.");
+      // The first newline closes the interrupted prompt line; then the standard unit.
+      console.log(`\n${message("Aborted. Nothing published.")}`);
       process.exitCode = 130;
       return;
     }
@@ -289,7 +298,7 @@ export async function runSet(target: SetTarget): Promise<void> {
     target.kind === "curated"
       ? `Set ${KEY_LABELS[target.key]} = ${target.value}.`
       : `Set extra ${target.label} = ${target.value}.`;
-  console.log(`${line}${pagePointer(res.handle)}`);
+  console.log(message(`${line}${pagePointer(res.handle)}`));
 }
 
 /** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST. */
@@ -303,15 +312,17 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   assertHandleUnchanged(existing, handle);
   if (!existing) {
     // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
-    console.log("No profile yet. Run `ymmv` to publish one.");
+    console.log(message("No profile yet. Run `ymmv` to publish one."));
     return;
   }
   const { entries, extras, removed } = applyUnset(existing, target);
   if (!removed) {
     console.log(
-      target.kind === "curated"
-        ? `${KEY_LABELS[target.key]} is not set.`
-        : `No extra "${target.label}".`,
+      message(
+        target.kind === "curated"
+          ? `${KEY_LABELS[target.key]} is not set.`
+          : `No extra "${target.label}".`,
+      ),
     );
     return; // idempotent no-op: exit 0, and crucially no network write
   }
@@ -321,7 +332,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
     target.kind === "curated"
       ? `Removed ${KEY_LABELS[target.key]} (was "${sanitizeValue(removed.value)}").`
       : `Removed extra "${sanitizeValue(removed.label)}" (was "${sanitizeValue(removed.value)}").`;
-  console.log(`${line}${pagePointer(res.handle)}`);
+  console.log(message(`${line}${pagePointer(res.handle)}`));
 }
 
 /** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */
@@ -337,7 +348,9 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
   if (!io.yes) {
     if (!io.interactive || !io.prompter) {
       console.error(
-        `Refusing to delete ${target} without confirmation. Re-run with -y to confirm: ymmv delete -y`,
+        message(
+          `Refusing to delete ${target} without confirmation. Re-run with -y to confirm: ymmv delete -y`,
+        ),
       );
       process.exitCode = 1;
       return;
@@ -347,18 +360,19 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       go = await io.prompter.confirm(`Delete ${target}? This is permanent`, false);
     } catch (e) {
       if (e instanceof PromptAborted) {
-        console.log("\nCancelled. Nothing deleted.");
+        // The first newline closes the interrupted prompt line; then the standard unit.
+        console.log(`\n${message("Cancelled. Nothing deleted.")}`);
         process.exitCode = 130;
         return;
       }
       throw e;
     }
     if (!go) {
-      console.log("Cancelled. Nothing deleted.");
+      console.log(message("Cancelled. Nothing deleted."));
       return;
     }
   }
   await deleteProfile();
   await deleteToken(); // the server revoked every token for this account; drop the dead local one
-  console.log(`Deleted ${target}. Run \`ymmv\` to publish again.`);
+  console.log(message(`Deleted ${target}. Run \`ymmv\` to publish again.`));
 }

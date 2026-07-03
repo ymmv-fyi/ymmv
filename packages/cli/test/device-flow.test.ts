@@ -247,6 +247,25 @@ describe("login() orchestration", () => {
     expect(out).toContain("WXYZ-1234");
     expect(out).not.toContain(esc); // tests run piped → color off → zero ANSI, injected or ours
     expect(out).toMatch(/waiting for GitHub approval… \(Ctrl\+C to cancel\)/);
+    // Spacing convention: Open + waiting are ONE unit (tight interior); success is its own unit.
+    expect(logs[0]).toMatch(/^\n {2}Open /);
+    expect(logs[0]).toMatch(/\n {2}waiting for GitHub approval/);
+    expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+    logSpy.mockRestore();
+  });
+
+  it("prints the no-handle success line as an indented unit (reserved GitHub username)", async () => {
+    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: null });
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    await withTTY(true, async () => {
+      await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+    });
+    expect(logs.at(-1)).toBe(
+      "\n  Logged in. No handle bound (your GitHub username is a reserved word).",
+    );
     logSpy.mockRestore();
   });
 

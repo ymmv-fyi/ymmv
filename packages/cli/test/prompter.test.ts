@@ -73,3 +73,40 @@ describe("makePrompter abort machinery", () => {
     await expect(p2).resolves.toBe("Windows");
   });
 });
+
+describe("prompt lines as output units (spacing convention)", () => {
+  // Tests run piped (color off), so the rendered lines carry no ANSI codes.
+  it("confirm opens with the unit's one blank line", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().confirm("Delete?", false);
+    await tick();
+    f.answer("n");
+    await p;
+    expect(f.rl.question).toHaveBeenCalledWith("\n  Delete? [y/N] ", expect.anything());
+  });
+
+  it("choice opens with a blank line; a re-ask stays tight under the failed answer", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().choice("Publish?", ["y", "n"], "y", "Y/n");
+    await tick();
+    f.answer("x"); // no match — re-asks
+    await tick();
+    f.answer("y");
+    await expect(p).resolves.toBe("y");
+    const queries = f.rl.question.mock.calls.map((c) => c[0]);
+    expect(queries[0]).toBe("\n  Publish? [Y/n] ");
+    expect(queries[1]).toBe("  Publish? [Y/n] ");
+  });
+
+  it("field ask()s stay tight — the walk is one unit opened by its hint line", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().ask("Editor");
+    await tick();
+    f.answer("Zed");
+    await expect(p).resolves.toBe("Zed");
+    expect(f.rl.question).toHaveBeenCalledWith("  Editor: ", expect.anything());
+  });
+});

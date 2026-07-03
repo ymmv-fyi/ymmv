@@ -1,7 +1,7 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
 import { causeText, safeFetch, wireText } from "./http.js";
-import { colorEnabled, link, palette, sanitizeValue } from "./render.js";
+import { colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
 import { saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
@@ -159,9 +159,11 @@ export async function login(deps: PollDeps = {}): Promise<void> {
     ? link(dc.verification_uri, color)
     : sanitizeValue(dc.verification_uri);
   console.log(
-    `\n  Open ${verifyUri} and enter code: ${c.bold}${sanitizeValue(dc.user_code)}${c.reset}`,
+    message(
+      `Open ${verifyUri} and enter code: ${c.bold}${sanitizeValue(dc.user_code)}${c.reset}\n` +
+        `${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}`,
+    ),
   );
-  console.log(`  ${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}\n`);
   const accessToken = await pollForToken(dc, deps);
   const { token, handle } = await mintYmmvToken(accessToken);
   try {
@@ -172,8 +174,10 @@ export async function login(deps: PollDeps = {}): Promise<void> {
     throw e;
   }
   console.log(
-    handle
-      ? `  Logged in as ${handle}.\n`
-      : "  Logged in. No handle bound (your GitHub username is a reserved word).\n",
+    message(
+      handle
+        ? `Logged in as ${handle}.`
+        : "Logged in. No handle bound (your GitHub username is a reserved word).",
+    ),
   );
 }
