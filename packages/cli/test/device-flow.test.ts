@@ -167,6 +167,13 @@ describe("pollForToken state machine", () => {
     );
   });
 
+  it("requestDeviceCode: a non-ok status reads as a device-code-request failure", async () => {
+    const { requestDeviceCode } = await import("../src/device-flow.js");
+    await expect(
+      requestDeviceCode({ fetch: fetchResponses(new Response("nope", { status: 503 })) }),
+    ).rejects.toThrow(/device code request failed: 503 nope/);
+  });
+
   it("requestDeviceCode: a 200 with the wrong shape throws a clear error, never crashes later", async () => {
     // Captive portal / proxy minting a 200: the old bare cast let undefined reach link() (crash)
     // and a missing expires_in become a NaN deadline (instant misleading "expired").
