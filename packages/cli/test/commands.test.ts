@@ -26,6 +26,13 @@ const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(bod
 const missing = () => new Response("not found", { status: 404 });
 const fail = (status: number) => new Response("err", { status }); // a real error, NOT a 404
 
+/** Interface-complete scripted prompter — override only what a test drives. */
+function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
+  return { ask: vi.fn(), confirm: vi.fn(), choice: vi.fn(), close: vi.fn(), ...overrides };
+}
+/** The preview-card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo. */
+const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
+
 let logs: string[];
 beforeEach(() => {
   vi.clearAllMocks();
@@ -127,16 +134,12 @@ describe("publish", () => {
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       ask: vi.fn(async (label: string) => (label === "Theme" ? "Catppuccin" : "")),
-      confirm: vi.fn(),
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
     const hint = /extra "Theme" duplicates a curated field; ymmv unset --extra "Theme"/;
-    // The card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo.
-    const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
     expect(logs.filter(isCard).length).toBe(2); // card before the edit pass, card after
     // No Theme value on the first card → no hint; the edit sets Theme → the SECOND card hints.
     const firstHint = logs.findIndex((l) => hint.test(l));
@@ -153,13 +156,11 @@ describe("publish", () => {
       .mockResolvedValueOnce(missing()) // GET existing → none
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       // accept the Editor value, skip every other curated key
       ask: vi.fn(async (label: string) => (label === "Editor" ? "Neovim" : "")),
-      confirm: vi.fn().mockResolvedValue(true),
       choice: vi.fn().mockResolvedValue("y"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]);
@@ -177,12 +178,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn();
-    const prompter: Prompter = {
-      ask,
-      confirm: vi.fn(),
-      choice: vi.fn().mockResolvedValue("y"),
-      close: vi.fn(),
-    };
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toContainEqual(foreign);
@@ -201,18 +197,30 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn(async (_label: string, def?: string) => def ?? "");
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       ask,
-      confirm: vi.fn(),
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toContainEqual(foreign);
     expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one prompt per curated key, no more
     expect(ask.mock.calls.some((c) => /launcher/i.test(String(c[0])))).toBe(false);
+  });
+
+  it("prints the Published confirmation after y (the line has a positive pin, not just negatives)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })),
+    );
+    const prompter = stubPrompter({ choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/Published me → https:\/\/ymmv\.fyi\/me/);
   });
 
   it("republish: card-first — existing values POST as-is on y, preview shows gap rows", async () => {
@@ -224,7 +232,7 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn();
     const choice = vi.fn().mockResolvedValue("y");
-    const prompter: Prompter = { ask, confirm: vi.fn(), choice, close: vi.fn() };
+    const prompter = stubPrompter({ ask, choice });
     await publish({ interactive: true, yes: false, prompter });
     expect(ask).not.toHaveBeenCalled();
     expect(choice).toHaveBeenCalledWith(
@@ -252,7 +260,7 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn();
     const choice = vi.fn();
-    const prompter: Prompter = { ask, confirm: vi.fn(), choice, close: vi.fn() };
+    const prompter = stubPrompter({ ask, choice });
     await publish({ interactive: true, yes: true, prompter });
     expect(ask).not.toHaveBeenCalled();
     expect(choice).not.toHaveBeenCalled();
@@ -270,16 +278,14 @@ describe("publish", () => {
     const ask = vi.fn(async (label: string, def?: string) =>
       label === "Editor" ? "Zed" : (def ?? ""),
     );
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       ask,
-      confirm: vi.fn(),
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
     const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
     expect(body.entries).toEqual([{ key: "editor", value: "Zed" }]);
-    expect(logs.filter((l) => l.includes("  ymmv.fyi/me\n")).length).toBe(2);
+    expect(logs.filter(isCard).length).toBe(2);
   });
 
   it('e-loop: clearing with "-" surfaces as a — gap row on the next card', async () => {
@@ -291,14 +297,12 @@ describe("publish", () => {
     const ask = vi.fn(async (label: string, def?: string) =>
       label === "Editor" ? "-" : (def ?? ""),
     );
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       ask,
-      confirm: vi.fn(),
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("n"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
-    const secondCard = logs.slice(logs.map((l) => l.includes("  ymmv.fyi/me\n")).indexOf(true) + 1);
+    const secondCard = logs.slice(logs.map(isCard).indexOf(true) + 1);
     expect(secondCard.join("\n")).toMatch(/Editor\s+—/); // cleared → explicit gap, not silence
     expect(secondCard.join("\n")).not.toContain("Vim");
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
@@ -309,12 +313,7 @@ describe("publish", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // first publish → prompts run
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
-      ask: vi.fn().mockRejectedValue(new PromptAborted()),
-      confirm: vi.fn(),
-      choice: vi.fn(),
-      close: vi.fn(),
-    };
+    const prompter = stubPrompter({ ask: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
     expect(process.exitCode).toBe(130);
@@ -327,12 +326,7 @@ describe("publish", () => {
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
-      ask: vi.fn(),
-      confirm: vi.fn(),
-      choice: vi.fn().mockRejectedValue(new PromptAborted()),
-      close: vi.fn(),
-    };
+    const prompter = stubPrompter({ choice: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
     expect(process.exitCode).toBe(130);
@@ -363,12 +357,10 @@ describe("publish", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // only the GET existing
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
+    const prompter = stubPrompter({
       ask: vi.fn(async () => ""),
-      confirm: vi.fn().mockResolvedValue(false),
       choice: vi.fn().mockResolvedValue("n"),
-      close: vi.fn(),
-    };
+    });
     await publish({ interactive: true, yes: false, prompter });
     // GET happened, but no POST
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
@@ -616,12 +608,7 @@ describe("delete", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
-      ask: vi.fn(),
-      confirm: vi.fn().mockResolvedValue(false),
-      choice: vi.fn(),
-      close: vi.fn(),
-    };
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();
@@ -632,12 +619,7 @@ describe("delete", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    const prompter: Prompter = {
-      ask: vi.fn(),
-      confirm: vi.fn().mockRejectedValue(new PromptAborted()),
-      choice: vi.fn(),
-      close: vi.fn(),
-    };
+    const prompter = stubPrompter({ confirm: vi.fn().mockRejectedValue(new PromptAborted()) });
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteToken).not.toHaveBeenCalled();

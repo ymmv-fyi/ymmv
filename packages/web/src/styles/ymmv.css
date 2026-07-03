@@ -287,11 +287,12 @@ a {
 }
 /* diff foot: counts read left (numbers in ink via .foot b, words faint), the one action sits
    right. Whitespace does the separating — no glyph separators. 24px ≈ three mono spaces at 13px,
-   the same gap the CLI footer uses. */
+   the same gap the CLI footer uses — horizontal only; a wrapped row keeps the foot's quiet 4px
+   rhythm instead of opening a 24px hole. */
 .diff-foot {
   display: flex;
   align-items: baseline;
-  gap: 24px;
+  gap: 4px 24px;
   flex-wrap: wrap;
 }
 .diff-foot a {

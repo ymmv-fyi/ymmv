@@ -167,6 +167,18 @@ describe("pollForToken state machine", () => {
     );
   });
 
+  it("requestDeviceCode: a 200 with the wrong shape throws a clear error, never crashes later", async () => {
+    // Captive portal / proxy minting a 200: the old bare cast let undefined reach link() (crash)
+    // and a missing expires_in become a NaN deadline (instant misleading "expired").
+    const { requestDeviceCode } = await import("../src/device-flow.js");
+    await expect(requestDeviceCode({ fetch: fetchSeq({ hello: "world" }) })).rejects.toThrow(
+      /unexpected device-code response/i,
+    );
+    await expect(
+      requestDeviceCode({ fetch: fetchSeq({ ...DC, expires_in: undefined }) }),
+    ).rejects.toThrow(/unexpected device-code response/i);
+  });
+
   it("throws a friendly error on access_denied", async () => {
     await expect(
       pollForToken(DC, { fetch: fetchSeq({ error: "access_denied" }), sleep: noSleep, now: at0 }),
@@ -228,6 +240,32 @@ describe("login() orchestration", () => {
     expect(out).toContain("WXYZ-1234");
     expect(out).not.toContain(esc); // tests run piped → color off → zero ANSI, injected or ours
     expect(out).toMatch(/waiting for GitHub approval… \(Ctrl\+C to cancel\)/);
+    logSpy.mockRestore();
+  });
+
+  it("linkifies ONLY a github.com https verification_uri — anything else prints inert", async () => {
+    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    vi.stubEnv("FORCE_COLOR", "1"); // force the linkify path despite piped test stdout
+    const esc = String.fromCharCode(0x1b);
+    const osc8 = `${esc}]8;;`;
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    // Hostile: a middlebox-minted 200 pointing somewhere else must not become clickable.
+    const evil = { ...DC, verification_uri: "https://github-com.evil.example/login" };
+    await withTTY(true, async () => {
+      await login({ fetch: fetchSeq(evil, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+    });
+    expect(logs.join("\n")).toContain("github-com.evil.example"); // shown, so the user can judge
+    expect(logs.join("\n")).not.toContain(osc8); // but never clickable
+    logs.length = 0;
+    // Legit github.com URI: linkified.
+    await withTTY(true, async () => {
+      await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+    });
+    expect(logs.join("\n")).toContain(osc8);
+    vi.unstubAllEnvs();
     logSpy.mockRestore();
   });
 

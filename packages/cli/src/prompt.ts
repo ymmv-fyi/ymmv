@@ -63,30 +63,41 @@ export function makePrompter(): Prompter {
   let rl: Interface | null = null;
   const color = colorEnabled();
   const c: Codes = palette(color);
-  const ac = new AbortController();
-  let pending = false;
+  // One controller PER QUESTION (created in question(), cleared in its finally): a ^C landing in
+  // the microtask gap after an answered question must not leave a flagged controller behind that
+  // would instantly abort the NEXT question. `ac === null` therefore means "no question pending".
+  let ac: AbortController | null = null;
   const io = (): Interface => {
     if (!rl) {
       rl = createInterface({ input: stdin, output: stdout });
       rl.on("SIGINT", () => {
-        if (pending) ac.abort();
+        if (ac) ac.abort();
         else {
           stdout.write("\n");
           process.exit(130);
         }
       });
+      // Ctrl+D: readline 'close' leaves a pending question() UNSETTLED (nodejs/node#53497
+      // family) — the process would then exit 0 with no message, reading as success to
+      // `ymmv && next`. Abort so EOF lands on the same PromptAborted path as ^C. An idle close
+      // (EOF while no question is outstanding, e.g. during the POST) needs nothing: the command
+      // finishes and prints its own outcome.
+      rl.on("close", () => {
+        ac?.abort();
+      });
     }
     return rl;
   };
   const question = async (query: string): Promise<string> => {
-    pending = true;
+    const controller = new AbortController();
+    ac = controller;
     try {
-      return await io().question(query, { signal: ac.signal });
+      return await io().question(query, { signal: controller.signal });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw new PromptAborted();
       throw e;
     } finally {
-      pending = false;
+      ac = null;
     }
   };
   return {
