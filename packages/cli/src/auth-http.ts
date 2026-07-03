@@ -41,11 +41,13 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     }
     if (res.status === 429) {
       // The mint endpoint is rate-limited (per identity + per IP). Surface the server's hint.
+      // retry-after comes off the wire too. Only the delta-seconds form fits the "(retry in Ns)"
+      // suffix — RFC 9110 also allows an HTTP-date (WAF/proxy senders use it), which would garble.
       const retry = res.headers.get("retry-after");
       const msg = body.message
         ? wireText(body.message)
         : "Too many login attempts. Slow down and try again shortly";
-      throw new Error(retry ? `${msg} (retry in ${retry}s)` : msg);
+      throw new Error(retry && /^\d+$/.test(retry) ? `${msg} (retry in ${retry}s)` : msg);
     }
     throw new Error(`login failed: ${res.status} ${wireText(body.error ?? "")}`.trim());
   }

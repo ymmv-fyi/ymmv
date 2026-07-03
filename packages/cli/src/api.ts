@@ -16,7 +16,9 @@ async function rateLimitMessage(res: Response): Promise<string> {
   } catch {
     // non-JSON body (e.g. the edge WAF block page) — keep the generic message
   }
-  return retry ? `${msg} (retry in ${retry}s)` : msg;
+  // retry-after comes off the wire too. Only the delta-seconds form fits the "(retry in Ns)"
+  // suffix — RFC 9110 also allows an HTTP-date (WAF/proxy senders use it), which would garble.
+  return retry && /^\d+$/.test(retry) ? `${msg} (retry in ${retry}s)` : msg;
 }
 
 /** Ensure a token exists for the current base, logging in if needed. */
