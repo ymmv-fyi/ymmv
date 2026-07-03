@@ -42,6 +42,8 @@ html[data-theme="dark"] {
   /* 4.78:1 on --bg (was #5b5f67, 3.0:1) — faint is real content (shared diff rows, section
      labels, foots), so it must clear WCAG AA 4.5:1, not just the large-text bar */
   --faint: #7a7e87;
+  /* hero secondary tier between --muted and --text: the hook stays --text, the URL + CTA sit here */
+  --mid: #b9bcc3;
   --hairline: #222428;
   /* raised controls (install button, theme toggle) need a border that reads against --surface —
      the row hairline is too dark in dark mode and the control looks like floating text */
@@ -59,6 +61,7 @@ html[data-theme="light"] {
      muted #6b6e74 → #5f6268 (5.86:1) to keep a visible step above faint; accent
      #b9791a → #9a6410 (4.8:1, approved 2026-06-29). */
   --faint: #757269;
+  --mid: #3d4046;
   --hairline: #e6e4de;
   /* light borders already read fine on near-white; keep raised = hairline */
   --border-raised: var(--hairline);
@@ -598,9 +601,18 @@ a {
   max-width: 48ch;
   text-wrap: balance;
 }
-.tagline b {
+.tagline .lead {
   color: var(--text);
+}
+.tagline b {
+  color: var(--mid);
   font-weight: 500;
+}
+.tagline code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 500;
+  color: var(--mid);
 }
 .example-label {
   font-family: var(--font-mono);
