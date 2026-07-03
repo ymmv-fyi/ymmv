@@ -261,4 +261,17 @@ describe("write rate limit (429)", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(limited()));
     await expect(deleteProfile()).rejects.toThrow(/retry in 60s/i);
   });
+
+  it("drops the retry hint when retry-after is not the seconds form (HTTP-date)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    const dated = new Response(JSON.stringify({ error: "rate_limited" }), {
+      status: 429,
+      headers: { "retry-after": "Thu, 03 Jul 2026 04:00:00 GMT" },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(dated));
+    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/rate limited/i);
+    expect((err as Error).message).not.toContain("retry in");
+  });
 });
