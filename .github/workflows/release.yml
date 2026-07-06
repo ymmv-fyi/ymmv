@@ -1,7 +1,8 @@
 name: Release
 
 # Two entry points:
-#   • push a tag `vX.Y.Z`  → REAL production release: npm publish (provenance) + deploy the Worker.
+#   • push a tag `vX.Y.Z`  → REAL production release: npm publish (provenance) + deploy the Worker,
+#                            then cut a GitHub Release with that version's CHANGELOG section as notes.
 #   • workflow_dispatch    → rehearsal/ops: pick an environment + dry-run (default: staging, dry-run).
 #                            The "tagged-release dry-run hits staging" check is this, with defaults.
 #
@@ -200,3 +201,59 @@ jobs:
         if: needs.prep.outputs.dry_run != 'false'
         run: pnpm exec wrangler deploy -c dist/server/wrangler.json --dry-run
         working-directory: packages/web
+
+  # Cut a GitHub Release for the tag, with that version's CHANGELOG section as the notes. Runs LAST and
+  # only after publish-cli (so transitively after the Worker deploy): a Release is the "fully shipped"
+  # marker, so it must never exist for a release that failed to publish or deploy. It's also what the
+  # CHANGELOG's `[x.y.z]: …/releases/tag/vX.Y.Z` footer links resolve to. `contents: write` is scoped to
+  # THIS job; the top-level default stays read-only. gh + awk, not a third-party action — no new
+  # supply-chain dependency, and the notes come from the CHANGELOG we already curate (one source).
+  github-release:
+    needs: [prep, publish-cli]
+    if: github.event_name == 'push' && needs.prep.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/edit the GitHub Release for this tag
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cut the GitHub Release from the CHANGELOG
+        # Never inline the tag/version into the script — a ref name is attacker-influenced (same reason
+        # the Stamp version step passes VERSION via env). The notes go through a file, so backticks and
+        # asterisks in the changelog are never reparsed by the shell.
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.prep.outputs.version }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          # Print the body of this version's section: everything between its `## [x.y.z]` header and the
+          # next section header (or the `[x.y.z]: http…` link-ref block, for the oldest entry).
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { grab = 1; next }
+            grab && /^## \[/        { exit }
+            grab && /^\[.*\]: http/ { exit }
+            grab                    { print }
+          ' CHANGELOG.md > "$notes"
+          # Drop leading blank lines (the section header is followed by one) for a tidy release body.
+          sed -i -e '/./,$!d' "$notes"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Idempotent re-run (e.g. a retried release): refresh title + notes, don't recreate.
+            if [ -s "$notes" ]; then
+              gh release edit "$TAG" --title "$TAG" --notes-file "$notes"
+            else
+              echo "::warning::No CHANGELOG section for $VERSION; leaving the existing release as-is."
+            fi
+          else
+            flags=(--title "$TAG" --verify-tag)
+            # A pre-release suffix (v1.2.0-rc.1) is flagged, so GitHub doesn't mark it "Latest".
+            case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+            if [ -s "$notes" ]; then
+              flags+=(--notes-file "$notes")
+            else
+              echo "::warning::No CHANGELOG section for $VERSION; using auto-generated notes."
+              flags+=(--generate-notes)
+            fi
+            gh release create "$TAG" "${flags[@]}"
+          fi
