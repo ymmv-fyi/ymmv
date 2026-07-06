@@ -1,6 +1,9 @@
 # ymmv.fyi
 
-**Share your dev tool-stack from the terminal.**
+**The tools you actually use. Publish from the CLI, diff against anyone's.**
+
+[![npm](https://img.shields.io/npm/v/ymmv-cli)](https://www.npmjs.com/package/ymmv-cli)
+[![CI](https://github.com/ymmv-fyi/ymmv/actions/workflows/ci.yml/badge.svg)](https://github.com/ymmv-fyi/ymmv/actions/workflows/ci.yml)
 
 Editor, OS, shell, terminal, theme (and more), published to a
 clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:

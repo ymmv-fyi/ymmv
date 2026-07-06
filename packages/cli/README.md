@@ -1,6 +1,6 @@
 # ymmv-cli
 
-**Share your dev tool-stack from the terminal.**
+**The tools you actually use. Publish from the CLI, diff against anyone's.**
 
 Editor, OS, shell, terminal, theme (and more), published to a
 clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:
