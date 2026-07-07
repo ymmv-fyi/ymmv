@@ -1,13 +1,14 @@
 /*
- * ymmv.fyi design system — "typeset terminal readout".
- * Canonical source: DESIGN.md + docs/preview.html (the approved production render).
- * Load-bearing rule: amber (--accent) stays scarce — links and diff-differences ONLY.
- * Never fill all values with amber; it is reserved to mark differing values in the diff.
+ * ymmv.fyi design system — "Divergence" (technical document meets terminal).
+ * Canonical source: DESIGN.md (repo root).
+ * Load-bearing rule: amber (--accent) stays scarce — links, diff-differences, and the fork
+ * motif ONLY. Never fill all values with amber; it marks where two stacks split.
  */
 
 :root {
-  /* Font vars (--font-display, --font-sans, --font-mono) come from Astro's Fonts API; see
-     astro.config.mjs and the <Font> tags in Layout.astro. It emits them with metric-matched fallbacks. */
+  /* Font vars (--font-display, --font-mono, --font-serif) come from Astro's Fonts API; see
+     astro.config.mjs and the <Font> tags in Layout.astro. It emits them with metric-matched fallbacks.
+     --font-serif ships italic-only: always pair it with font-style: italic. */
 
   /* spacing scale (4px base) */
   --sp-sm: 8px;
@@ -15,9 +16,13 @@
   --sp-lg: 16px;
   --sp-xl: 24px;
 
-  --content: 660px;
+  --content: 680px;
   --label-col: 34%;
   --page-pad-x: 28px;
+
+  /* corners: cards are near-sharp (technical document), controls slightly softer */
+  --radius-card: 2px;
+  --radius-ctrl: 6px;
 
   /* motion — strong ease-out for responsive/entering motion (page fade, press-scales).
      Built-in CSS easings are too weak; hover *color* changes keep plain `ease`. */
@@ -34,38 +39,37 @@
 /* Dark is the primary mode; light is the considered inverse. The no-FOUC head script sets
    data-theme before paint (stored choice > prefers-color-scheme > dark); no-JS falls back to dark. */
 html[data-theme="dark"] {
-  --bg: #0c0d10;
-  --surface: #101216;
-  --text: #e9e9ec;
-  --muted: #8a8e96;
-  /* 4.78:1 on --bg (was #5b5f67, 3.0:1) — faint is real content (shared diff rows, section
-     labels, foots), so it must clear WCAG AA 4.5:1, not just the large-text bar */
-  --faint: #7a7e87;
+  /* warm ink. All tiers verified WCAG AA against BOTH --bg and --surface (2026-07-07):
+     text 15.8/15.0, mid 10.5/9.9, muted 6.3/6.0, faint 5.1/4.9, accent 10.3/9.8. */
+  --bg: #0e0c09;
+  --surface: #16130e;
+  --text: #ece7dc;
+  --muted: #9a927f;
+  /* faint is real content (shared diff rows, section labels, foots) — must clear AA 4.5:1 */
+  --faint: #8a8272;
   /* hero secondary tier between --muted and --text: the hook stays --text, the URL + CTA sit here */
-  --mid: #b9bcc3;
-  --hairline: #222428;
+  --mid: #c4bdae;
+  --hairline: #272219;
   /* raised controls (install button, theme toggle) need a border that reads against --surface —
      the row hairline is too dark in dark mode and the control looks like floating text */
-  --border-raised: #2c2f37;
-  --accent: #e8a33d;
-  --accent-soft: #e8a33d26;
+  --border-raised: #352e22;
+  --accent: #ffab2e;
+  --accent-soft: #ffab2e26;
 }
 html[data-theme="light"] {
-  --bg: #fbfaf7;
-  --surface: #ffffff;
-  --text: #16171a;
-  --muted: #5f6268;
-  /* muted/faint/accent darkened from DESIGN's values for WCAG AA on near-white: faint
-     #a6a39b → #757269 (4.61:1) since faint is real content (shared diff rows, labels, foots);
-     muted #6b6e74 → #5f6268 (5.86:1) to keep a visible step above faint; accent
-     #b9791a → #9a6410 (4.8:1, approved 2026-06-29). */
-  --faint: #757269;
-  --mid: #3d4046;
-  --hairline: #e6e4de;
+  /* printed spec sheet on warm paper. AA against BOTH --bg and --surface (2026-07-07):
+     text 16.1/17.6, mid 9.3/10.1, muted 6.6/7.2, faint 5.1/5.5, accent 5.1/5.6. */
+  --bg: #f6f3ea;
+  --surface: #fffdf8;
+  --text: #1a1712;
+  --muted: #5c564a;
+  --faint: #6e6759;
+  --mid: #454035;
+  --hairline: #e4decd;
   /* light borders already read fine on near-white; keep raised = hairline */
   --border-raised: var(--hairline);
-  --accent: #9a6410;
-  --accent-soft: #9a64101a;
+  --accent: #8e5d0b;
+  --accent-soft: #8e5d0b1a;
 }
 
 * {
@@ -86,17 +90,55 @@ html[data-theme="light"] {
   color-scheme: light;
 }
 
+/* the hero field bleeds to 100vw, which can poke under a classic scrollbar — clip, never scroll */
 body {
+  overflow-x: clip;
+}
+
+body {
+  /* containing block for the grain overlay (::after), so it spans the full document height and
+     scrolls with the page rather than the viewport */
+  position: relative;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 1.5;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* Theme switch is intentionally instant — no cross-fade. Body's bg/text are the only
      theme-driven properties that could transition; everything else (hairlines, surfaces,
      accent) already snaps, so animating only the body read as a half-faded toggle. */
+}
+
+/* Film grain: a small feTurbulence tile repeated over the FULL DOCUMENT, ABOVE content at 8%
+   (classic print-grain; imperceptible on glyph edges) but BELOW the fixed .theme-toggle (z 10).
+   Absolute (not fixed), so it scrolls with the page and reads as grain bonded to the paper.
+   The turbulence is baked once into the data-URI tile, so scrolling composites a static image —
+   no per-frame filter cost. Inert: pointer-events none; hidden where it can't be tinted. */
+body::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 0.08;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+/* Grayscale grain shows less on warm paper (bright bg swallows the light specks; only the dark
+   ones register), so light carries a heavier overlay to read at the same strength as dark. */
+html[data-theme="light"] body::after {
+  opacity: 0.14;
+}
+@media (forced-colors: active), print {
+  body::after {
+    display: none;
+  }
+}
+
+::selection {
+  background: var(--accent-soft);
 }
 
 a {
@@ -139,10 +181,11 @@ a {
   border: 1px solid var(--border-raised);
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   padding: 7px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctrl);
   transition:
     color 0.18s,
     border-color 0.18s,
@@ -195,13 +238,45 @@ a {
 .handle {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: clamp(40px, 8vw, 56px);
+  font-size: clamp(38px, 8vw, 54px);
   line-height: 1;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
   display: flex;
   align-items: center;
   gap: 4px;
   word-break: break-word;
+}
+/* revision stamp under the handle — the spec sheet dates itself */
+.rev {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-top: 10px;
+}
+
+/* the fork mark — the brand glyph, inline. Sized by its em context via width/height attrs. */
+.fork {
+  vertical-align: -0.12em;
+  margin-right: 6px;
+  flex: none;
+}
+
+/* diff heading: "how X differs from Y" promoted from breadcrumb register to a real heading;
+   the amber fork glyph in front is the one accent spend (it IS the diff mark) */
+.diff-h {
+  font-size: 17px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-bottom: 26px;
+}
+.diff-h .fork {
+  color: var(--accent);
+}
+.diff-h b {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ---- spec sheet (key -> value) ---- */
@@ -214,6 +289,14 @@ a {
   text-transform: uppercase;
   color: var(--faint);
   margin: 40px 0 6px;
+}
+/* section marks open like a code comment — the machine voice annotating its own document.
+   ::before stays out of textContent, so copy assertions and copy-paste are unaffected. */
+.group-h::before,
+.example-label::before,
+.foot-h::before {
+  content: "// ";
+  letter-spacing: 0;
 }
 
 .spec {
@@ -234,12 +317,15 @@ a {
 }
 /* label is a row header (th scope="row"); reset th's default center/bold to the muted-label look */
 .spec .k {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-weight: 500;
   text-align: left;
   color: var(--muted);
-  font-size: 14px;
-  letter-spacing: 0.01em;
+  /* ledger label: caps register matches the thead/section marks; textContent keeps original
+     casing, so tests and copy-paste still see "Editor" */
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   width: var(--label-col);
   padding-right: var(--sp-md);
 }
@@ -309,6 +395,27 @@ a {
 .diff-foot a {
   margin-left: auto;
 }
+/* the ratio bar: a minimap of the table above — one segment per row, in row order, amber where
+   the stacks split. Own full-width row above the counts (order -1 beats the flex flow; flex-basis
+   100% keeps the swap link's auto-margin working on the counts row). */
+.diff-foot .ratio {
+  order: -1;
+  flex-basis: 100%;
+  display: flex;
+  gap: 3px;
+  height: 3px;
+  margin-bottom: 10px;
+}
+.diff-foot .ratio i {
+  flex: 1;
+  border-radius: 1px;
+}
+.diff-foot .ratio .d {
+  background: var(--accent);
+}
+.diff-foot .ratio .s {
+  background: var(--border-raised);
+}
 /* secondary "make your own" CTA under the profile foot — dimmer than the contextual command
    above it (faint label, muted command) so it reads as the quieter, second-rank action */
 .cta {
@@ -321,9 +428,28 @@ a {
   color: var(--muted);
   font-weight: 400;
 }
-/* inline "diff vs <you>" form — same quiet register as .cta. The input is a bare
-   hairline-underlined slot; focus is signalled by the caret + the accent underline
-   (a hairline→accent step well over 3:1 in both themes), so no ring on a text slot. */
+/* inline "diff vs <you>" form — elevated to a raised panel (it is the page's second action, and
+   the diff is the product's whole point). The input stays a bare hairline-underlined slot; focus
+   is signalled by the caret + the accent underline (a hairline→accent step well over 3:1 in both
+   themes), so no ring on a text slot. */
+.diff-cta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  margin-top: 14px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-raised);
+  border-radius: var(--radius-ctrl);
+}
+.diff-cta label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  color: var(--muted);
+}
 .diff-cta .you {
   font: inherit;
   /* ≥16px kills iOS Safari's focus auto-zoom; the step above the 13px cta line reads as
@@ -335,7 +461,10 @@ a {
   border-bottom: 1px solid var(--hairline);
   border-radius: 0;
   padding: 0 2px;
+  flex: 1;
   width: 12ch;
+  min-width: 0;
+  margin-left: 6px;
 }
 .diff-cta .you::placeholder {
   color: var(--faint);
@@ -345,7 +474,8 @@ a {
   border-bottom-color: var(--accent);
 }
 .diff-cta .go {
-  font: inherit;
+  display: grid;
+  place-items: center;
   color: var(--muted);
   background: none;
   border: 0;
@@ -421,11 +551,14 @@ a {
   overflow-wrap: anywhere;
 }
 .diff .k {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-weight: 500;
   text-align: left;
   color: var(--muted);
-  font-size: 14px;
+  /* same caps ledger register as .spec .k */
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   width: 30%;
   padding-right: var(--sp-sm);
   /* Hanging indent: when a two-word label ("Version Manager") wraps on a narrow screen, its second
@@ -490,6 +623,12 @@ a {
 .empty {
   margin-top: 8px;
 }
+/* the road forks into nothing — quiet brand mark for the dead end */
+.empty-fork {
+  display: block;
+  color: var(--faint);
+  margin-bottom: 24px;
+}
 .empty .handle {
   margin-bottom: 20px;
 }
@@ -512,13 +651,13 @@ a {
    the command stays readable/selectable with no JS. */
 .install {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 15px;
   line-height: inherit;
-  color: var(--muted);
+  color: var(--mid);
   background: var(--surface);
   border: 1px solid var(--border-raised);
-  border-radius: 8px;
-  padding: 12px 14px;
+  border-radius: var(--radius-ctrl);
+  padding: 14px 18px;
   display: inline-block;
   text-align: left;
   appearance: none;
@@ -602,25 +741,99 @@ a {
 
 /* ---- landing ---- */
 .hero {
-  margin-bottom: 32px;
+  /* one source for the wordmark's fluid size — .vary tucks itself relative to this */
+  --wm: clamp(52px, 11vw, 88px);
+  position: relative;
+  padding: 36px 0 56px;
+  margin-bottom: 8px;
 }
+/* The divergence field sits behind the hero content, bleeding to the viewport edges. NOT
+   z-index:-1 — body paints its own opaque background (html also has one, so it doesn't propagate
+   to the canvas backdrop), and a negative-z child would paint underneath it. The field sits at 0
+   with the hero's real content lifted to 1. A 100vw bleed can poke under a classic scrollbar, so
+   body carries overflow-x: clip. */
+.hero > :not(.field) {
+  position: relative;
+  z-index: 1;
+}
+.field {
+  position: absolute;
+  z-index: 0;
+  top: -64px;
+  bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  /* soft radial falloff: the field breathes top-right of the hero and never hard-edges */
+  mask-image: radial-gradient(115% 95% at 72% 10%, #000 30%, transparent 78%);
+}
+.field svg,
+.field canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.field-static {
+  color: var(--faint);
+  opacity: 0.45;
+}
+.field canvas {
+  display: none;
+}
+/* the script sets data-anim only when motion is allowed: canvas in, static motif out */
+.field[data-anim] canvas {
+  display: block;
+}
+.field[data-anim] .field-static {
+  display: none;
+}
+/* canvas pixels ignore forced palettes — always fall back to the currentColor SVG there.
+   (Same specificity as the data-anim rules above, later in source, so it wins the cascade.) */
+@media (forced-colors: active) {
+  .field canvas,
+  .field[data-anim] canvas {
+    display: none;
+  }
+  .field[data-anim] .field-static {
+    display: block;
+  }
+}
+
 .wordmark {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: clamp(44px, 9vw, 68px);
-  line-height: 1;
-  letter-spacing: -0.02em;
+  font-size: var(--wm, clamp(52px, 11vw, 88px));
+  line-height: 0.95;
+  letter-spacing: -0.045em;
   display: flex;
-  align-items: center;
+  align-items: baseline;
 }
 .wordmark .dim {
-  color: var(--muted);
+  color: var(--faint);
+  font-size: 0.42em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* the human voice: one serif italic aside inside the mono machine (--font-serif ships italic-only).
+   Tucked into the wordmark's lockup: indented one wordmark advance (past the "y", under "mmv.fyi")
+   and pulled up into the descender zone so the "y" tail doesn't push it away. Both offsets are
+   fractions of --wm, so the tuck tracks the fluid wordmark size. */
+.vary {
+  font-family: var(--font-serif);
+  font-style: italic;
+  /* sized as a fraction of the wordmark so the lockup holds at every viewport: left edge indents
+     past the "y", right edge lands on the end of "fyi" (factor tuned against the rendered widths) */
+  font-size: calc(var(--wm, 88px) * 0.3625);
+  line-height: 1.2;
+  color: var(--mid);
+  margin: calc(var(--wm, 88px) * -0.05) 0 20px calc(var(--wm, 88px) * 0.68);
 }
 .tagline {
   color: var(--muted);
-  font-size: 18px;
-  margin: 20px 0 28px;
-  max-width: 48ch;
+  font-size: 15px;
+  margin: 0 0 30px;
+  max-width: 52ch;
   text-wrap: balance;
 }
 .tagline .lead {
@@ -632,9 +845,69 @@ a {
 }
 .tagline code {
   font-family: var(--font-mono);
-  font-size: 0.92em;
+  font-size: 0.95em;
   font-weight: 500;
   color: var(--mid);
+}
+
+/* ---- how it works: a pipeline of three steps, []-[]-[] — hairline boxes joined by short
+   connectors (the road runs THROUGH the product: CLI -> page -> diff). Solid hairlines, not
+   dashed: dashes would be a new ornament species and the budget is closed. ---- */
+.how {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-top: 18px;
+}
+.how li {
+  position: relative;
+  border: 1px solid var(--hairline);
+  /* horizontal padding stays lean so step 03's ymmv.fyi/you/vs/them fits on one line at 1280 */
+  padding: 14px 13px 16px;
+}
+.how li + li::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -26px;
+  width: 27px;
+  height: 1px;
+  background: var(--hairline);
+}
+.how .idx {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--faint);
+  margin-bottom: 10px;
+}
+.how code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.how .n {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+@media (max-width: 560px) {
+  .how {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  /* stacked: the connector turns vertical, threading down near the step indexes */
+  .how li + li::before {
+    top: -17px;
+    left: 20px;
+    width: 1px;
+    height: 18px;
+  }
 }
 .example-label {
   font-family: var(--font-mono);
@@ -657,11 +930,34 @@ a {
 /* The landing sample is a PREVIEW, not the page's own profile — frame it in a subtle surface
    card and demote the sample handle so it reads as an illustration, not the primary content. */
 .sample {
+  position: relative;
   border: 1px solid var(--border-raised);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   /* less inset on narrow screens so the spec sheet keeps its width */
   padding: clamp(20px, 5vw, 28px) clamp(18px, 5vw, 24px);
+}
+/* registration ticks: two corner marks (top-left + bottom-right) over the hairline frame — the
+   card reads as a plated figure in a spec sheet. Decorative pseudos only; no markup, no hit area. */
+.sample::before,
+.sample::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+.sample::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1px solid var(--muted);
+  border-left: 1px solid var(--muted);
+}
+.sample::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1px solid var(--muted);
+  border-right: 1px solid var(--muted);
 }
 .sample .handle {
   font-size: clamp(34px, 6vw, 42px);

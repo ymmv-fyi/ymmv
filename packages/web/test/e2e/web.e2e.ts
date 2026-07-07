@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-// Token colors asserted below (DESIGN.md): dark bg #0C0D10 = rgb(12,13,16),
-// light bg #FBFAF7 = rgb(251,250,247), dark accent #E8A33D = rgb(232,163,61).
+// Token colors asserted below (DESIGN.md): dark bg #0E0C09 = rgb(14,12,9),
+// light bg #F6F3EA = rgb(246,243,234), dark accent #FFAB2E = rgb(255,171,46).
 
 test.describe("profile render", () => {
   test("renders the handle, spec sheet and footer", async ({ page }) => {
@@ -100,7 +100,7 @@ test.describe("landing", () => {
       .locator("tr.same .yours")
       .first()
       .evaluate((el) => getComputedStyle(el).color);
-    expect(changedColor).toBe("rgb(232, 163, 61)"); // amber on a difference
+    expect(changedColor).toBe("rgb(255, 171, 46)"); // amber on a difference
     expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
   });
 
@@ -159,25 +159,25 @@ test.describe("themes (dark-primary + light)", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/antfu");
     const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bg).toBe("rgb(12, 13, 16)");
+    expect(bg).toBe("rgb(14, 12, 9)");
   });
 
   test("honors prefers-color-scheme: light", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light" });
     await page.goto("/antfu");
     const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bg).toBe("rgb(251, 250, 247)");
+    expect(bg).toBe("rgb(246, 243, 234)");
     // the dark-band fix itself: the html canvas (painted past a short body on mobile
     // overscroll) must follow the theme, not just the body
     const htmlBg = await page.evaluate(
       () => getComputedStyle(document.documentElement).backgroundColor,
     );
-    expect(htmlBg).toBe("rgb(251, 250, 247)");
+    expect(htmlBg).toBe("rgb(246, 243, 234)");
     // the no-FOUC head script must set the browser-UI color pre-paint, not just the click path
     const metaColor = await page.evaluate(() =>
       document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
     );
-    expect(metaColor).toBe("#fbfaf7");
+    expect(metaColor).toBe("#f6f3ea");
   });
 
   test("the toggle flips and persists the theme", async ({ page }) => {
@@ -188,14 +188,14 @@ test.describe("themes (dark-primary + light)", () => {
     // poll past the 0.3s background transition until it settles on the light token
     await expect
       .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
-      .toBe("rgb(251, 250, 247)");
+      .toBe("rgb(246, 243, 234)");
     const stored = await page.evaluate(() => localStorage.getItem("ymmv-theme"));
     expect(stored).toBe("light");
     // the browser-UI color (mobile toolbar/overscroll canvas) follows the toggle
     const metaColor = await page.evaluate(() =>
       document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
     );
-    expect(metaColor).toBe("#fbfaf7");
+    expect(metaColor).toBe("#f6f3ea");
     // and back to dark — the sync reads the computed --bg token, both directions must hold
     await page.click("#theme-toggle");
     await expect
@@ -204,7 +204,7 @@ test.describe("themes (dark-primary + light)", () => {
           document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
         ),
       )
-      .toBe("#0c0d10");
+      .toBe("#0e0c09");
     // stored choice must beat the system preference on the next pre-paint load
     await page.emulateMedia({ colorScheme: "light" });
     await page.reload();
@@ -212,7 +212,7 @@ test.describe("themes (dark-primary + light)", () => {
     const metaReload = await page.evaluate(() =>
       document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
     );
-    expect(metaReload).toBe("#0c0d10");
+    expect(metaReload).toBe("#0e0c09");
   });
 });
 
@@ -232,7 +232,7 @@ test.describe("the 3-column diff", () => {
     const changedColor = await changedYours.evaluate((el) => getComputedStyle(el).color);
     const theirsColor = await changedTheirs.evaluate((el) => getComputedStyle(el).color);
     const sameColor = await sameYours.evaluate((el) => getComputedStyle(el).color);
-    expect(changedColor).toBe("rgb(232, 163, 61)"); // amber on a difference
+    expect(changedColor).toBe("rgb(255, 171, 46)"); // amber on a difference
     expect(theirsColor).toBe(changedColor); // a difference is symmetric — both sides amber
     expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
   });
@@ -357,9 +357,9 @@ test.describe("fonts (Astro Fonts API)", () => {
   test("self-hosts and preloads the three above-the-fold faces", async ({ page, request }) => {
     await page.goto("/antfu");
 
-    // Exactly three preloads: display (Cabinet Grotesk 800), sans (General Sans 500), mono (Geist Mono
-    // latin). If a build-time provider fetch degrades a family it emits zero faces and its preload
-    // vanishes, so this count is the tripwire for a silent font-degradation build.
+    // Exactly three preloads: display (Martian Mono variable), mono (IBM Plex Mono 400 latin), serif
+    // (Instrument Serif italic). If a build-time provider fetch degrades a family it emits zero faces
+    // and its preload vanishes, so this count is the tripwire for a silent font-degradation build.
     const preloads = page.locator('link[rel="preload"][as="font"]');
     await expect(preloads).toHaveCount(3);
     const hrefs = await preloads.evaluateAll((ls) => ls.map((l) => l.getAttribute("href") ?? ""));
@@ -370,18 +370,18 @@ test.describe("fonts (Astro Fonts API)", () => {
     expect(font.status()).toBe(200);
     expect(font.headers()["content-type"]).toContain("font/woff2");
 
-    // The Fonts API owns --font-display/-sans/-mono; ymmv.css consumes them. Verify the real families
+    // The Fonts API owns --font-display/-mono/-serif; ymmv.css consumes them. Verify the real families
     // are wired (a renamed cssVariable or a dropped <Font> would break this).
     const vars = await page.evaluate(() => {
       const r = getComputedStyle(document.documentElement);
       return [
         r.getPropertyValue("--font-display"),
-        r.getPropertyValue("--font-sans"),
         r.getPropertyValue("--font-mono"),
+        r.getPropertyValue("--font-serif"),
       ];
     });
-    expect(vars[0]).toContain("Cabinet Grotesk");
-    expect(vars[1]).toContain("General Sans");
-    expect(vars[2]).toContain("Geist Mono");
+    expect(vars[0]).toContain("Martian Mono");
+    expect(vars[1]).toContain("IBM Plex Mono");
+    expect(vars[2]).toContain("Instrument Serif");
   });
 });

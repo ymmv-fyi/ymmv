@@ -64,13 +64,67 @@ const exampleDiff = diff(hubotProfile, octocatProfile);
 
 <Layout title="ymmv.fyi — your stack, in the terminal">
   <section class="hero">
+    {
+      /* The divergence field: parallel roads, an amber fork — the diff, drawn. The SVG is the
+        no-JS / reduced-motion / forced-colors render; divergence.ts swaps in the canvas only
+        when motion is allowed. Decorative, so the whole figure is aria-hidden. */
+    }
+    <div class="field" data-divergence aria-hidden="true">
+      <svg
+        class="field-static"
+        viewBox="0 0 800 320"
+        preserveAspectRatio="xMidYMid slice"
+        fill="none"
+      >
+        {
+          [20, 50, 80, 110, 140, 170, 200, 230, 260, 290].map((y) => (
+            <line
+              x1="0"
+              y1={y}
+              x2="800"
+              y2={y}
+              stroke="currentColor"
+              stroke-width="1"
+            />
+          ))
+        }
+        <path
+          d="M 300 170 L 430 140 L 800 140"
+          stroke="var(--accent)"
+          stroke-width="1"></path>
+        <circle cx="300" cy="170" r="2.5" fill="var(--accent)"></circle>
+      </svg>
+      <canvas></canvas>
+    </div>
     <h1 class="wordmark">ymmv<span class="dim">.fyi</span></h1>
+    <p class="vary">Your mileage may vary.</p>
     <p class="tagline">
-      <span class="lead">The tools you actually use</span>, at <code>ymmv.fyi/you</code>.<br />
-      <b>Publish from the CLI</b>, then diff against anyone's.
+      <span class="lead">The tools you actually use</span>, at <code
+        >ymmv.fyi/you</code
+      >.<br />
+      <b>Publish from the CLI.</b> Diff against anyone.
     </p>
     <InstallCommand />
   </section>
+
+  <h2 class="example-label">How it works</h2>
+  <ol class="how">
+    <li>
+      <span class="idx">01</span>
+      <code>$ npx ymmv-cli</code>
+      <p class="n">It detects your stack. You confirm.</p>
+    </li>
+    <li>
+      <span class="idx">02</span>
+      <code>ymmv.fyi/you</code>
+      <p class="n">Your stack becomes a page.</p>
+    </li>
+    <li>
+      <span class="idx">03</span>
+      <code>ymmv.fyi/you/vs/them</code>
+      <p class="n">Diff any two stacks.</p>
+    </li>
+  </ol>
 
   <h2 class="example-label">A profile looks like this</h2>
   <div class="sample">
@@ -122,3 +176,7 @@ const exampleDiff = diff(hubotProfile, octocatProfile);
     </div>
   </footer>
 </Layout>
+
+<script>
+  import "../scripts/divergence.ts";
+</script>

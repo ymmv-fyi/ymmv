@@ -16,9 +16,11 @@ interface Props {
   example?: boolean;
 }
 const { profile, example = false } = Astro.props;
-const { handle, entries, extras } = profile;
+const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
+// spec-sheet revision stamp: date part only (the wire carries a full ISO timestamp)
+const revDate = updated_at?.slice(0, 10);
 
 const HandleTag = example ? "p" : "h1";
 const GroupTag = example ? "p" : "h2";
@@ -26,6 +28,9 @@ const GroupTag = example ? "p" : "h2";
 
 <div class="url">{example ? "ymmv.fyi" : <a href="/">ymmv.fyi</a>}/<b>{handle}</b></div>
 <HandleTag class="handle">{handle}</HandleTag>
+{revDate && (
+  <p class="rev">updated <time datetime={updated_at}>{revDate}</time></p>
+)}
 
 {
   hasStack && (
@@ -117,6 +122,9 @@ const GroupTag = example ? "p" : "h2";
         submit works from anywhere this form renders, including the /vs/ nudge page */}
     <form class="cta diff-cta" action={`/${handle}`} data-diff-vs={handle}>
       <label>
+        <svg class="fork" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M1 9.5h12M4.5 9.5 8 4.5h5" stroke="currentColor" stroke-width="1.2" />
+        </svg>
         diff vs{" "}
         <input
           class="you"
@@ -129,7 +137,9 @@ const GroupTag = example ? "p" : "h2";
           aria-label={`your handle — diff ${handle} against you`}
         />
       </label>
-      <button class="go" type="submit" aria-label="view the diff">→</button>
+      <button class="go" type="submit" aria-label="view the diff"
+        ><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 9h12M10 4.5 14.5 9 10 13.5" /></svg></button
+      >
     </form>
     <noscript>
       {/* is:inline — Astro must not hoist this out of the <noscript> gate */}

@@ -6,9 +6,8 @@ this repo. Attribution is retained here because the build output redistributes t
 
 | Family | Weights | Provider | Source | License |
 |---|---|---|---|---|
-| Cabinet Grotesk | 800 | `fontshare()` | [Fontshare](https://www.fontshare.com/fonts/cabinet-grotesk) (Indian Type Foundry) | ITF Free Font License |
-| General Sans | 400 / 500 / 600 | `fontshare()` | [Fontshare](https://www.fontshare.com/fonts/general-sans) (Indian Type Foundry) | ITF Free Font License |
-| Geist Mono | 400–500 (variable, latin + latin-ext) | `google()` | [Vercel Geist](https://vercel.com/font) via [Google Fonts](https://fonts.google.com/specimen/Geist+Mono) | SIL Open Font License 1.1 |
+| Martian Mono | 400–800 (variable, latin) | `google()` | [Evil Martians](https://github.com/evilmartians/mono) via [Google Fonts](https://fonts.google.com/specimen/Martian+Mono) | SIL Open Font License 1.1 |
+| IBM Plex Mono | 400 / 500 / 600 (latin + latin-ext) | `google()` | [IBM Plex](https://github.com/IBM/plex) via [Google Fonts](https://fonts.google.com/specimen/IBM+Plex+Mono) | SIL Open Font License 1.1 |
+| Instrument Serif | 400 italic (latin) | `google()` | [Instrument](https://github.com/Instrument/instrument-serif) via [Google Fonts](https://fonts.google.com/specimen/Instrument+Serif) | SIL Open Font License 1.1 |
 
-The ITF Free Font License and the SIL OFL both permit self-hosting and redistribution as part of a
-product.
+The SIL OFL permits self-hosting and redistribution as part of a product.

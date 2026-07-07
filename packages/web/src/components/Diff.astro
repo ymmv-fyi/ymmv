@@ -1,5 +1,5 @@
 ---
-// The 3-column diff (label | theirs | yours), per DESIGN.md + docs/preview.html.
+// The 3-column diff (label | theirs | yours), per DESIGN.md.
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
 // a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
 // Extras don't diff (free labels), so they render dimmed and uncounted below the table.
@@ -28,7 +28,10 @@ const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length >
 const HeadingTag = example ? "p" : "h1";
 ---
 
-<HeadingTag class="url">
+<HeadingTag class="url diff-h">
+  <svg class="fork" width="16" height="16" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+    <path d="M1 9.5h12M4.5 9.5 8 4.5h5" stroke="currentColor" stroke-width="1.2" />
+  </svg>
   how <b>{example ? theirs : <a href={`/${encodeURIComponent(theirs)}`}>{theirs}</a>}</b> differs from{" "}
   <b>{example ? mine : <a href={`/${encodeURIComponent(mine)}`}>{mine}</a>}</b>
 </HeadingTag>
@@ -83,6 +86,14 @@ const HeadingTag = example ? "p" : "h1";
 </table>
 
 <div class="foot diff-foot">
+  {/* the ratio bar is a minimap of the table: one segment per row, in row order, amber where the
+      stacks split. Pure decoration over the counts beside it — no text, no anchors (the e2e foot
+      pins assume the swap link is the only <a> here). */}
+  <span class="ratio" aria-hidden="true">
+    {result.rows.map((row) => (
+      <i class={row.status === "same" ? "s" : "d"} />
+    ))}
+  </span>
   <span><b>{result.differ}</b> differ</span>
   <span><b>{result.shared}</b> shared</span>
   {

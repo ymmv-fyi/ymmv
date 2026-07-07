@@ -22,7 +22,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     {/* Browser-UI color (mobile toolbar/overscroll). Hexes mirror the --bg tokens in ymmv.css;
         JS-synced (not media-attr metas) because the stored choice overrides prefers-color-scheme.
         Must precede the no-FOUC script, which sets it to the resolved theme. */}
-    <meta name="theme-color" content="#0c0d10" />
+    <meta name="theme-color" content="#0e0c09" />
     {/* Set the theme before first paint (stored choice > system > dark) to avoid a flash. */}
     <script is:inline>
       (function () {
@@ -44,7 +44,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
         }
         document.documentElement.dataset.theme = theme;
         var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute("content", theme === "light" ? "#fbfaf7" : "#0c0d10");
+        if (meta) meta.setAttribute("content", theme === "light" ? "#f6f3ea" : "#0e0c09");
       })();
     </script>
     <title>{title}</title>
@@ -53,15 +53,21 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     {/* Fonts via Astro's Fonts API: each <Font> injects the inlined @font-face + size-matched fallback
-        + a preload for the above-the-fold file. Mono preload is scoped to the latin subset; latin-ext
-        stays on demand via unicode-range. */}
+        + a preload for the above-the-fold file. Mono preload is scoped to 400@latin (the body face);
+        500/600 + latin-ext stay on demand via unicode-range. Exactly 3 preloads total (e2e-pinned). */}
     <Font cssVariable="--font-display" preload />
-    <Font cssVariable="--font-sans" preload={[{ weight: 500 }]} />
-    <Font cssVariable="--font-mono" preload={[{ subset: "latin" }]} />
+    <Font cssVariable="--font-mono" preload={[{ weight: 400, subset: "latin" }]} />
+    <Font cssVariable="--font-serif" preload />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary" />
+    {/* static brand card (wordmark + fork motif). og:image must be absolute — Astro.site, never
+        Astro.url.origin (that would bake localhost/www variants per request). */}
+    <meta property="og:image" content={new URL("/og.png", Astro.site)} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ymmv.fyi. Your mileage may vary." />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark or light theme">
