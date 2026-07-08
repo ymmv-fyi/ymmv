@@ -85,6 +85,10 @@ html {
      a dark band below the page */
   background: var(--bg);
   min-height: 100%;
+  /* containing block for the grain overlay (::after). Grain lives on html, NOT body: html's box
+     is max(content, viewport) thanks to min-height:100%, so on a short page the grain still
+     reaches the bottom. On body it would stop at content height and leave an ungrained band. */
+  position: relative;
 }
 html[data-theme="light"] {
   color-scheme: light;
@@ -96,9 +100,6 @@ body {
 }
 
 body {
-  /* containing block for the grain overlay (::after), so it spans the full document height and
-     scrolls with the page rather than the viewport */
-  position: relative;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-mono);
@@ -113,10 +114,11 @@ body {
 
 /* Film grain: a small feTurbulence tile repeated over the FULL DOCUMENT, ABOVE content at 8%
    (classic print-grain; imperceptible on glyph edges) but BELOW the fixed .theme-toggle (z 10).
+   On html (not body) so it spans max(content, viewport) and reaches the bottom on short pages.
    Absolute (not fixed), so it scrolls with the page and reads as grain bonded to the paper.
    The turbulence is baked once into the data-URI tile, so scrolling composites a static image —
    no per-frame filter cost. Inert: pointer-events none; hidden where it can't be tinted. */
-body::after {
+html::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -128,7 +130,7 @@ body::after {
 }
 /* Grayscale grain shows less on warm paper (bright bg swallows the light specks; only the dark
    ones register), so light carries a heavier overlay to read at the same strength as dark. */
-html[data-theme="light"] body::after {
+html[data-theme="light"]::after {
   opacity: 0.14;
 }
 @media (forced-colors: active), print {
