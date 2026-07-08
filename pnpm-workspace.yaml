@@ -1,6 +1,13 @@
 packages:
   - "packages/*"
 
+# Pin transitive dev deps up out of their vulnerable ranges (Dependabot). Scoped so only
+# the affected versions are bumped: yaml stack-overflow (GHSA-48c2-rrv3-qjmp) reaches us via
+# yaml-language-server; esbuild dev-server file read (GHSA-g7r4-m6w7-qqqr) via tsup.
+overrides:
+  "yaml@>=2.0.0 <2.8.3": ">=2.8.3"
+  "esbuild@>=0.27.3 <0.28.1": ">=0.28.1"
+
 # Allow these dependencies to run their install/build scripts (pnpm 10+ gates them
 # by default). workerd backs @cloudflare/vitest-pool-workers; esbuild backs Vite/Vitest;
 # sharp backs Astro's image service.
