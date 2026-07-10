@@ -268,9 +268,10 @@ describe("POST /api/v1/auth/token — mint", () => {
       .first<{ github_id: number }>();
     expect(owner?.github_id).toBe(2);
 
-    // …and the reclaimer is not locked out: the GitHub-proven login bind clears the stale
-    // handle_history["alice"]={gid1} row, so gid2 can publish. Pre-fix that leftover row made the
-    // takeover guard 409 the new legitimate owner forever.
+    // …and the reclaimer is not locked out: the login bind is what authorizes gid2's publish (the
+    // bound-handle guard), and it also cleared the stale handle_history["alice"]={gid1} row so GET
+    // resolves to gid2 instead of 301ing to gid1. (The since-removed takeover guard used to 409 the
+    // new legitimate owner forever on that leftover row.)
     expect(
       (await PUBLISH(publishCtx(g2.token, "alice", [{ key: "editor", value: "Helix" }]))).status,
     ).toBe(200);

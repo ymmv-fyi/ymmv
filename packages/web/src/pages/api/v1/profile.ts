@@ -9,7 +9,6 @@ import {
 import type { APIRoute } from "astro";
 import { authenticateRequest } from "../../../lib/auth.ts";
 import { checkWriteRateLimit } from "../../../lib/rate-limit.ts";
-import { handleBindStatements, isUniqueViolation } from "../../../lib/users.ts";
 
 // Conservative input caps — curated entries are naturally ≤ CURATED_KEYS.length (13) after dedup
 // (plus any newer-taxonomy keys a skewed client carries through verbatim), but bound the pre-dedup
@@ -40,11 +39,11 @@ function err(status: number, error: string, extra?: Record<string, unknown>): Re
 
 // POST /api/v1/profile — authed upsert of one user's profile.
 //
-// SECURITY: a token only proves github_id, so publish refuses to
-// claim a handle another account holds LIVE *or* vacated (renamed-away → handle_history) — the 409
-// guard below + the UNIQUE backstop. Authoritative handle binding/reclaim happens at `login`
-// (POST /api/v1/auth/token), where GitHub's /user proves current ownership — the only place a handle
-// transfers between accounts.
+// SECURITY: a token only proves github_id, so publish never BINDS a handle — it only writes under
+// the handle this account already bound at `login` (POST /api/v1/auth/token), where GitHub's /user
+// proves current ownership of the name. That single rule (the bound-handle guard below) blocks
+// squatting an unclaimed handle before its GitHub owner ever logs in, taking over a handle another
+// account holds live or vacated, and renaming via publish (renames flow through a re-login).
 export const POST: APIRoute = async ({ request }) => {
   const githubId = await authenticateRequest(request, env.DB);
   if (githubId === null) return err(401, "unauthorized");
@@ -121,44 +120,60 @@ export const POST: APIRoute = async ({ request }) => {
   const now = new Date().toISOString();
   const extrasJson = JSON.stringify(extras);
 
+  let boundHandle: string;
   try {
-    // Takeover guard: a token only proves github_id, so refuse to claim a handle another account
-    // holds LIVE *or* vacated (renamed-away → handle_history). Blocking the vacated case stops a
-    // crafted publish from hijacking the victim's 301 redirect; legitimate reclaim flows through login
-    // (GitHub /user proof). The UNIQUE(handle_lower) catch below backstops the live-case TOCTOU.
-    const taken = await env.DB.prepare(
-      "SELECT github_id FROM users WHERE handle_lower = ? AND github_id <> ? " +
-        "UNION SELECT github_id FROM handle_history WHERE old_handle_lower = ? AND github_id <> ?",
-    )
-      .bind(handleLower, githubId, handleLower, githubId)
-      .first<{ github_id: number }>();
-    if (taken) return err(409, "handle_taken");
+    // Bound-handle guard: publish may only use the handle login already bound to this github_id.
+    // Anything else — an unclaimed handle (pre-owner squat), a handle another account holds live or
+    // vacated (takeover), a self-rename, or a limbo account (handle_lower NULL) — is refused; the
+    // caller must (re-)login, where GitHub proves name ownership. 409 keeps every deployed CLI's
+    // self-heal working: on 409 it re-logins (refreshing the bound handle) and retries once.
+    const bound = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
+      .bind(githubId)
+      .first<{ handle: string | null; handle_lower: string | null }>();
+    if (bound?.handle_lower !== handleLower || bound.handle === null) {
+      return err(409, "handle_not_bound", {
+        message: "Publish uses the handle bound at login. Run `ymmv login` and retry.",
+      });
+    }
+    boundHandle = bound.handle;
 
-    // One atomic batch — D1 has no interactive transactions. handleBindStatements does history +
-    // claim (stampPublish marks the row published; release:false — publish never transfers a live
-    // handle, login does). Then, critically, delete-then-insert entries so a republish drops keys.
-    await env.DB.batch([
-      ...handleBindStatements(env.DB, githubId, handle, now, {
-        stampPublish: true,
-        extrasJson,
-        release: false,
-      }),
-      env.DB.prepare("DELETE FROM profile_entries WHERE github_id = ?").bind(githubId),
+    // One atomic batch — D1 has no interactive transactions. Publish never writes handle or
+    // handle_lower: it stamps the row published (updated_at + extras) and rewrites the entries,
+    // and EVERY statement re-checks the bind (WHERE handle_lower = ?) inside the transaction. That
+    // closes the guard-to-batch TOCTOU as a CAS: if a concurrent login rebound this account (GitHub
+    // rename on another device) or a concurrent DELETE vacated it (handle_lower NULL), the whole
+    // batch no-ops — a stale publish can neither undo a GitHub-proven rename nor resurrect a
+    // deleted profile. Delete-then-insert entries so a republish drops keys.
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE users SET extras = ?, updated_at = ? WHERE github_id = ? AND handle_lower = ?",
+      ).bind(extrasJson, now, githubId, handleLower),
+      env.DB.prepare(
+        "DELETE FROM profile_entries WHERE github_id = ? " +
+          "AND EXISTS (SELECT 1 FROM users WHERE github_id = ? AND handle_lower = ?)",
+      ).bind(githubId, githubId, handleLower),
       ...[...entryMap].map(([key, value]) =>
-        env.DB.prepare("INSERT INTO profile_entries (github_id, key, value) VALUES (?, ?, ?)").bind(
-          githubId,
-          key,
-          value,
-        ),
+        env.DB.prepare(
+          "INSERT INTO profile_entries (github_id, key, value) " +
+            "SELECT ?, ?, ? FROM users WHERE github_id = ? AND handle_lower = ?",
+        ).bind(githubId, key, value, githubId, handleLower),
       ),
     ]);
+    // The stamp UPDATE matching zero rows means the bind changed mid-flight (and the shared WHERE
+    // made every other statement no-op with it) — same verdict as the guard, one race later.
+    if ((results[0]?.meta.changes ?? 0) === 0) {
+      return err(409, "handle_not_bound", {
+        message: "Publish uses the handle bound at login. Run `ymmv login` and retry.",
+      });
+    }
   } catch (e) {
-    if (isUniqueViolation(e)) return err(409, "handle_taken"); // lost a concurrent free-handle race
     console.error("profile upsert failed for", handleLower, e);
     return err(500, "internal_error");
   }
 
-  return new Response(JSON.stringify({ ok: true, handle }), {
+  // Echo the STORED handle, not the payload: display casing is login-proven (GitHub's exact login
+  // casing) and a publish must not be able to drift it via a case-variant payload.
+  return new Response(JSON.stringify({ ok: true, handle: boundHandle }), {
     status: 200,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
@@ -166,10 +181,10 @@ export const POST: APIRoute = async ({ request }) => {
 
 // DELETE /api/v1/profile — authed hard-delete (v1 delete semantics). One atomic batch:
 //   • record the current handle in handle_history BEFORE clearing it (the SELECT reads the live
-//     value in-transaction). This keeps the handle from being publish-squatted by another account:
-//     the POST takeover guard treats a vacated (history) handle as taken, so reclaim flows ONLY
-//     through a GitHub-proven login — never an arbitrary publish (no impersonation of the GitHub
-//     owner after they delete). The owner themselves re-claim freely (the guard excludes own id).
+//     value in-transaction). Nobody can publish-squat the vacated handle: POST's bound-handle guard
+//     refuses any handle not currently login-bound, so reclaim (the owner's included — delete also
+//     clears their bind) flows ONLY through a GitHub-proven login, never an arbitrary publish (no
+//     impersonation of the GitHub owner after they delete).
 //   • drop the user's profile_entries,
 //   • clear handle/handle_lower (→ reclaimable) + extras, and NULL updated_at so the row reads as
 //     "no profile" (GET 404s); the users row is kept so a later login re-binds the same github_id,
