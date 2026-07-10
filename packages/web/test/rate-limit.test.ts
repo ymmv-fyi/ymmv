@@ -4,6 +4,7 @@ import type { APIContext } from "astro";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
 import { authRateLimitKey, writeRateLimitKey } from "../src/lib/rate-limit.ts";
+import { handleBindStatements } from "../src/lib/users.ts";
 import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
 
@@ -138,6 +139,10 @@ describe("rate limiting", () => {
   });
 
   it("a fresh identity under the limit publishes normally (200) — limiter doesn't block real traffic", async () => {
+    // Publish requires the login-bound handle, so bind first (the statements login runs).
+    await env.DB.batch(
+      handleBindStatements(env.DB, GID_FRESH, "rlfresh", new Date().toISOString()),
+    );
     const res = await POST(postCtx(TOK_FRESH, "rlfresh"));
     expect(res.status).toBe(200);
   });

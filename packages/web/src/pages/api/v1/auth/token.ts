@@ -64,11 +64,9 @@ export const POST: APIRoute = async ({ request }) => {
     const { id, login } = user;
     let handle: string | null;
     if (isValidHandle(login) && !isReserved(login.toLowerCase())) {
-      // Authoritative bind — introspection just proved the caller owns `login`. release:true takes
-      // it from any stale holder; stampPublish:false — a login is not a publish (updated_at stays NULL).
-      await env.DB.batch(
-        handleBindStatements(env.DB, id, login, now, { stampPublish: false, release: true }),
-      );
+      // Authoritative bind — introspection just proved the caller owns `login`. It takes the handle
+      // from any stale holder; a login is not a publish (updated_at stays NULL).
+      await env.DB.batch(handleBindStatements(env.DB, id, login, now));
       handle = login;
     } else {
       // Rare: the GitHub username collides with a reserved route/verb, so this identity can't hold a

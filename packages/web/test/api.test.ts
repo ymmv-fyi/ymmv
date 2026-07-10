@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
 import { handleBindStatements } from "../src/lib/users.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
@@ -59,6 +59,13 @@ function profile(
 
 const publish = (token: string, p: unknown) => POST(postCtx(token, p));
 
+// Login-equivalent authoritative bind (the exact statements POST /api/v1/auth/token runs after
+// GitHub introspection proves the handle). Publish REQUIRES a prior bind — its bound-handle guard
+// refuses any handle login didn't bind — so tests bind before they publish, like a real login does.
+async function bindHandle(githubId: number, handle: string) {
+  await env.DB.batch(handleBindStatements(env.DB, githubId, handle, new Date().toISOString()));
+}
+
 async function readProfile(handle: string): Promise<Profile> {
   const res = await GET(getCtx(handle));
   expect(res.status).toBe(200);
@@ -68,6 +75,7 @@ async function readProfile(handle: string): Promise<Profile> {
 beforeEach(async () => {
   await seedToken(TOKEN, GID1);
   await seedToken(TOKEN2, GID2);
+  await bindHandle(GID1, "alice"); // most tests publish as gid1/"alice"; gid2 stays unbound
 });
 
 describe("POST auth", () => {
@@ -279,6 +287,7 @@ describe("publish + read round-trip", () => {
 
 describe("republish deletes removed keys (critical)", () => {
   it("a key removed on republish disappears from the read", async () => {
+    await bindHandle(GID1, "bob");
     await publish(
       TOKEN,
       profile("bob", [
@@ -294,9 +303,10 @@ describe("republish deletes removed keys (critical)", () => {
 });
 
 describe("rename + reclaim precedence", () => {
-  it("rename: old handle 301s to the new one; new is live; history recorded", async () => {
+  it("rename (via re-login bind): old handle 301s to the new one; new is live; history recorded", async () => {
     await publish(TOKEN, profile("alice", [{ key: "editor", value: "Vim" }]));
-    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }])); // same github_id
+    await bindHandle(GID1, "alice2"); // GitHub rename lands at the next login (alice → history)
+    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }]));
 
     const old = await GET(getCtx("alice"));
     expect(old.status).toBe(301);
@@ -311,23 +321,37 @@ describe("rename + reclaim precedence", () => {
     expect(hist?.github_id).toBe(GID1);
   });
 
+  it("publish CANNOT rename — a handle the account did not bind at login is refused (409)", async () => {
+    await publish(TOKEN, profile("alice", [{ key: "editor", value: "Vim" }])); // gid1 bound + publishes alice
+    // "renametry" is unique to this test — D1 state persists across tests in this file, so a
+    // handle another test renamed away would 301 here and fake a claim.
+    const res = await publish(TOKEN, profile("renametry", [{ key: "editor", value: "Vim" }])); // same gid, unbound name
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
+    expect((await GET(getCtx("renametry"))).status).toBe(404); // nothing claimed
+    expect((await GET(getCtx("alice"))).status).toBe(200); // original untouched
+  });
+
   it("publish CANNOT reclaim a handle another account vacated (409) — reclaim is login-only", async () => {
     await publish(TOKEN, profile("alice", [{ key: "editor", value: "Vim" }])); // gid1 → alice
-    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }])); // gid1 renames away (alice → history)
+    await bindHandle(GID1, "alice2"); // gid1 renames away at re-login (alice → history)
+    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }]));
     expect((await GET(getCtx("alice"))).status).toBe(301);
 
     // gid2 tries to grab the vacated "alice" via a crafted publish → rejected (would hijack the 301).
     const res = await publish(TOKEN2, profile("alice", [{ key: "shell", value: "fish" }]));
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toBe("handle_taken");
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
     // "alice" still redirects to gid1's current handle — not hijacked (login is the only reclaim path).
     expect((await GET(getCtx("alice"))).headers.get("location")).toBe("/api/v1/u/alice2");
   });
 
   it("cross-account login-reclaim of a recycled handle: stale history cleared, reclaimer publishes, GET resolves to them", async () => {
-    // gid 5101 owns "reclaimme", then renames away → "reclaimme" lands in handle_history under 5101.
+    // gid 5101 owns "reclaimme", then renames away (re-login bind) → history row under 5101.
     await seedToken("rcl-a", 5101);
+    await bindHandle(5101, "reclaimme");
     await publish("rcl-a", profile("reclaimme", [{ key: "editor", value: "Vim" }]));
+    await bindHandle(5101, "rclnew");
     await publish("rcl-a", profile("rclnew", [{ key: "editor", value: "Vim" }]));
     // Sanity: with only the history row (no live owner), "reclaimme" 301s to 5101's current handle.
     expect((await GET(getCtx("reclaimme"))).status).toBe(301);
@@ -337,9 +361,7 @@ describe("rename + reclaim precedence", () => {
     // statements POST /api/v1/auth/token runs. (The prior version of this test faked this with a direct
     // updated_at INSERT, an unreachable state that masked the bug.)
     const now = new Date().toISOString();
-    await env.DB.batch(
-      handleBindStatements(env.DB, 5102, "reclaimme", now, { stampPublish: false, release: true }),
-    );
+    await env.DB.batch(handleBindStatements(env.DB, 5102, "reclaimme", now));
 
     // The stale handle_history row from 5101 must be gone — current GitHub-proven ownership supersedes
     // it. So the freshly-reclaimed-but-unpublished handle reads as 404, NOT a 301 back to 5101.
@@ -360,13 +382,14 @@ describe("rename + reclaim precedence", () => {
 
 describe("handle takeover blocked (login is the authoritative binder)", () => {
   it("409 when a token claims a handle held live by another github_id; victim keeps it intact", async () => {
+    await bindHandle(GID1, "famous");
     await publish(TOKEN, profile("famous", [{ key: "editor", value: "Vim" }])); // gid1 holds famous live
 
     // gid2 (a different account) submits handle "famous". A token only proves github_id, so publish
     // refuses — a live handle only transfers through `login` (GitHub /user proof).
     const res = await publish(TOKEN2, profile("famous", [{ key: "shell", value: "fish" }]));
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: string }).error).toBe("handle_taken");
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
 
     // victim (gid1) still owns "famous", unchanged — not displaced to limbo.
     const owner = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
@@ -377,7 +400,24 @@ describe("handle takeover blocked (login is the authoritative binder)", () => {
     expect((await readProfile("famous")).entries).toEqual([{ key: "editor", value: "Vim" }]);
   });
 
-  it("still allows claiming a FREE handle and republishing your own (the guard only blocks live foreign handles)", async () => {
+  it("409 when a token claims an UNCLAIMED handle it never bound — the pre-owner squat (SEC-1)", async () => {
+    // gid2 has a valid token but no login bind for "torvalds"; nobody holds the handle at all.
+    // Pre-guard this stored and served attacker content at /torvalds until the real owner's first
+    // login self-healed it. Now publish refuses: only login (GitHub /user proof) introduces a handle.
+    const unbound = await publish(TOKEN2, profile("torvalds", [{ key: "shell", value: "fish" }]));
+    expect(unbound.status).toBe(409);
+    expect(((await unbound.json()) as { error: string }).error).toBe("handle_not_bound");
+
+    // Same refusal when the account IS bound — just to a different name.
+    await bindHandle(GID2, "mallory");
+    const mismatch = await publish(TOKEN2, profile("torvalds", [{ key: "shell", value: "fish" }]));
+    expect(mismatch.status).toBe(409);
+
+    expect((await GET(getCtx("torvalds"))).status).toBe(404); // nothing was claimed or stored
+  });
+
+  it("a login-bound handle publishes and republishes freely (the guard only demands the bind)", async () => {
+    await bindHandle(GID2, "freehandle");
     expect(
       (await publish(TOKEN2, profile("freehandle", [{ key: "shell", value: "fish" }]))).status,
     ).toBe(200);
@@ -385,6 +425,63 @@ describe("handle takeover blocked (login is the authoritative binder)", () => {
       (await publish(TOKEN2, profile("freehandle", [{ key: "shell", value: "zsh" }]))).status,
     ).toBe(200);
     expect((await readProfile("freehandle")).entries).toEqual([{ key: "shell", value: "zsh" }]);
+  });
+
+  it("a case VARIANT of the bound handle publishes (guard compares lowercase) but cannot drift the display casing", async () => {
+    // GitHub logins are case-insensitive but display-cased; login binds the exact casing. A guard
+    // regression comparing raw payload to users.handle would 409 every capitalized-login user.
+    await seedToken("case-tok", 6001);
+    await bindHandle(6001, "CamelCase");
+    const res = await publish("case-tok", profile("camelcase", [{ key: "editor", value: "Vim" }]));
+    expect(res.status).toBe(200);
+    // The response echoes the STORED (login-proven) casing, not the payload's.
+    expect(((await res.json()) as { handle: string }).handle).toBe("CamelCase");
+    expect(
+      (await publish("case-tok", profile("CAMELCASE", [{ key: "os", value: "Arch" }]))).status,
+    ).toBe(200);
+    // Publish writes neither handle nor handle_lower — display casing stays GitHub's.
+    const row = await env.DB.prepare("SELECT handle FROM users WHERE github_id = ?")
+      .bind(6001)
+      .first<{ handle: string }>();
+    expect(row?.handle).toBe("CamelCase");
+    expect((await readProfile("camelcase")).handle).toBe("CamelCase");
+  });
+
+  it("guard-to-batch race: a login rebinding the handle mid-flight no-ops the publish (409, nothing written)", async () => {
+    // The bound-handle guard is a pre-read; the batch re-checks the bind in every statement (CAS).
+    // Interleave a competing GitHub-proven login (gid 7002 now owns "racer") between the two by
+    // wrapping the handler's batch call — the exact TOCTOU window.
+    await seedToken("race-tok", 7001);
+    await bindHandle(7001, "racer");
+    const realBatch = env.DB.batch.bind(env.DB);
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      await realBatch(handleBindStatements(env.DB, 7002, "racer", new Date().toISOString()));
+      return realBatch(stmts);
+    });
+    const res = await publish("race-tok", profile("racer", [{ key: "editor", value: "Vim" }]));
+    spy.mockRestore();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
+
+    // The stale publish wrote NOTHING: gid 7002 keeps the handle, gid 7001 stays released and
+    // unpublished, and no entries landed for 7001.
+    const owner = await env.DB.prepare("SELECT github_id FROM users WHERE handle_lower = ?")
+      .bind("racer")
+      .first<{ github_id: number }>();
+    expect(owner?.github_id).toBe(7002);
+    const stale = await env.DB.prepare(
+      "SELECT handle_lower, updated_at FROM users WHERE github_id = ?",
+    )
+      .bind(7001)
+      .first<{ handle_lower: string | null; updated_at: string | null }>();
+    expect(stale?.handle_lower).toBeNull();
+    expect(stale?.updated_at).toBeNull();
+    const entries = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM profile_entries WHERE github_id = ?",
+    )
+      .bind(7001)
+      .first<{ n: number }>();
+    expect(entries?.n).toBe(0);
   });
 });
 
@@ -406,7 +503,8 @@ describe("GET status matrix", () => {
   });
   it("404 when the 301 target was deleted", async () => {
     await publish(TOKEN, profile("alice", [{ key: "editor", value: "Vim" }]));
-    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }])); // history alice→gid1
+    await bindHandle(GID1, "alice2"); // rename at re-login → history alice→gid1
+    await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }]));
     await env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(GID1).run(); // hard delete
     await env.DB.prepare("DELETE FROM profile_entries WHERE github_id = ?").bind(GID1).run();
     expect((await GET(getCtx("alice"))).status).toBe(404);
@@ -453,7 +551,7 @@ describe("DELETE — hard delete + reclaim protection", () => {
     expect((await publish(TOKEN, profile("alice"))).status).toBe(401);
   });
 
-  it("protects the vacated handle from a publish-squat; the owner can re-claim it", async () => {
+  it("protects the vacated handle from a publish-squat; the owner re-claims it via re-login", async () => {
     await publish(TOKEN, profile("alice"));
     await del(TOKEN);
 
@@ -462,8 +560,13 @@ describe("DELETE — hard delete + reclaim protection", () => {
       409,
     );
 
-    // the original owner, re-authenticated (fresh token, same github_id), republishes it freely
+    // delete cleared the owner's own bind too, so even THEIR publish needs the re-login first —
+    // which the real flow forces anyway (delete revoked every token). Fresh login = token + bind.
     await seedToken("alice-fresh", GID1);
+    expect(
+      (await publish("alice-fresh", profile("alice", [{ key: "os", value: "macOS" }]))).status,
+    ).toBe(409);
+    await bindHandle(GID1, "alice");
     expect(
       (await publish("alice-fresh", profile("alice", [{ key: "os", value: "macOS" }]))).status,
     ).toBe(200);
