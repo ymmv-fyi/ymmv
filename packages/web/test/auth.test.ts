@@ -181,6 +181,21 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(user?.handle).toBeNull();
   });
 
+  it("an all-numeric reserved GitHub username (404) → handle:null, token still minted", async () => {
+    // "404" passes isValidHandle (GitHub allows all-numeric logins), so only the reserved
+    // check keeps it out of the users table. Distinct from the "login"/"set" cases, which
+    // are word-shaped and could pass for a verb collision test alone.
+    stubGithub(() => introspectOk(404_404, "404"));
+    const { token, handle } = await mint();
+    expect(handle).toBeNull();
+    expect(token.startsWith("ymmv_")).toBe(true);
+    const user = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
+      .bind(404_404)
+      .first<{ handle: string | null; handle_lower: string | null }>();
+    expect(user?.handle).toBeNull();
+    expect(user?.handle_lower).toBeNull();
+  });
+
   it("re-login refreshes the handle + records history, preserving a published row's updated_at/extras", async () => {
     stubGithub(() => introspectOk(4242, "carol"));
     const first = await mint();

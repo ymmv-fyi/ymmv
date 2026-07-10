@@ -1,10 +1,12 @@
 -- E2E seed for the Playwright run (local D1 only). Idempotent: re-runnable via INSERT OR REPLACE.
 -- Covers: a live profile (antfu) with a deliberately long dotfiles URL (long-value wrap), a second
--- profile (bardisty) to diff against, a renamed-away handle (antfuold → 301 → antfu), and an XSS
--- row (xsstest) to prove HTML-escaping + the safeHref javascript:-scheme guard.
+-- profile (bardisty) to diff against, a renamed-away handle (antfuold → 301 → antfu), an XSS
+-- row (xsstest) to prove HTML-escaping + the safeHref javascript:-scheme guard, and a live row on
+-- the RESERVED handle `404` (6006) that the write API now refuses to create — seeded directly so
+-- the reserved read-gate is exercised against real data instead of an absent row.
 
-DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005);
-DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005);
+DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006);
+DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006);
 
 INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES
   (1001, 'antfu', 'antfu',
@@ -18,7 +20,13 @@ INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_a
   (4004, 'plainuser', 'plainuser', '[]',
    '2026-06-28T12:00:00.000Z', '2026-06-23T00:00:00.000Z'),
   (5005, 'collide', 'collide', '[]',
-   '2026-06-28T13:00:00.000Z', '2026-06-24T00:00:00.000Z');
+   '2026-06-28T13:00:00.000Z', '2026-06-24T00:00:00.000Z'),
+  -- Reserved handle with a LIVE published row: /404 is shadowed by the static 404.astro page, so
+  -- the JSON endpoint must refuse it too or the two surfaces disagree. Without this row both
+  -- surfaces would 404 merely because the handle is unclaimed, and the parity test would pass
+  -- against unfixed code.
+  (6006, '404', '404', '[{"label":"Launcher","value":"Raycast"}]',
+   '2026-06-28T14:00:00.000Z', '2026-06-25T00:00:00.000Z');
 
 INSERT INTO profile_entries (github_id, key, value) VALUES
   (1001, 'editor', 'VS Code'),
@@ -54,7 +62,9 @@ INSERT INTO profile_entries (github_id, key, value) VALUES
   (4004, 'dotfiles', 'github.com/plain/dots'),
   (5005, 'editor', 'Zed'),
   (5005, 'os', 'Windows'),
-  (5005, 'dotfiles', 'https://github.com/plain/dots');
+  (5005, 'dotfiles', 'https://github.com/plain/dots'),
+  (6006, 'editor', 'Neovim'),
+  (6006, 'os', 'Arch');
 
 -- antfu was renamed away from "antfuold" → that old URL must 301 to /antfu.
 INSERT OR REPLACE INTO handle_history (old_handle_lower, github_id, changed_at) VALUES

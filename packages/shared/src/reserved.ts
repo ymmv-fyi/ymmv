@@ -2,16 +2,19 @@
  * Reserved names + handle validation.
  *
  * Identity is the GitHub handle, so claiming is automatic. Two carve-outs:
- *  - a small set of root path segments are reserved (only `api`/`login`/`logout`);
+ *  - every top-level route the web app serves itself is reserved;
  *  - the CLI verb words are reserved so `ymmv <verb>` never collides with a real handle.
  *
- * `isReserved`/`isValidHandle` are the single source of truth both the CLI (pre-check)
- * and the API (enforce on write) import. The API is the real trust boundary — it
- * re-checks server-side; these helpers do not replace that.
+ * `isReserved`/`isValidHandle` are the single source of truth the API imports and enforces
+ * on write — it is the trust boundary. `RESERVED_ROUTES` must list every static top-level
+ * page route, because Astro resolves a static route ahead of the dynamic `[handle]` page:
+ * a handle-shaped route left off this list is claimable but its HTML page is unreachable,
+ * so the JSON and HTML surfaces disagree forever. `web/test/routes.test.ts` pins that
+ * invariant against the real route table.
  */
 
 /** Root path segments the web app reserves (everything else at root is a handle). */
-export const RESERVED_ROUTES = ["api", "login", "logout"] as const;
+export const RESERVED_ROUTES = ["404", "api", "login", "logout"] as const;
 
 /** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous. */
 export const CLI_VERBS = ["login", "logout", "set", "unset", "delete", "view", "help"] as const;
