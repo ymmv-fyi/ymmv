@@ -44,6 +44,7 @@ jobs:
   # dispatch honors its inputs.
   prep:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       environment: ${{ steps.x.outputs.environment }}
       dry_run: ${{ steps.x.outputs.dry_run }}
@@ -79,10 +80,11 @@ jobs:
   # Pre-flight gate — the same checks CI runs, on the LTS floor. Nothing publishes/deploys if red.
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -91,7 +93,7 @@ jobs:
       # Cache the fonts Astro downloads at build (Fontshare + Google) so the release build reuses them
       # instead of re-fetching; a provider outage then can't fail a cached build on the deploy path.
       - name: Cache Astro font downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: packages/web/node_modules/.astro/fonts
           key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
@@ -104,16 +106,21 @@ jobs:
   # "staging npm"); every dispatch is --dry-run regardless of environment. Runs AFTER deploy-worker so
   # a tag release is sequenced (deploy the worker first, then publish the CLI) — no half-release if the
   # deploy fails, and the brief in-between window is the backward-compatible one (new worker, old CLI).
+  # NOTE: `npm publish` is NOT idempotent — re-running the whole workflow after a successful publish
+  # 403s at the registry. To retry a partially failed release, use `gh run rerun <id> --failed`.
+  # If THIS job is the failed one, first check `npm view ymmv-cli@<version>`: if the version exists,
+  # the publish landed despite the failure — don't rerun it; cut the GitHub Release by hand instead.
   publish-cli:
     needs: [prep, gate, deploy-worker]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write # OIDC: Trusted Publishing auth + provenance
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -154,20 +161,21 @@ jobs:
   deploy-worker:
     needs: [prep, gate]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ymmv/shared build
       - name: Cache Astro font downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: packages/web/node_modules/.astro/fonts
           key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
@@ -217,12 +225,13 @@ jobs:
     needs: [prep, publish-cli]
     if: github.event_name == 'push' && needs.prep.outputs.dry_run == 'false'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write # create/edit the GitHub Release for this tag
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Cut the GitHub Release from the CHANGELOG
         # Never inline the tag/version into the script — a ref name is attacker-influenced (same reason
         # the Stamp version step passes VERSION via env). The notes go through a file, so backticks and
