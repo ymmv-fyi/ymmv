@@ -105,6 +105,9 @@ describe("POST validation", () => {
   it("422 reserved handle", async () => {
     expect((await publish(TOKEN, profile("api"))).status).toBe(422);
   });
+  it("422 reserved handle: 404 (a valid GitHub login shadowed by the static /404 route)", async () => {
+    expect((await publish(TOKEN, profile("404"))).status).toBe(422);
+  });
   it("422 non-curated key", async () => {
     expect(
       (await publish(TOKEN, profile("alice", [{ key: "hairstyle", value: "mohawk" }]))).status,
@@ -132,6 +135,50 @@ describe("POST validation", () => {
       (await publish(TOKEN, profile("alice", [], [{ label: "x".repeat(65), value: "v" }]))).status,
     ).toBe(422);
   });
+  it("422 empty extra label/value", async () => {
+    expect((await publish(TOKEN, profile("alice", [], [{ label: "", value: "" }]))).status).toBe(
+      422,
+    );
+  });
+  it("422 whitespace-only extra label/value", async () => {
+    expect(
+      (await publish(TOKEN, profile("alice", [], [{ label: "   ", value: " " }]))).status,
+    ).toBe(422);
+  });
+  it("422 single-sided blank extra (label set, value blank)", async () => {
+    expect(
+      (await publish(TOKEN, profile("alice", [], [{ label: "Launcher", value: "  " }]))).status,
+    ).toBe(422);
+  });
+  it("422 zero-width-only extra label (invisible, but survives trim())", async () => {
+    // ​ is a format char, not whitespace: "​".trim() is still length 1, so an
+    // emptiness check alone stores it and the page renders a blank row.
+    expect((await publish(TOKEN, profile("alice", [], [{ label: "​", value: "v" }]))).status).toBe(
+      422,
+    );
+  });
+  it("422 zero-width-only extra value", async () => {
+    expect(
+      (await publish(TOKEN, profile("alice", [], [{ label: "Launcher", value: "‍" }]))).status,
+    ).toBe(422);
+  });
+  it("422 bidi-control-only extra label", async () => {
+    expect((await publish(TOKEN, profile("alice", [], [{ label: "‮", value: "v" }]))).status).toBe(
+      422,
+    );
+  });
+  it("200 when an invisible char merely decorates real content", async () => {
+    // Only WHOLLY invisible labels are rejected; the stored string keeps the user's bytes.
+    expect(
+      (await publish(TOKEN, profile("alice", [], [{ label: "Laun​cher", value: "v" }]))).status,
+    ).toBe(200);
+  });
+  it("200 for a padded label at the cap — the cap applies to the trimmed string", async () => {
+    const padded = `  ${"x".repeat(64)}  `;
+    expect(
+      (await publish(TOKEN, profile("alice", [], [{ label: padded, value: "v" }]))).status,
+    ).toBe(200);
+  });
 });
 
 describe("publish + read round-trip", () => {
@@ -152,6 +199,38 @@ describe("publish + read round-trip", () => {
     expect(p.entries.map((e) => e.key)).toEqual(["editor", "os"]); // canonical order, not input order
     expect(p.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
     expect(typeof p.updated_at).toBe("string");
+  });
+
+  it("stores extras trimmed, so a padded label never renders padded", async () => {
+    await publish(TOKEN, profile("alice", [], [{ label: "  Launcher  ", value: "  Raycast  " }]));
+    const p = await readProfile("alice");
+    expect(p.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+  });
+
+  it("a reserved handle 404s the JSON even when a live row exists (HTML/JSON parity)", async () => {
+    // The static /404 page shadows the dynamic [handle] page, so HTML can only ever render
+    // NotFound for this handle. Seed a live published row straight into D1 — the shape a
+    // grandfathered claim would leave behind, which the write API now refuses to create —
+    // and the read path must still refuse to serve it, or the two surfaces disagree.
+    await env.DB.prepare(
+      "INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+      .bind(
+        9009,
+        "404",
+        "404",
+        '[{"label":"Launcher","value":"Raycast"}]',
+        "2026-07-09T00:00:00.000Z",
+        "2026-07-01T00:00:00.000Z",
+      )
+      .run();
+
+    const res = await GET(getCtx("404"));
+    expect(res.status).toBe(404);
+    // Not just the status: the body must not echo the row either. resolveProfile short-circuits
+    // on isReserved before it reads D1, and this pins that ordering — a refactor that reserved
+    // AFTER the read would still 404 while leaking the profile in the body.
+    expect(await res.text()).not.toContain("Raycast");
   });
 
   it("round-trips the three 13-key-taxonomy additions through POST validation", async () => {
