@@ -15,19 +15,20 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         # Test the engines floor (>=22) AND the dev version (26).
         node: [22, 26]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # pnpm BEFORE setup-node: setup-node's pnpm cache needs the pnpm store path.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         # version read from the root package.json "packageManager" field.
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -37,7 +38,7 @@ jobs:
       # Cache the fonts Astro downloads at build (Fontshare + Google) so a cold runner reuses them
       # instead of re-fetching every run; a provider outage then can't fail a cached build.
       - name: Cache Astro font downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: packages/web/node_modules/.astro/fonts
           key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}
@@ -53,10 +54,11 @@ jobs:
   # these hit the real deployed artifact. Separate job: keeps unit/lint signal fast + independent.
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -64,7 +66,7 @@ jobs:
       # shared must be built (web imports its dist) before the e2e webServer runs `astro build`.
       - run: pnpm --filter @ymmv/shared build
       - name: Cache Astro font downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: packages/web/node_modules/.astro/fonts
           key: astro-fonts-${{ runner.os }}-${{ hashFiles('packages/web/astro.config.mjs') }}

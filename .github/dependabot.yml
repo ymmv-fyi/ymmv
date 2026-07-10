@@ -1,0 +1,14 @@
+# Keeps the SHA-pinned actions in .github/workflows/ current (bumps the SHA and
+# the trailing `# vX.Y.Z` comment together). Actions only — npm updates are out
+# of scope here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR per week for all action bumps, not one PR per action: cheaper CI,
+    # and a single diff to review before anything reaches the release workflow.
+    groups:
+      github-actions:
+        patterns: ["*"]
