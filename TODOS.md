@@ -23,14 +23,37 @@ the web only isolates the diff-extras line (`<bdi>`) and the empty-state handle.
 sanitizer applied at render time would close the remaining within-value spoofing gap on all
 web text surfaces.
 
-### Validate extras labels on the write path
+### `=`-containing extras labels are unaddressable by `ymmv unset --extra`
 **Priority:** P4
-`POST /api/v1/profile` stores extras labels verbatim (`profile.ts:92-98`) — only type + length are
-checked, so empty, whitespace-only/padded, and `=`-containing labels are all storable. The CLI now
-tolerates padded labels (trimmed matchers in `profile-ops.ts`), but `=`-containing and empty
-labels remain unaddressable by `ymmv unset --extra` (parse-level: `=` is rejected with a hint,
-empty is a usage error). Root-cause fix: trim labels and reject degenerate ones (empty after trim)
-at the write boundary. Surfaced by the `ymmv unset` pre-landing review (2026-07-01, cross-model).
+The write path now trims extras labels/values and rejects empty ones, so padded and blank labels
+are gone. A label containing `=` is still storable via curl and still cannot be targeted by
+`ymmv unset --extra` (parse-level: `=` splits label from value and is rejected with a hint). Either
+reject `=` in labels at the write boundary, or give the CLI an escape syntax. Surfaced by the
+`ymmv unset` pre-landing review (2026-07-01, cross-model); narrowed once trim+empty-rejection shipped.
+
+### Trim entry values on the write path
+**Priority:** P4
+`POST /api/v1/profile` rejects trim-empty entry values (`profile.ts:81`) but stores them raw
+(`:83`), so curl can persist `"  Vim  "` and the page renders it padded — the same gap extras had
+before they were trimmed at the boundary. The CLI already trims (`profile-ops.ts:29`), so only
+non-CLI clients are affected. Mirror the extras fix: trim, then validate, then store, matching the
+guard extras now use.
+
+### `/404` carries no cache-control header
+**Priority:** P4
+`profile-read.ts:117` states every response carries an explicit edge policy, but `/404` is served
+by the static `404.astro`, which sits off the shared resolver path and sets no `cache-control` —
+unlike a `[handle]` not-found, which gets `readCacheControl("notfound")`. Cosmetic while nothing
+edge-caches Worker responses; fix alongside "Uncached read path for RMW mutations". Surfaced by the
+reserved-handle eng review outside voice (2026-07-09).
+
+### CLI has no `isReserved` pre-check
+**Priority:** P3
+`packages/cli/src` never imports `isReserved` — `resolve.ts:128` gates only on `isValidHandle`. So
+`ymmv 404` makes a network round-trip and reports "no profile yet" (misleading), and publishing as a
+reserved GitHub login fails with a bare 422. The shared helper is already bundled. Add it as a fast,
+clear local hint only — the API stays the trust boundary. `reserved.ts` used to claim the CLI did
+this; the docstring was corrected 2026-07-09, this makes it true.
 
 ### og:image share card
 **Priority:** P3
