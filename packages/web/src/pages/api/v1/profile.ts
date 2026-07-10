@@ -20,6 +20,17 @@ const MAX_EXTRAS = 32;
 const MAX_LABEL = 64;
 const MAX_VALUE = 256;
 
+// Code points that occupy no visual space: zero-width space/joiners, the word joiner, the bidi
+// marks and embedding controls, and the invisible-operator block. `.trim()` does NOT remove these
+// (it strips the Zs whitespace set plus U+FEFF), so a label of only U+200B passes an emptiness
+// check, stores, and renders as a blank row. Reject a field only when NOTHING visible survives —
+// an invisible char decorating real text is the user's data and is stored verbatim.
+const INVISIBLE_RE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+
+function hasVisibleContent(s: string): boolean {
+  return s.replace(INVISIBLE_RE, "").trim() !== "";
+}
+
 function err(status: number, error: string, extra?: Record<string, unknown>): Response {
   return new Response(JSON.stringify({ error, ...extra }), {
     status,
@@ -83,7 +94,11 @@ export const POST: APIRoute = async ({ request }) => {
     entryMap.set(key, value);
   }
 
-  // extras: {label, value} string pairs within caps; bounded count.
+  // extras: {label, value} string pairs with visible content, within caps; bounded count. Trim
+  // BEFORE the emptiness and length checks, then store trimmed: padding is not content, so a padded
+  // label must neither pass the empty check, consume the length budget, nor render padded on the
+  // page. `hasVisibleContent` extends that to characters that render as nothing at all.
+  // Mirrors the entries rule above (and the CLI, which requires both non-empty).
   if (payload.extras !== undefined && !Array.isArray(payload.extras)) {
     return err(422, "invalid_extras");
   }
@@ -91,9 +106,14 @@ export const POST: APIRoute = async ({ request }) => {
   if (rawExtras.length > MAX_EXTRAS) return err(422, "too_many_extras", { max: MAX_EXTRAS });
   const extras: { label: string; value: string }[] = [];
   for (const x of rawExtras) {
-    const label = (x as { label?: unknown })?.label;
-    const value = (x as { value?: unknown })?.value;
-    if (typeof label !== "string" || typeof value !== "string") return err(422, "invalid_extra");
+    const rawLabel = (x as { label?: unknown })?.label;
+    const rawValue = (x as { value?: unknown })?.value;
+    if (typeof rawLabel !== "string" || typeof rawValue !== "string") {
+      return err(422, "invalid_extra");
+    }
+    const label = rawLabel.trim();
+    const value = rawValue.trim();
+    if (!hasVisibleContent(label) || !hasVisibleContent(value)) return err(422, "invalid_extra");
     if (label.length > MAX_LABEL || value.length > MAX_VALUE) return err(422, "extra_too_long");
     extras.push({ label, value });
   }

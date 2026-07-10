@@ -83,9 +83,10 @@ export function applySet(
  * what was removed — `removed: null` means nothing matched and the caller must skip the republish.
  * `removed.label` is raw stored data (the curated key / the extra's stored casing); display
  * formatting is the caller's job. Extras drop EVERY trimmed, case-insensitive label match: the
- * server stores labels verbatim with no uniqueness, so foreign-client data can hold "Keyboard",
- * "keyboard", or " Keyboard " — first-match-only (or exact-match-only) would leave a visible
- * ghost behind a success (or lying no-op) message.
+ * server trims labels on write but never lowercases them and enforces no uniqueness, so stored
+ * data can hold "Keyboard" and "keyboard" together (plus " Keyboard " on rows written before the
+ * write path trimmed) — first-match-only (or exact-match-only) would leave a visible ghost behind
+ * a success (or lying no-op) message.
  */
 export function applyUnset(
   existing: Profile,
