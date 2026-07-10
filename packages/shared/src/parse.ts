@@ -21,7 +21,11 @@ import { SCHEMA_VERSION } from "./types.js";
 // … live in the web write handler `api/v1/profile.ts` and reject on POST). These are generous and
 // decoupled on purpose: a future write-cap increase must never make the CLI reject a legit first-party
 // profile. Their only job is to stop a hostile/buggy origin from feeding the CLI pathological unbounded
-// input that the terminal ANSI/bidi sanitizer would then scan.
+// input that the terminal ANSI/bidi sanitizer would then scan. EVERY string on the Profile is bounded —
+// handle, updated_at, entry.key/value, extra.label/value — because every one of them reaches
+// sanitizeValue on some print path (a bare `typeof === "string"` check is not a ceiling).
+// MAX_PARSE_LABEL doubles as the generic short-string ceiling for handle/updated_at/entry.key: they
+// are not labels, and the shared number implies no semantic kinship, only the same scan budget.
 const MAX_PARSE_ENTRIES = 256;
 const MAX_PARSE_EXTRAS = 256;
 const MAX_PARSE_VALUE = 4096;
@@ -51,7 +55,13 @@ export function parseProfile(raw: unknown): Profile {
     throw new ProfileParseError(`unsupported schema_version: ${String(raw.schema_version)}`);
   }
   if (typeof raw.handle !== "string") throw new ProfileParseError("handle is not a string");
+  if (raw.handle.length > MAX_PARSE_LABEL) {
+    throw new ProfileParseError(`handle exceeds ${MAX_PARSE_LABEL} chars`);
+  }
   if (typeof raw.updated_at !== "string") throw new ProfileParseError("updated_at is not a string");
+  if (raw.updated_at.length > MAX_PARSE_LABEL) {
+    throw new ProfileParseError(`updated_at exceeds ${MAX_PARSE_LABEL} chars`);
+  }
 
   if (!Array.isArray(raw.entries)) throw new ProfileParseError("entries is not an array");
   if (raw.entries.length > MAX_PARSE_ENTRIES) {
@@ -65,6 +75,9 @@ export function parseProfile(raw: unknown): Profile {
     const entry = raw.entries[i];
     if (!isRecord(entry) || typeof entry.key !== "string" || typeof entry.value !== "string") {
       throw new ProfileParseError(`entry ${i} is not {key,value} strings`);
+    }
+    if (entry.key.length > MAX_PARSE_LABEL) {
+      throw new ProfileParseError(`entry ${i} key exceeds ${MAX_PARSE_LABEL} chars`);
     }
     if (entry.value.length > MAX_PARSE_VALUE) {
       throw new ProfileParseError(`entry ${i} value exceeds ${MAX_PARSE_VALUE} chars`);

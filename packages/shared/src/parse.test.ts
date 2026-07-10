@@ -64,6 +64,32 @@ describe("parseProfile", () => {
     );
   });
 
+  // Every Profile string the terminal sanitizer scans is bounded, not just entry.value:
+  // showCard prints e.key, and commands.ts prints sanitizeValue(existing.handle).
+  it("throws when an entry key exceeds the defensive length ceiling", () => {
+    const huge = "x".repeat(4097);
+    expect(() => parseProfile({ ...valid, entries: [{ key: huge, value: "v" }] })).toThrow(
+      ProfileParseError,
+    );
+  });
+
+  it("throws when handle exceeds the defensive length ceiling", () => {
+    expect(() => parseProfile({ ...valid, handle: "x".repeat(4097) })).toThrow(ProfileParseError);
+  });
+
+  it("throws when updated_at exceeds the defensive length ceiling", () => {
+    expect(() => parseProfile({ ...valid, updated_at: "x".repeat(4097) })).toThrow(
+      ProfileParseError,
+    );
+  });
+
+  it("accepts key/handle/updated_at exactly at the ceiling (boundary)", () => {
+    const max = "x".repeat(4096);
+    expect(() => parseProfile({ ...valid, entries: [{ key: max, value: "v" }] })).not.toThrow();
+    expect(() => parseProfile({ ...valid, handle: max })).not.toThrow();
+    expect(() => parseProfile({ ...valid, updated_at: max })).not.toThrow();
+  });
+
   it("throws on a sparse-array entries (holes must not bypass per-element validation)", () => {
     // `.map` would skip the holes and return a sparse Profile; an index loop must reject them.
     expect(() => parseProfile({ ...valid, entries: Array(3) })).toThrow(ProfileParseError);
