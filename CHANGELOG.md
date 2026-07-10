@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.6.2] - 2026-07-09
 
 ### Fixed
 - **`404` is now a reserved handle.** The site serves its own page at `/404`, so the handle could
@@ -231,6 +231,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.6.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.5.0
