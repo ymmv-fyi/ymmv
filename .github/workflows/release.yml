@@ -118,8 +118,13 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.x.
-      - run: npm install -g npm@latest
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.x. Pinned to the 11
+      # major, NOT `@latest`: npm 12.0.0's provenance publish is broken (npm/cli#9722 — `npm publish`
+      # dies with "Cannot find module 'sigstore'" from libnpmpublish/lib/provenance.js), and an
+      # unpinned @latest silently put it on the publish path. Cross this major deliberately.
+      # NOTE: the dispatch rehearsal runs `npm publish --dry-run`, which never exercises the
+      # provenance/OIDC path — a staging rehearsal cannot catch a failure of this class.
+      - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
       # Build the bundle (inlines the private @ymmv/shared) and stamp the release version.
       - run: pnpm --filter @ymmv/shared build
