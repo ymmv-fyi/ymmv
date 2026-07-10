@@ -447,6 +447,30 @@ describe("handle takeover blocked (login is the authoritative binder)", () => {
     expect((await readProfile("camelcase")).handle).toBe("CamelCase");
   });
 
+  it("a D1 failure in the publish batch maps to 500 internal_error", async () => {
+    await seedToken("boom-tok", 8001);
+    await bindHandle(8001, "boomer");
+    const spy = vi.spyOn(env.DB, "batch").mockRejectedValueOnce(new Error("D1_ERROR: boom"));
+    const res = await publish("boom-tok", profile("boomer", [{ key: "editor", value: "Vim" }]));
+    spy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe("internal_error");
+  });
+
+  it("a same-handle re-bind leaves NO history row (history records renames only)", async () => {
+    // Both bind statements target this: statement 1's WHERE excludes a same-handle claim, and 2b
+    // clears any marker for the claimed handle. The observable invariant is what matters: re-login
+    // under an unchanged GitHub login must not seed handle_history.
+    await bindHandle(9101, "samesame");
+    await bindHandle(9101, "samesame");
+    const hist = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM handle_history WHERE old_handle_lower = ?",
+    )
+      .bind("samesame")
+      .first<{ n: number }>();
+    expect(hist?.n).toBe(0);
+  });
+
   it("guard-to-batch race: a login rebinding the handle mid-flight no-ops the publish (409, nothing written)", async () => {
     // The bound-handle guard is a pre-read; the batch re-checks the bind in every statement (CAS).
     // Interleave a competing GitHub-proven login (gid 7002 now owns "racer") between the two by
