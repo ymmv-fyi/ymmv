@@ -63,6 +63,15 @@ design-polish plan (2026-07-01).
 
 ## CLI
 
+### Surface the server's publish-409 message in the CLI
+**Priority:** P4
+`publishProfile` (`api.ts:91-95`) hardcodes "that handle is taken by another account" on a second
+409 and discards the server's `message` field. Since the bound-handle guard, the dominant 409 body
+is `handle_not_bound` with actionable copy the user never sees; the hardcoded line stays accurate
+only for the rare mid-flight race. Mirror `rateLimitMessage`: prefer `wireText(body.message)` when
+present, keep the current copy as fallback. Surfaced by the bound-handle pre-landing review
+(2026-07-10, cross-model).
+
 ### Harden displayUrl display-shortening on both surfaces (web + CLI)
 **Priority:** P4
 `displayUrl()` strips only a leading `https://` for display (web `display-value.ts:6-16`, CLI
