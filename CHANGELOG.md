@@ -2,6 +2,15 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **`404` is now a reserved handle.** The site serves its own page at `/404`, so the handle could
+  be published but never viewed.
+- **Extras labels and values are trimmed, and blank ones are rejected.** Padded labels no longer
+  render padded. A label or value with nothing visible in it, whether empty, whitespace, or
+  zero-width characters, is refused instead of stored as an empty row.
+
 ## [0.6.1] - 2026-07-02
 
 ### Changed
