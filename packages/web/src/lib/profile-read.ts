@@ -53,7 +53,7 @@ function orderEntries(rows: { key: string; value: string }[]): Entry[] {
  *   live published owner  → { live }       (200)
  *   renamed away          → { renamed }     (caller emits 301 to the current handle)
  *   reclaimed / unknown / reserved / unpublished / 301-target-gone → { notfound } (404)
- * A reserved root segment (`api`/`login`/`logout`) never resolves to a profile.
+ * A reserved root segment (see `RESERVED_ROUTES`) never resolves to a profile.
  */
 export async function resolveProfile(
   db: D1Database,

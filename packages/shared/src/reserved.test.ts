@@ -13,6 +13,13 @@ describe("isReserved()", () => {
     expect(isReserved("Login")).toBe(true);
   });
 
+  it("reserves 404 — the static page route shadows the dynamic [handle] page", () => {
+    // `404` is a valid GitHub login, so without this the handle is claimable while
+    // /404 renders the not-found page and /api/v1/u/404 serves the profile JSON.
+    expect(isValidHandle("404")).toBe(true);
+    expect(isReserved("404")).toBe(true);
+  });
+
   it("does not reserve an ordinary handle", () => {
     expect(isReserved("antfu")).toBe(false);
     expect(isReserved("bah")).toBe(false);

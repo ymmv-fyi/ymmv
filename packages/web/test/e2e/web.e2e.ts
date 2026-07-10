@@ -138,6 +138,30 @@ test.describe("routing", () => {
     await expect(page.locator(".empty-msg")).toContainText("no ymmv profile for");
   });
 
+  test("the reserved handle 404 never resolves to a profile, on HTML or JSON", async ({
+    page,
+    request,
+  }) => {
+    // The seed holds a LIVE published row for handle `404` (github_id 6006) — the shape a
+    // grandfathered claim would leave behind. Astro serves the static 404.astro page at /404
+    // ahead of the dynamic [handle] page, so HTML can never render that profile; the JSON
+    // endpoint must agree. Drop the seed row and this test passes vacuously.
+    //
+    // The HTML half pins Astro's static-route precedence (a structural fact, true with or
+    // without the reservation). The JSON half is the actual guard on RESERVED_ROUTES: without
+    // `404` reserved it returns 200 + the profile.
+    const html = await page.goto("/404");
+    expect(html?.status()).toBe(404);
+    // The generic not-found page, never the spec sheet a live profile renders.
+    await expect(page.locator("p.empty-msg")).toContainText("no page here.");
+    await expect(page.locator("table.spec")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("Neovim");
+
+    const json = await request.get("/api/v1/u/404", { maxRedirects: 0 });
+    expect(json.status()).toBe(404);
+    expect(await json.text()).not.toContain("Neovim");
+  });
+
   test("sends the edge-cache header on a profile read", async ({ request }) => {
     const res = await request.get("/antfu");
     expect(res.headers()["cache-control"]).toContain("stale-while-revalidate");
