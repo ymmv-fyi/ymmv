@@ -149,7 +149,9 @@ describe("publish auto-reauth", () => {
     vi.mocked(loadToken)
       .mockResolvedValueOnce({ base: "B", token: "t", handle: "old" })
       .mockResolvedValue({ base: "B", token: "t2", handle: "new" });
-    const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_taken" }));
+    // handle_not_bound is what the server's bound-handle guard sends for a stale handle; the CLI
+    // branches on the 409 status alone, never the error code.
+    const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" }));
     vi.stubGlobal("fetch", fetchFn);
     // The caller merged this profile from a read of "old" — which after a rename may be a
     // squatter's profile. Publishing that pre-reauth merge under the newly bound "new" would be
@@ -200,8 +202,9 @@ describe("publish auto-reauth", () => {
 
   it("second 409 after a same-handle re-login reads as handle-taken (no infinite loop)", async () => {
     // Same handle re-minted → the rebind guard passes → retry → 409 again → final verdict.
+    // Body mirrors the server's bound-handle guard; the CLI's verdict keys on the status alone.
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_taken" })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_not_bound" })));
     await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
     expect(login).toHaveBeenCalledTimes(1); // exactly one heal attempt
   });
