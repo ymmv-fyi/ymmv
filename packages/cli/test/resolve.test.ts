@@ -160,4 +160,30 @@ describe("resolveArg", () => {
   it("an invalid handle (underscore) → error", () => {
     expect(resolveArg(["not_valid"]).kind).toBe("error");
   });
+
+  it("a reserved name → local error naming the reason, never a round-trip", () => {
+    // `ymmv 404` used to make a network call and misreport "no profile yet" for a name that can
+    // never have a profile. The baked list is a hint; the API stays the trust boundary.
+    const cmd = resolveArg(["404"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/"404" is a reserved name/);
+  });
+
+  it("`view <reserved>` errors the same way (verb-colliding profiles cannot exist)", () => {
+    const cmd = resolveArg(["view", "api"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/reserved name/);
+  });
+
+  it("the reserved check is case-insensitive, matching handle comparison rules", () => {
+    const cmd = resolveArg(["API"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/reserved name/);
+  });
+
+  it("shape is checked before reservation — malformed input reads as invalid, not reserved", () => {
+    const cmd = resolveArg(["view", "bad_handle"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/not a valid GitHub handle/);
+  });
 });

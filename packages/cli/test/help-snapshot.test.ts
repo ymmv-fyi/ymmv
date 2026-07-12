@@ -11,7 +11,7 @@ Usage:
   ymmv                      detect your stack, confirm, and publish your profile
   ymmv -y                   publish without prompts (required when stdin isn't a TTY)
   ymmv <handle>             view a profile; logged in, see the diff vs yours
-  ymmv view <handle>        explicit view (when a handle collides with a verb)
+  ymmv view <handle>        explicit view (same as ymmv <handle>)
   ymmv set <key> <value>    set one curated key
   ymmv set --extra "L=V"    set a free-form extra
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
