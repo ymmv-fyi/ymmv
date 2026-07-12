@@ -52,9 +52,10 @@ export function unknownEntries(existing: Profile | null): Entry[] {
 
 /**
  * Apply one `set` change to a profile, returning fresh entries/extras (never mutates the input).
- * Curated keys upsert by key; extras upsert by trimmed, case-insensitive label (the server stores
- * labels verbatim, so a foreign client's padded label must still match — the upsert then replaces
- * it with the clean one).
+ * Curated keys upsert by key; extras upsert by trimmed, case-insensitive label (the server trims
+ * labels at the write boundary now, but rows stored before that fix — or by foreign clients
+ * predating it — may still be padded, so the padded label must still match; the upsert then
+ * replaces it with the clean one).
  */
 export function applySet(
   existing: Profile | null,
