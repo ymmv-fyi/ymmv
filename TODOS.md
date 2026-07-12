@@ -115,7 +115,8 @@ removals from the baked list are breaking for shipped CLIs.
 **Done 2026-07-11** (branch `cli-quickwins`). `safeFetch` defaults every request to
 `AbortSignal.timeout(30_000)` (explicit signals win), the logout revoke rides it too, and the
 device-flow poll carries its own 30s signal feeding the transient counter. Timeouts print
-"request timed out" on every surface, including body-read aborts via the bin's catch.
+"request timed out" on every surface, including body-read aborts via the bin's catch (logout is
+the one exception: it keeps its own token-still-active retry copy for any revoke failure).
 
 ### publishProfile 401-retry can rebind a different account mid-RMW
 **Done 2026-07-02** (branch `cli-restyle`). Both auth-retry paths now refuse a rebound handle:
