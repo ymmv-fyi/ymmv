@@ -1,24 +1,14 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
-import { safeFetch, wireText } from "./http.js";
+import { safeFetch, serverMessage, wireText, withRetryHint } from "./http.js";
 import { sanitizeValue } from "./render.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
 
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
  *  the edge WAF block page is non-JSON, so fall back to a generic line. */
 async function rateLimitMessage(res: Response): Promise<string> {
-  const retry = res.headers.get("retry-after");
-  let msg = "rate limited, too many requests";
-  try {
-    const body = (await res.json()) as { message?: string };
-    if (typeof body?.message === "string" && body.message) msg = wireText(body.message);
-  } catch {
-    // non-JSON body (e.g. the edge WAF block page) — keep the generic message
-  }
-  // retry-after comes off the wire too. Only the delta-seconds form fits the "(retry in Ns)"
-  // suffix — RFC 9110 also allows an HTTP-date (WAF/proxy senders use it), which would garble.
-  return retry && /^\d+$/.test(retry) ? `${msg} (retry in ${retry}s)` : msg;
+  return withRetryHint((await serverMessage(res)) ?? "rate limited, too many requests", res);
 }
 
 /** Ensure a token exists for the current base, logging in if needed. */
@@ -89,8 +79,12 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
     res = await send(cred);
     if (res.status === 401) throw new Error("Authentication failed. Run `ymmv login`.");
     if (res.status === 409) {
+      // The dominant body here since the bound-handle guard is handle_not_bound, whose message
+      // carries the actionable copy ("run ymmv login and retry" — a fresh run re-reads and heals
+      // the race). The hardcoded line stays for a non-JSON body or the rare true handle-reuse.
       throw new Error(
-        "that handle is taken by another account (your GitHub handle may have been reused).",
+        (await serverMessage(res)) ??
+          "that handle is taken by another account (your GitHub handle may have been reused).",
       );
     }
   }
