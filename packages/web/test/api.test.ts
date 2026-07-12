@@ -131,6 +131,36 @@ describe("POST validation", () => {
       (await publish(TOKEN, profile("alice", [{ key: "editor", value: "x".repeat(257) }]))).status,
     ).toBe(422);
   });
+  it("422 zero-width-only entry value (invisible, but survives trim())", async () => {
+    // Mirrors the extras rule: a value of only U+200B has no visible content, so it is rejected
+    // like a blank one rather than stored as a blank row.
+    expect((await publish(TOKEN, profile("alice", [{ key: "editor", value: "​" }]))).status).toBe(
+      422,
+    );
+  });
+  it("422 Arabic-letter-mark-only entry value (U+061C, outside any hand-rolled class)", async () => {
+    // The Default_Ignorable_Code_Point property escape covers what the old literal class missed.
+    expect((await publish(TOKEN, profile("alice", [{ key: "editor", value: "؜" }]))).status).toBe(
+      422,
+    );
+  });
+  it("422 variation-selector-only entry value (U+FE0F)", async () => {
+    expect((await publish(TOKEN, profile("alice", [{ key: "editor", value: "️" }]))).status).toBe(
+      422,
+    );
+  });
+  it("422 non-string entry value", async () => {
+    expect(
+      (await publish(TOKEN, profile("alice", [{ key: "editor", value: 42 as unknown as string }])))
+        .status,
+    ).toBe(422);
+  });
+  it("200 for a padded entry value at the cap — the cap applies to the trimmed string", async () => {
+    const padded = `  ${"x".repeat(256)}  `;
+    expect(
+      (await publish(TOKEN, profile("alice", [{ key: "editor", value: padded }]))).status,
+    ).toBe(200);
+  });
   it("422 entries not an array", async () => {
     expect((await publish(TOKEN, { ...profile("alice"), entries: "nope" })).status).toBe(422);
   });
@@ -213,6 +243,18 @@ describe("publish + read round-trip", () => {
     await publish(TOKEN, profile("alice", [], [{ label: "  Launcher  ", value: "  Raycast  " }]));
     const p = await readProfile("alice");
     expect(p.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+  });
+
+  it("stores entry values trimmed, so a padded value never renders padded", async () => {
+    await publish(TOKEN, profile("alice", [{ key: "editor", value: "  Vim  " }]));
+    expect((await readProfile("alice")).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("keeps an invisible char that merely decorates a real entry value", async () => {
+    // Only wholly-invisible values are rejected; a zero-width joiner inside real text is the
+    // user's data and survives into the stored (trimmed) value verbatim.
+    await publish(TOKEN, profile("alice", [{ key: "editor", value: "  Vi​m  " }]));
+    expect((await readProfile("alice")).entries).toEqual([{ key: "editor", value: "Vi​m" }]);
   });
 
   it("a reserved handle 404s the JSON even when a live row exists (HTML/JSON parity)", async () => {
