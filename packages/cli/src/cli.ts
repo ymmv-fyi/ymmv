@@ -3,12 +3,13 @@
 // guard — index.ts stays import-safe for tests without one. That guard (import.meta.url vs argv[1])
 // silently broke `npm i -g` on Linux/macOS/WSL: npm symlinks the bin, so argv[1] is the symlink path
 // while import.meta.url is the realpath, they never match, and main() never ran.
+import { displayError } from "./http.js";
 import { main } from "./index.js";
 import { message } from "./render.js";
 
 main(process.argv.slice(2))
   .catch((err: unknown) => {
-    console.error(message(err instanceof Error ? err.message : String(err)));
+    console.error(message(displayError(err)));
     process.exitCode = 1;
   })
   .finally(() => {

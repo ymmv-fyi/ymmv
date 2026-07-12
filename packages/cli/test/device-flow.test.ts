@@ -148,6 +148,48 @@ describe("pollForToken state machine", () => {
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
+  it("every poll request carries the 30s timeout signal (a hung poll must not stall the login)", async () => {
+    // The deadline is only checked between iterations, so pre-signal a hung poll fetch stalled the
+    // whole login forever. Pin the duration via the spy — never wait real time in tests.
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    const fn = vi.fn().mockResolvedValueOnce(json({ access_token: "gho_x" }));
+    await pollForToken(DC, { fetch: fn as unknown as typeof fetch, sleep: noSleep, now: at0 });
+    expect(spy).toHaveBeenCalledExactlyOnceWith(30_000);
+    const init = fn.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBe(spy.mock.results[0]?.value);
+    spy.mockRestore();
+  });
+
+  it("a hung poll (TimeoutError) counts as transient — the login survives one and completes", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      )
+      .mockResolvedValueOnce(json({ access_token: "gho_x" }));
+    const token = await pollForToken(DC, {
+      fetch: fn as unknown as typeof fetch,
+      sleep,
+      now: at0,
+    });
+    expect(token).toBe("gho_x");
+    expect(sleep).toHaveBeenCalledTimes(2);
+  });
+
+  it("persistent hung polls trip the cap with 'request timed out' as the last cause", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi
+      .fn()
+      .mockRejectedValue(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      );
+    await expect(
+      pollForToken(DC, { fetch: fn as unknown as typeof fetch, sleep, now: at0 }),
+    ).rejects.toThrow(/isn't responding.*last error: request timed out/is);
+    expect(sleep).toHaveBeenCalledTimes(5);
+  });
+
   it("persistent thrown failures trip the cap WITH the last cause in the message", async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     const netErr = new TypeError("fetch failed");
@@ -172,6 +214,20 @@ describe("pollForToken state machine", () => {
     await expect(
       requestDeviceCode({ fetch: fetchResponses(new Response("nope", { status: 503 })) }),
     ).rejects.toThrow(/device code request failed: 503 nope/);
+  });
+
+  it("requestDeviceCode: a body-read TIMEOUT propagates as a timeout, not 'unexpected response'", async () => {
+    const { requestDeviceCode } = await import("../src/device-flow.js");
+    const stalled = {
+      ok: true,
+      json: () =>
+        Promise.reject(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+    };
+    await expect(
+      requestDeviceCode({ fetch: vi.fn().mockResolvedValue(stalled) as unknown as typeof fetch }),
+    ).rejects.toSatisfy((e: unknown) => e instanceof Error && e.name === "TimeoutError");
   });
 
   it("requestDeviceCode: a 200 with the wrong shape throws a clear error, never crashes later", async () => {
@@ -208,6 +264,60 @@ describe("pollForToken state machine", () => {
       ),
     ).rejects.toThrow(/expired/i);
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("re-checks the deadline AFTER the sleep — never polls (and holds a request) past expiry", async () => {
+    // With moments left, sleeping a full slow_down-grown interval and then holding a request up
+    // to the 30s budget would overrun the deadline by half a minute before reporting expired.
+    const now = vi
+      .fn()
+      .mockReturnValueOnce(0) // deadline computed
+      .mockReturnValueOnce(0) // loop condition passes
+      .mockReturnValue(10_000_000); // post-sleep check: expired
+    const fetchFn = vi.fn();
+    await expect(
+      pollForToken(
+        { ...DC, expires_in: 1 },
+        { fetch: fetchFn as unknown as typeof fetch, sleep: noSleep, now },
+      ),
+    ).rejects.toThrow(/expired/i);
+    expect(fetchFn).not.toHaveBeenCalled(); // the dead-code poll never went out
+  });
+
+  it("labels a NON-timeout malformed body as 'unexpected response body' (the ternary's other side)", async () => {
+    // ok headers, non-JSON body: res.json() rejects with a SyntaxError, not the signal's
+    // TimeoutError — the give-up copy must keep the malformed-body label, never claim a timeout.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response("<html>proxy error</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+    await expect(
+      pollForToken(DC, { fetch: fn as unknown as typeof fetch, sleep, now: at0 }),
+    ).rejects.toThrow(/isn't responding.*last error: unexpected response body/is);
+    expect(sleep).toHaveBeenCalledTimes(5);
+  });
+
+  it("labels a body-read timeout truthfully in the give-up message (not 'unexpected response body')", async () => {
+    // ok headers, stalled body: res.json() rejects with the signal's TimeoutError. Still
+    // transient (the counter owns give-up), but the last-cause copy must say what happened.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const stalled = {
+      ok: true,
+      json: () =>
+        Promise.reject(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+    };
+    const fn = vi.fn().mockResolvedValue(stalled);
+    await expect(
+      pollForToken(DC, { fetch: fn as unknown as typeof fetch, sleep, now: at0 }),
+    ).rejects.toThrow(/isn't responding.*last error: request timed out/is);
+    expect(sleep).toHaveBeenCalledTimes(5);
   });
 });
 
