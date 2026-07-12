@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.7.0] - 2026-07-11
 
 ### Added
 - **Reserved names fail fast.** `ymmv 404` (or `ymmv view api`) reports the name is reserved
@@ -244,6 +244,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.7.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.7.0
 [0.6.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.0
