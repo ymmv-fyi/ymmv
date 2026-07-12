@@ -2,6 +2,19 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **Reserved names fail fast.** `ymmv 404` (or `ymmv view api`) reports the name is reserved
+  locally instead of asking the server and answering with a missing profile.
+- **Requests time out after 30 seconds.** A stalled connection reads as a clear
+  "Can't reach ... (request timed out)" line instead of hanging, and a hung login poll retries
+  instead of stalling forever.
+
+### Fixed
+- **Publish conflicts show the server's explanation.** A publish refused because the handle is
+  bound to another account prints the server's message instead of a generic handle-taken line.
+
 ## [0.6.2] - 2026-07-09
 
 ### Fixed

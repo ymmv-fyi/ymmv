@@ -47,14 +47,6 @@ unlike a `[handle]` not-found, which gets `readCacheControl("notfound")`. Cosmet
 edge-caches Worker responses; fix alongside "Uncached read path for RMW mutations". Surfaced by the
 reserved-handle eng review outside voice (2026-07-09).
 
-### CLI has no `isReserved` pre-check
-**Priority:** P3
-`packages/cli/src` never imports `isReserved` — `resolve.ts:128` gates only on `isValidHandle`. So
-`ymmv 404` makes a network round-trip and reports "no profile yet" (misleading), and publishing as a
-reserved GitHub login fails with a bare 422. The shared helper is already bundled. Add it as a fast,
-clear local hint only — the API stays the trust boundary. `reserved.ts` used to claim the CLI did
-this; the docstring was corrected 2026-07-09, this makes it true.
-
 ### og:image share card
 **Priority:** P3
 No `og:image` anywhere — profile/diff links preview as text-only cards. Needs either a static
@@ -62,15 +54,6 @@ brand card in `/public` or generation infra (satori/resvg on Workers). Deferred 
 design-polish plan (2026-07-01).
 
 ## CLI
-
-### Surface the server's publish-409 message in the CLI
-**Priority:** P4
-`publishProfile` (`api.ts:91-95`) hardcodes "that handle is taken by another account" on a second
-409 and discards the server's `message` field. Since the bound-handle guard, the dominant 409 body
-is `handle_not_bound` with actionable copy the user never sees; the hardcoded line stays accurate
-only for the rare mid-flight race. Mirror `rateLimitMessage`: prefer `wireText(body.message)` when
-present, keep the current copy as fallback. Surfaced by the bound-handle pre-landing review
-(2026-07-10, cross-model).
 
 ### Harden displayUrl display-shortening on both surfaces (web + CLI)
 **Priority:** P4
@@ -81,16 +64,6 @@ lookalikes. Threat is a self-published URL on the attacker's own profile — low
 surfaces should change together (candidate for one shared helper in `@ymmv/shared`). Constraint:
 `display-shortening-must-not-collide-compared-values` (never shorten diff-compared cells into
 collision). Surfaced by the CLI-restyle eng review outside voice (2026-07-02).
-
-### Default request timeout on CLI fetches
-**Priority:** P4
-No CLI fetch sets a timeout — a dead-but-open connection (hung proxy, packet loss after SYN)
-hangs any command forever with no output. After the restyle, `safeFetch` (`packages/cli/src/
-http.ts`) is the choke point for every call except logout's `revokeYmmvToken` (raw `fetch` in
-`auth-http.ts`): `init.signal ??= AbortSignal.timeout(30_000)`, routing the revoke call through
-`safeFetch`, plus a poll-aware exception for the GitHub device flow (its long-poll pacing must
-not be cut short) is the whole change, and the failure then routes through the existing
-can't-reach message. Surfaced by the CLI-restyle eng review test trace (2026-07-02).
 
 ### Uncached read path for RMW mutations
 **Priority:** P4
@@ -126,6 +99,23 @@ CLI together.
 keying reuse on a hash of dist+seed.sql.
 
 ## Completed
+
+### Surface the server's publish-409 message in the CLI
+**Done 2026-07-11** (branch `cli-quickwins`). The second publish-409 now prefers the server's
+`message` (the bound-handle guard's actionable copy) via the shared `serverMessage` helper,
+sanitized and capped; the generic handle-taken line remains the fallback for non-JSON bodies.
+
+### CLI has no `isReserved` pre-check
+**Done 2026-07-11** (branch `cli-quickwins`). Both view paths (`ymmv <handle>` and
+`ymmv view <handle>`) reject reserved names locally with a clear error instead of a round-trip
+that misreported "no profile yet". The API stays the trust boundary; `reserved.ts` documents that
+removals from the baked list are breaking for shipped CLIs.
+
+### Default request timeout on CLI fetches
+**Done 2026-07-11** (branch `cli-quickwins`). `safeFetch` defaults every request to
+`AbortSignal.timeout(30_000)` (explicit signals win), the logout revoke rides it too, and the
+device-flow poll carries its own 30s signal feeding the transient counter. Timeouts print
+"request timed out" on every surface, including body-read aborts via the bin's catch.
 
 ### publishProfile 401-retry can rebind a different account mid-RMW
 **Done 2026-07-02** (branch `cli-restyle`). Both auth-retry paths now refuse a rebound handle:
