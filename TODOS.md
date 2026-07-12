@@ -2,20 +2,6 @@
 
 ## Web
 
-### Theme resync after BFCache restore / cross-tab toggle
-**Priority:** P3
-Theme state (data-theme, aria-pressed, theme-color meta) syncs only at script evaluation. A
-back-forward-cache restore or a toggle in another same-origin tab leaves the restored page stale
-until the next full load. Add `pageshow` (persisted) + `storage` (ymmv-theme) listeners that
-re-apply all three. Noticed on branch web-design-polish (red-team review).
-
-### InstallCommand is a dead button without JS
-**Priority:** P3
-The click-to-copy command renders as a focusable `<button aria-label="Copy install command…">`
-even when the wiring script never runs (JS off, no Clipboard API) — AT users reach a control that
-promises copying and does nothing. Progressive upgrade: render as `<span>`, promote to button when
-`[data-copy-ready]` wires. Pre-existing; surfaced when the button was added to every profile foot.
-
 ### Full bidi/Trojan-source sanitizer for web surfaces
 **Priority:** P3
 The CLI strips bidi controls (U+202A–202E, U+2066–2069, LRM/RLM) from every untrusted value;
@@ -30,14 +16,6 @@ are gone. A label containing `=` is still storable via curl and still cannot be 
 `ymmv unset --extra` (parse-level: `=` splits label from value and is rejected with a hint). Either
 reject `=` in labels at the write boundary, or give the CLI an escape syntax. Surfaced by the
 `ymmv unset` pre-landing review (2026-07-01, cross-model); narrowed once trim+empty-rejection shipped.
-
-### Trim entry values on the write path
-**Priority:** P4
-`POST /api/v1/profile` rejects trim-empty entry values (`profile.ts:81`) but stores them raw
-(`:83`), so curl can persist `"  Vim  "` and the page renders it padded — the same gap extras had
-before they were trimmed at the boundary. The CLI already trims (`profile-ops.ts:29`), so only
-non-CLI clients are affected. Mirror the extras fix: trim, then validate, then store, matching the
-guard extras now use.
 
 ### `/404` carries no cache-control header
 **Priority:** P4
@@ -117,6 +95,27 @@ removals from the baked list are breaking for shipped CLIs.
 device-flow poll carries its own 30s signal feeding the transient counter. Timeouts print
 "request timed out" on every surface, including body-read aborts via the bin's catch (logout is
 the one exception: it keeps its own token-still-active retry copy for any revoke failure).
+
+### Theme resync after BFCache restore / cross-tab toggle
+**Done 2026-07-11** (branch `web-quickwins`). Layout.astro's toggle script gained `storedTheme()` +
+`applyTheme()` (single source for the whitelist + system fallback) wired to `pageshow` (persisted
+only) and `storage` (ymmv-theme) listeners; the matchMedia change callback simplified onto the same
+resolver. Data-theme, aria-pressed, and the theme-color meta re-sync on a BFCache restore and follow
+a toggle in another same-origin tab. e2e covers cross-tab, synthetic pageshow, the matchMedia
+regression, and the removeItem → system fallback.
+
+### InstallCommand is a dead button without JS
+**Done 2026-07-11** (branch `web-quickwins`). InstallCommand renders a plain `<span>`; the delegated
+copy script promotes it to an ARIA button (role + tabindex + `aria-label` with the "Copy install
+command:" action wording) and wires click plus Enter/Space (Space preventDefault so it doesn't
+scroll) only when the Clipboard API is present. With no JS the command stays selectable text with no
+focusable dead control. e2e covers the promoted button, Enter/Space copy, and the no-JS state.
+
+### Trim entry values on the write path
+**Done 2026-07-11** (branch `web-quickwins`). `POST /api/v1/profile` now trims entry values and tests
+emptiness with `hasVisibleContent` before storing the trimmed original, mirroring the extras guard
+(plain `.trim()` misses zero-width chars). Padded values store trimmed, wholly-invisible values are
+rejected, and an invisible char decorating real text is preserved. No migration or seed change.
 
 ### publishProfile 401-retry can rebind a different account mid-RMW
 **Done 2026-07-02** (branch `cli-restyle`). Both auth-retry paths now refuse a rebound handle:
