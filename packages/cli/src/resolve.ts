@@ -1,9 +1,18 @@
-import { CURATED_KEYS, type CuratedKey, isCuratedKey, isValidHandle } from "@ymmv/shared";
+import {
+  CURATED_KEYS,
+  type CuratedKey,
+  isCuratedKey,
+  isReserved,
+  isValidHandle,
+} from "@ymmv/shared";
 
 // Argument resolution. The bare `ymmv <handle>` form stays primary, the seven verb words
 // (login/logout/set/unset/delete/view/help) dispatch as verbs, and `ymmv view <handle>` is the
-// explicit escape hatch. Pure + total: every argv maps to exactly one Command (including `error`),
-// so dispatch in index.ts is a flat switch and the whole table is unit-testable without any IO.
+// explicit alias for viewing (every verb word is also a reserved handle, so a verb-colliding
+// profile cannot exist — both view paths reject reserved names locally rather than making a
+// round-trip that misreports "no profile yet"). Pure + total: every argv maps to exactly one
+// Command (including `error`), so dispatch in index.ts is a flat switch and the whole table is
+// unit-testable without any IO.
 
 /** What `ymmv set` targets — a curated key/value or a free-form extra. */
 export type SetTarget =
@@ -118,6 +127,7 @@ export function resolveArg(argv: string[]): Command {
     if (!isValidHandle(handle)) {
       return { kind: "error", message: `"${handle}" is not a valid GitHub handle.` };
     }
+    if (isReserved(handle)) return reservedError(handle);
     return { kind: "view", handle };
   }
 
@@ -131,5 +141,17 @@ export function resolveArg(argv: string[]): Command {
       message: `"${first}" is not a valid GitHub handle. Run \`ymmv help\`.`,
     };
   }
+  if (isReserved(first)) return reservedError(first);
   return { kind: "view", handle: first };
+}
+
+/** Shape-check first, reserved second: only handle-shaped input reaches this hint. The reserved
+ *  list is baked into each released CLI (a fast local answer instead of a round-trip that
+ *  misreports "no profile yet"); the API stays the trust boundary. NOTE: removing a name from
+ *  RESERVED_SET is a breaking change for shipped CLIs — they would keep refusing it locally. */
+function reservedError(handle: string): Command {
+  return {
+    kind: "error",
+    message: `"${handle}" is a reserved name; it can't have a profile.`,
+  };
 }

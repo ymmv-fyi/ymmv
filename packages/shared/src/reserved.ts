@@ -19,7 +19,10 @@ export const RESERVED_ROUTES = ["404", "api", "login", "logout"] as const;
 /** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous. */
 export const CLI_VERBS = ["login", "logout", "set", "unset", "delete", "view", "help"] as const;
 
-/** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated). */
+/** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated).
+ *  NOTE: the CLI bakes this list into each released binary as a local pre-check (resolve.ts), so
+ *  ADDING a name is safe (old CLIs just make the round-trip) but REMOVING one is a breaking
+ *  change — shipped CLIs would keep refusing it locally without ever asking the server. */
 export const RESERVED: readonly string[] = [...new Set<string>([...RESERVED_ROUTES, ...CLI_VERBS])];
 
 const RESERVED_SET: ReadonlySet<string> = new Set(RESERVED);
