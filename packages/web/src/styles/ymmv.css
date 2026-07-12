@@ -647,9 +647,9 @@ a {
   color: var(--text);
   unicode-bidi: isolate;
 }
-/* The install command is also the primary CTA — the whole block is a click-to-copy <button>.
-   Rest state is visually identical to the old static block; the copy affordance + press/focus
-   feedback only appear once JS wires it ([data-copy-ready]), so it's never a dead control and
+/* The install command is also the primary CTA — a plain <span> that JS promotes to an ARIA
+   button ([data-copy-ready]). Rest state is visually identical to the old static block; the copy
+   affordance + press/focus feedback only appear once JS wires it, so it's never a dead control and
    the command stays readable/selectable with no JS. */
 .install {
   font-family: var(--font-mono);
@@ -661,10 +661,6 @@ a {
   border-radius: var(--radius-ctrl);
   padding: 14px 18px;
   display: inline-block;
-  text-align: left;
-  appearance: none;
-  -webkit-appearance: none;
-  user-select: text;
   transition: transform 0.12s var(--ease-out);
 }
 /* the profile foot command is the same copy button, sized down to the foot's quiet 13px
@@ -681,7 +677,10 @@ a {
 .install[data-copy-ready] {
   cursor: pointer;
 }
-.install[data-copy-ready]:active {
+/* :active covers pointer presses; [data-pressed] mirrors it for keyboard Enter/Space (a
+   role=button span never enters :active from the keyboard) */
+.install[data-copy-ready]:active,
+.install[data-copy-ready][data-pressed] {
   transform: scale(0.98);
 }
 .install[data-copy-ready]:focus-visible {
@@ -1105,6 +1104,7 @@ a {
   }
   .theme-toggle:active,
   .install[data-copy-ready]:active,
+  .install[data-copy-ready][data-pressed],
   .diff-cta .go:active {
     transform: none;
   }

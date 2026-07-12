@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 // Token colors asserted below (DESIGN.md): dark bg #0E0C09 = rgb(14,12,9),
 // light bg #F6F3EA = rgb(246,243,234), dark accent #FFAB2E = rgb(255,171,46).
@@ -179,6 +179,23 @@ test.describe("routing", () => {
 });
 
 test.describe("themes (dark-primary + light)", () => {
+  // the browser-UI color mirror (mobile toolbar/overscroll) — asserted alongside data-theme
+  const themeColor = (page: Page) =>
+    page.evaluate(() =>
+      document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
+    );
+  // two same-context tabs on /antfu under a dark system preference — the cross-tab fixtures
+  // (pages close with the per-test context; no explicit cleanup needed)
+  async function openTwoTabs(context: BrowserContext): Promise<[Page, Page]> {
+    const a = await context.newPage();
+    const b = await context.newPage();
+    await a.emulateMedia({ colorScheme: "dark" });
+    await b.emulateMedia({ colorScheme: "dark" });
+    await a.goto("/antfu");
+    await b.goto("/antfu");
+    return [a, b];
+  }
+
   test("honors prefers-color-scheme: dark", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/antfu");
@@ -237,6 +254,170 @@ test.describe("themes (dark-primary + light)", () => {
       document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
     );
     expect(metaReload).toBe("#0e0c09");
+  });
+
+  test("a toggle in one tab resyncs another open tab (cross-tab storage)", async ({ context }) => {
+    const [a, b] = await openTwoTabs(context);
+    await expect(a.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
+    // toggle in A → B follows via the storage listener: data-theme, the toggle state, and the
+    // browser-UI color all flip in the tab that never received the click.
+    await a.click("#theme-toggle");
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => themeColor(b)).toBe("#f6f3ea");
+  });
+
+  test("clearing the stored theme in one tab reverts another to the system preference", async ({
+    context,
+  }) => {
+    const [a, b] = await openTwoTabs(context);
+    await a.click("#theme-toggle"); // store an explicit light choice; B follows it cross-tab
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
+    // remove the stored choice in A → B's storage listener sees newValue null and falls back to system
+    await a.evaluate(() => localStorage.removeItem("ymmv-theme"));
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("localStorage.clear() in one tab also reverts another to the system preference", async ({
+    context,
+  }) => {
+    const [a, b] = await openTwoTabs(context);
+    await a.click("#theme-toggle");
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
+    // clear() fires storage with key null — the listener must treat that as a wiped choice too
+    await a.evaluate(() => localStorage.clear());
+    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("re-applies the theme on a BFCache restore (synthetic pageshow)", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/antfu");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // A real back-forward restore never re-runs the pre-paint script, so a choice stored after
+    // this page painted leaves it stale. The pageshow(persisted) path must re-resolve all three.
+    await page.evaluate(() => {
+      localStorage.setItem("ymmv-theme", "light");
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(await themeColor(page)).toBe("#f6f3ea");
+  });
+
+  test("a live system-preference change moves the theme only with no stored choice", async ({
+    page,
+  }) => {
+    // Regression on the simplified matchMedia change callback (it had no coverage before).
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/antfu");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // no stored choice → a live system flip to light is followed
+    await page.emulateMedia({ colorScheme: "light" });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
+    // store an explicit light choice, then flip the system to dark — the stored choice must win
+    await page.evaluate(() => localStorage.setItem("ymmv-theme", "light"));
+    await page.emulateMedia({ colorScheme: "dark" });
+    // positive propagation signal (not a fixed sleep): the media flip has reached the page —
+    // any (erroneous) change handler has therefore fired — before the negative assertion
+    await page.waitForFunction(() => matchMedia("(prefers-color-scheme: dark)").matches);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  });
+});
+
+test.describe("install command (progressive copy button)", () => {
+  test("promotes the span to a keyboard-operable copy button; Enter copies", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/antfu");
+    const install = page.locator(".foot .install");
+    await expect(install).toHaveAttribute("role", "button");
+    await expect(install).toHaveAttribute("tabindex", "0");
+    await expect(install).toHaveAttribute("aria-label", /Copy install command: npx ymmv-cli/);
+    await install.focus();
+    await page.keyboard.press("Enter");
+    // wait for the visible success state first — the async writeText races a one-shot readText
+    await expect(install).toHaveAttribute("data-copied", "");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli antfu");
+  });
+
+  test("Space copies and does not scroll the page", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/antfu");
+    // give the page room to scroll below the foot so a default Space keypress WOULD move it…
+    await page.evaluate(() => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "3000px";
+      document.body.appendChild(spacer);
+    });
+    // …and prove it genuinely can scroll in this viewport
+    expect(
+      await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),
+    ).toBe(true);
+    const install = page.locator(".foot .install");
+    await install.focus();
+    const before = await page.evaluate(() => window.scrollY);
+    await page.keyboard.press("Space");
+    // the copy result proves the keydown handler ran before the scroll assertion
+    await expect(install).toHaveAttribute("data-copied", "");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli antfu");
+    // Chromium schedules the space-bar scroll on a later frame — read after two rAFs so a
+    // missing preventDefault cannot false-pass on a too-early read
+    const after = await page.evaluate(
+      () =>
+        new Promise<number>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(window.scrollY))),
+        ),
+    );
+    expect(after).toBe(before);
+  });
+
+  test("Tab moves focus off the control (only activation keys are intercepted)", async ({
+    page,
+  }) => {
+    await page.goto("/antfu");
+    const install = page.locator(".foot .install");
+    await install.focus();
+    await page.keyboard.press("Tab");
+    // a broadened preventDefault gate in the keydown handler would trap Tab on the control
+    expect(await install.evaluate((el) => el === document.activeElement)).toBe(false);
+  });
+
+  test("announces a failure when the clipboard write is denied", async ({ page }) => {
+    await page.goto("/antfu");
+    const install = page.locator(".foot .install");
+    await expect(install).toHaveAttribute("role", "button"); // wired before we break the write
+    // policy-denied clipboard (NotAllowedError): the promoted control must not silently no-op
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = () =>
+        Promise.reject(new DOMException("Write permission denied.", "NotAllowedError"));
+    });
+    await install.focus();
+    await page.keyboard.press("Enter");
+    await expect(install.locator("[data-copy-status]")).toHaveText("Copy failed");
+    // the failure never fakes the success glyph
+    expect(await install.getAttribute("data-copied")).toBeNull();
+  });
+});
+
+test.describe("install command without JS", () => {
+  test.use({ javaScriptEnabled: false });
+  test("stays plain selectable text with no dead control", async ({ page }) => {
+    await page.goto("/antfu");
+    const install = page.locator(".foot .install");
+    await expect(install).toBeVisible();
+    await expect(install).toContainText("npx ymmv-cli antfu");
+    // a SPAN, not a native <button> — a button revert would pass the null-attribute checks
+    // below while being exactly the focusable dead control this guards against
+    expect(await install.evaluate((el) => el.tagName)).toBe("SPAN");
+    // never promoted → no button semantics a keyboard/AT user could reach and find inert
+    expect(await install.getAttribute("role")).toBeNull();
+    expect(await install.getAttribute("tabindex")).toBeNull();
   });
 });
 
