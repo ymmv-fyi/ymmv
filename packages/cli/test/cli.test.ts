@@ -59,6 +59,19 @@ describe("ymmv logout", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("KEEPS the local token when the revoke times out (hung connection, not just refused)", async () => {
+    // The revoke now rides safeFetch's 30s timeout: a hang becomes a throw ≤30s in, and logout's
+    // catch-all still owns the copy — previously a hung revoke stalled logout forever.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(revokeYmmvToken).mockRejectedValue(
+      new Error("Can't reach B. Check your connection (request timed out)"),
+    );
+    await main(["logout"]);
+    expect(deleteToken).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(/Couldn't reach the server to revoke/);
+  });
+
   it("says 'not logged in' and touches nothing when there's no token", async () => {
     vi.mocked(loadToken).mockResolvedValue(null);
     vi.mocked(peekBase).mockResolvedValue(null);
@@ -200,13 +213,52 @@ describe("publish auto-reauth", () => {
     await expect(publishProfile(PROFILE)).rejects.toThrow(/authentication failed/i);
   });
 
-  it("second 409 after a same-handle re-login reads as handle-taken (no infinite loop)", async () => {
-    // Same handle re-minted → the rebind guard passes → retry → 409 again → final verdict.
-    // Body mirrors the server's bound-handle guard; the CLI's verdict keys on the status alone.
+  it("second 409 after a same-handle re-login surfaces the SERVER's message (no infinite loop)", async () => {
+    // Same handle re-minted → the rebind guard passes → retry → 409 again → final verdict. The
+    // dominant body is the bound-handle guard's handle_not_bound, whose message is the actionable
+    // copy — surface it instead of the generic handle-taken line.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        status(409, {
+          error: "handle_not_bound",
+          message: "Publish uses the handle bound at login. Run `ymmv login` and retry.",
+        }),
+      ),
+    );
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/Publish uses the handle bound at login/);
+    expect(login).toHaveBeenCalledTimes(1); // exactly one heal attempt
+  });
+
+  it("second 409 with a message-less body falls back to the handle-taken line", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_not_bound" })));
     await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
-    expect(login).toHaveBeenCalledTimes(1); // exactly one heal attempt
+  });
+
+  it("second 409 with a non-JSON or non-string-message body falls back too", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>proxy</html>", { status: 409 })),
+    );
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+    vi.mocked(login).mockClear();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { message: 123 })));
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+  });
+
+  it("sanitizes and caps a hostile second-409 message before it reaches the terminal", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    const esc = String.fromCharCode(0x1b);
+    const hostile = `bad ${esc}[2Jcopy ${"x".repeat(500)}`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { message: hostile })));
+    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain(esc);
+    expect((err as Error).message.length).toBeLessThanOrEqual(201); // wireText cap + ellipsis
+    expect((err as Error).message).toMatch(/^bad copy/);
   });
 
   it("a generic POST failure surfaces as publish failed with status and capped body", async () => {
