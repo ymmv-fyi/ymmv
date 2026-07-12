@@ -19,12 +19,14 @@ const MAX_EXTRAS = 32;
 const MAX_LABEL = 64;
 const MAX_VALUE = 256;
 
-// Code points that occupy no visual space: zero-width space/joiners, the word joiner, the bidi
-// marks and embedding controls, and the invisible-operator block. `.trim()` does NOT remove these
-// (it strips the Zs whitespace set plus U+FEFF), so a label of only U+200B passes an emptiness
-// check, stores, and renders as a blank row. Reject a field only when NOTHING visible survives —
-// an invisible char decorating real text is the user's data and is stored verbatim.
-const INVISIBLE_RE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+// Code points that occupy no visual space: zero-width space/joiners, bidi marks and embedding
+// controls, variation selectors, the Arabic letter mark, and the rest of Unicode's
+// Default_Ignorable_Code_Point set — the engine-maintained property, where a hand-rolled class
+// drifts (an earlier one missed U+061C). `.trim()` does NOT remove these (it strips the Zs
+// whitespace set plus U+FEFF), so a field of only U+200B passes an emptiness check, stores, and
+// renders as a blank row. Reject a field only when NOTHING visible survives — an invisible char
+// decorating real text is the user's data and is stored verbatim.
+const INVISIBLE_RE = /\p{Default_Ignorable_Code_Point}/gu;
 
 function hasVisibleContent(s: string): boolean {
   return s.replace(INVISIBLE_RE, "").trim() !== "";
@@ -75,7 +77,10 @@ export const POST: APIRoute = async ({ request }) => {
     return err(422, "invalid_handle");
   }
 
-  // entries: curated key + non-empty string value within caps; dedupe by key (last-wins).
+  // entries: curated key + a value with visible content within caps; dedupe by key (last-wins).
+  // Trim BEFORE the emptiness/length checks and store trimmed, exactly like extras below: padding
+  // is not content, so a padded value must neither pass the empty check, consume the length
+  // budget, nor render padded. `hasVisibleContent` extends that to wholly-invisible values.
   if (payload.entries !== undefined && !Array.isArray(payload.entries)) {
     return err(422, "invalid_entries");
   }
@@ -84,11 +89,13 @@ export const POST: APIRoute = async ({ request }) => {
   const entryMap = new Map<string, string>();
   for (const e of rawEntries) {
     const key = (e as { key?: unknown })?.key;
-    const value = (e as { value?: unknown })?.value;
+    const rawValue = (e as { value?: unknown })?.value;
     if (typeof key !== "string" || !isCuratedKey(key)) {
       return err(422, "invalid_key", { key: typeof key === "string" ? key : null });
     }
-    if (typeof value !== "string" || value.trim() === "") return err(422, "invalid_value", { key });
+    if (typeof rawValue !== "string") return err(422, "invalid_value", { key });
+    const value = rawValue.trim();
+    if (!hasVisibleContent(value)) return err(422, "invalid_value", { key });
     if (value.length > MAX_VALUE) return err(422, "value_too_long", { key });
     entryMap.set(key, value);
   }
