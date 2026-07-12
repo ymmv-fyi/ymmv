@@ -80,8 +80,18 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
       (function () {
         var btn = document.getElementById("theme-toggle");
         if (!btn) return;
+        var THEME_KEY = "ymmv-theme"; // the pre-paint head script keeps its own literal (self-contained)
         function current() {
           return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+        }
+        function storedTheme() {
+          // Guarded read + whitelist, mirroring the pre-paint script: storage garbage (a stray
+          // value from another tab) and a storage-blocked browser both resolve to null (no choice).
+          var stored = null;
+          try {
+            stored = localStorage.getItem(THEME_KEY);
+          } catch (e) {}
+          return stored === "light" || stored === "dark" ? stored : null;
         }
         function syncPressed() {
           // aria-pressed=true ⇒ the non-default (light) theme is active
@@ -96,28 +106,51 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
           var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
           if (bg) meta.setAttribute("content", bg);
         }
+        function setTheme(theme) {
+          // Apply a resolved theme to every surface: data-theme, the toggle state, the browser UI.
+          document.documentElement.dataset.theme = theme;
+          syncPressed();
+          syncThemeColor();
+        }
+        function applyTheme() {
+          // Resolve exactly as the pre-paint script does (stored choice > system > dark) and
+          // re-sync every surface. Single source of the whitelist + fallback for all the resync
+          // paths below (BFCache restore, cross-tab storage, system-preference change).
+          var theme = storedTheme();
+          if (!theme) {
+            try {
+              theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+            } catch (e) {
+              theme = "dark";
+            }
+          }
+          setTheme(theme);
+        }
         syncPressed(); // expose the toggle state at load, not only after the first click
         btn.addEventListener("click", function () {
           var next = current() === "dark" ? "light" : "dark";
-          document.documentElement.dataset.theme = next;
           try {
-            localStorage.setItem("ymmv-theme", next);
+            localStorage.setItem(THEME_KEY, next);
           } catch (e) {}
-          syncPressed();
-          syncThemeColor();
+          setTheme(next);
+        });
+        // BFCache restore: a page served from the back-forward cache never re-runs the pre-paint
+        // head script, so its data-theme can be stale. Re-resolve only on a persisted restore.
+        window.addEventListener("pageshow", function (e) {
+          if (e.persisted) applyTheme();
+        });
+        // Cross-tab: a toggle in another same-origin tab writes ymmv-theme; mirror it here. A
+        // removeItem fires with newValue null, which storedTheme() reads as no choice → system.
+        // key null = localStorage.clear() in another tab, which wiped the choice too.
+        window.addEventListener("storage", function (e) {
+          if (e.key === null || e.key === THEME_KEY) applyTheme();
         });
         try {
           var mq = matchMedia("(prefers-color-scheme: light)");
-          mq.addEventListener("change", function (e) {
-            // guard INSIDE the callback — the outer try only covers registration, and
-            // localStorage can throw here in storage-blocked browsers
-            try {
-              if (!localStorage.getItem("ymmv-theme")) {
-                document.documentElement.dataset.theme = e.matches ? "light" : "dark";
-                syncPressed();
-                syncThemeColor();
-              }
-            } catch (err) {}
+          mq.addEventListener("change", function () {
+            // Follow the system only when there is no stored choice; applyTheme owns the
+            // whitelist + fallback (and its own storage guard), so this stays one source of truth.
+            if (!storedTheme()) applyTheme();
           });
         } catch (e) {}
       })();
@@ -130,10 +163,16 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
         if (!navigator.clipboard) return;
         var nodes = document.querySelectorAll("[data-copy]");
         nodes.forEach(function (el) {
+          // Promote the plain span to an ARIA button now that copying actually works, so a
+          // keyboard/AT user only reaches an operable control when the clipboard path is live
+          // (no dead button with JS off). The action wording in the label is required a11y copy.
+          el.setAttribute("role", "button");
+          el.setAttribute("tabindex", "0");
+          el.setAttribute("aria-label", "Copy install command: " + el.dataset.copy);
           el.dataset.copyReady = "";
           var status = el.querySelector("[data-copy-status]");
           var timer;
-          el.addEventListener("click", function () {
+          function copy() {
             navigator.clipboard
               .writeText(el.dataset.copy)
               .then(function () {
@@ -145,7 +184,34 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
                   if (status) status.textContent = "";
                 }, 1200);
               })
-              .catch(function () {});
+              .catch(function () {
+                // Clipboard blocked by policy (NotAllowedError): announce the failure instead of
+                // an operable control that silently does nothing. No data-copied, so the glyph
+                // never fakes success.
+                if (status) status.textContent = "Copy failed";
+                clearTimeout(timer);
+                timer = setTimeout(function () {
+                  if (status) status.textContent = "";
+                }, 1200);
+              });
+          }
+          el.addEventListener("click", copy);
+          el.addEventListener("keydown", function (ev) {
+            // Enter and Space activate a button. preventDefault on Space so it copies instead of
+            // scrolling the page. data-pressed mirrors :active for keyboard presses (a role=button
+            // span never enters :active from the keyboard).
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              el.dataset.pressed = "";
+              copy();
+            }
+          });
+          el.addEventListener("keyup", function (ev) {
+            if (ev.key === "Enter" || ev.key === " ") delete el.dataset.pressed;
+          });
+          el.addEventListener("blur", function () {
+            // focus can leave with the key still held; never leave the pressed state stuck
+            delete el.dataset.pressed;
           });
         });
       })();
