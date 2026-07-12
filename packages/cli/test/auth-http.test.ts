@@ -40,6 +40,38 @@ describe("mintYmmvToken", () => {
     await expect(mintYmmvToken("gho_x")).rejects.toThrow(/github is unavailable/i);
   });
 
+  it("503 with a non-JSON body (edge WAF page) falls back to the friendly GitHub-unavailable line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>blocked</html>", { status: 503 })),
+    );
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/GitHub is unavailable/);
+  });
+
+  it("429 with a message-less body falls back and still appends the retry hint", async () => {
+    stubFetch({ error: "rate_limited" }, 429, { "retry-after": "30" });
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Too many login attempts.*retry in 30s/i);
+  });
+
+  it("a body-read TIMEOUT on the mint response propagates as a timeout, never 'unexpected response'", async () => {
+    // Headers landed, body stalled past the signal's budget: rejecting json() with the signal's
+    // TimeoutError must not be mistaken for a middlebox token-less body.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.reject(
+            new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+          ),
+      }),
+    );
+    await expect(mintYmmvToken("gho_x")).rejects.toSatisfy(
+      (e: unknown) => e instanceof Error && e.name === "TimeoutError",
+    );
+  });
+
   it("throws a generic login-failed error on other non-ok statuses (e.g. foreign-token 401)", async () => {
     stubFetch({ error: "github_auth_failed" }, 401);
     await expect(mintYmmvToken("gho_x")).rejects.toThrow(/login failed: 401/i);
@@ -99,6 +131,57 @@ describe("revokeYmmvToken", () => {
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/auth/logout"),
       expect.objectContaining({ redirect: "manual" }),
+    );
+  });
+
+  it("rides safeFetch now: a thrown fetch reads as can't-reach and carries the timeout signal", async () => {
+    // Behavior contract with logout(): ANY throw (can't-reach and timeout alike) lands in its
+    // catch-all, which keeps the local token. The revoke is no longer the bare-fetch exception.
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    stubFetch({ revoked: true }, 200);
+    await revokeYmmvToken("ymmv_x");
+    expect(spy).toHaveBeenCalledWith(30_000);
+    spy.mockRestore();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toThrow(/Can't reach .*Check your connection/);
+  });
+
+  it("returns the server's verdict only from a well-shaped body", async () => {
+    stubFetch({ revoked: true }, 200);
+    expect(await revokeYmmvToken("ymmv_x")).toBe(true);
+    stubFetch({ revoked: false }, 200);
+    expect(await revokeYmmvToken("ymmv_x")).toBe(false);
+  });
+
+  it("a 200 with an unreadable or shapeless body THROWS — never a false 'no active session'", async () => {
+    // A middlebox-minted 200 (captive portal) or a stalled body must not read as a completed
+    // revoke: logout() would delete the local file while the server token stays live, stranding
+    // the only credential that can revoke it. Throwing keeps the token via logout's catch-all.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>portal</html>", { status: 200 })),
+    );
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toThrow(/unexpected response/);
+    stubFetch({}, 200);
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toThrow(/unexpected response/);
+    stubFetch({ revoked: "yes" }, 200);
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toThrow(/unexpected response/);
+  });
+
+  it("a body-read TIMEOUT on the revoke response propagates (token kept, not deleted)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.reject(
+            new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+          ),
+      }),
+    );
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toSatisfy(
+      (e: unknown) => e instanceof Error && e.name === "TimeoutError",
     );
   });
 });

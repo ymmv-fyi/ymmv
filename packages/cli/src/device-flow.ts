@@ -1,6 +1,6 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
-import { causeText, safeFetch, wireText } from "./http.js";
+import { causeText, isTimeoutError, REQUEST_TIMEOUT_MS, safeFetch, wireText } from "./http.js";
 import { colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
 import { saveToken } from "./token-store.js";
 
@@ -46,8 +46,12 @@ export async function requestDeviceCode(deps: PollDeps = {}): Promise<DeviceCode
     throw new Error(`device code request failed: ${res.status} ${wireText(await res.text())}`);
   }
   // Shape-check before use: a captive-portal/proxy 200 with the wrong body must read as a clear
-  // error, not crash link() on undefined or turn a missing expires_in into a NaN deadline.
-  const data = (await res.json().catch(() => null)) as Partial<DeviceCode> | null;
+  // error, not crash link() on undefined or turn a missing expires_in into a NaN deadline. A
+  // body-read TIMEOUT is rethrown instead — it must print as a timeout, not "unexpected response".
+  const data = (await res.json().catch((err: unknown) => {
+    if (isTimeoutError(err)) throw err;
+    return null;
+  })) as Partial<DeviceCode> | null;
   if (
     !data ||
     typeof data.device_code !== "string" ||
@@ -82,6 +86,10 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   const MAX_TRANSIENT_FAILURES = 5;
   while (now() < deadline) {
     await sleep(interval * 1000);
+    // Re-check AFTER the sleep too: with moments left on the code, sleeping a full (possibly
+    // slow_down-grown) interval and then holding a request up to REQUEST_TIMEOUT_MS would overrun
+    // the deadline by half a minute — report expired instead of polling a dead code.
+    if (now() >= deadline) break;
     // A THROWN fetch (wifi blip, DNS hiccup mid-poll) is the same class of transient as a proxy
     // 5xx — flow it into the counter instead of crashing a login the user already approved.
     let res: Response | undefined;
@@ -94,6 +102,11 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
           device_code: dc.device_code,
           grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         }),
+        // GitHub answers this endpoint immediately — slow_down pacing lives in the sleep above,
+        // never inside a held request — so the per-request timeout can't cut pacing short. It only
+        // turns a HUNG poll into a TimeoutError feeding the transient counter (previously a hang
+        // here stalled the login forever: the deadline is only checked between iterations).
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       lastCause = causeText(err);
@@ -102,9 +115,11 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
     if (res?.ok) {
       try {
         tok = (await res.json()) as { access_token?: string; error?: string; interval?: number };
-      } catch {
+      } catch (err) {
         tok = undefined;
-        lastCause = "unexpected response body";
+        // A body-read timeout is still transient here (the counter owns give-up), but label it
+        // truthfully — causeText maps the TimeoutError; anything else is a malformed body.
+        lastCause = isTimeoutError(err) ? causeText(err) : "unexpected response body";
       }
     } else if (res) {
       lastCause = `HTTP ${res.status}`;
