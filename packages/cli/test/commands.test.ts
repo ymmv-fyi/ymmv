@@ -14,7 +14,7 @@ import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
-import { deleteToken, loadToken } from "../src/token-store.js";
+import { deleteToken, loadCredential, loadToken } from "../src/token-store.js";
 
 function prof(
   handle: string,
@@ -38,6 +38,12 @@ let logs: string[];
 let errs: string[];
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default credential source mirrors the real file path: whatever loadToken is stubbed to return,
+  // tagged source "file". Env-credential tests override loadCredential directly.
+  vi.mocked(loadCredential).mockImplementation(async () => {
+    const stored = await loadToken();
+    return stored ? { ...stored, source: "file" } : null;
+  });
   vi.mocked(detectStack).mockReturnValue(new Map());
   logs = [];
   errs = [];
@@ -904,5 +910,87 @@ describe("delete", () => {
     expect(deleteToken).not.toHaveBeenCalled();
     expect(logs).toContain("\n\n  Cancelled. Nothing deleted.");
     expect(process.exitCode).toBe(130);
+  });
+});
+
+// The CI persona: YMMV_TOKEN (+ YMMV_HANDLE) instead of a stored login. The credential is
+// read-only config — commands must work without a device flow, and never touch the token FILE.
+describe("env credential (YMMV_TOKEN) command flows", () => {
+  const envCred = (handle: string | null) => ({
+    base: "B",
+    token: "ymmv_env",
+    handle,
+    source: "env" as const,
+  });
+
+  it("headline: non-interactive `ymmv -y` publishes under the env credential with NO device flow", async () => {
+    // The finding's trigger: `ymmv -y` in CI previously dead-ended at the interactive-terminal
+    // refusal (after a 401 even deleted the seeded token file first).
+    vi.mocked(loadCredential).mockResolvedValue(envCred("me"));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // no existing profile
+      .mockResolvedValueOnce(jsonRes({ handle: "me" })); // POST commits
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(login).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    expect(logs.join("\n")).toContain("Published me");
+  });
+
+  it("env credential without YMMV_HANDLE gets the YMMV_HANDLE copy, not the reserved-word lie", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const out = errs.join("\n");
+    expect(out).toContain("YMMV_HANDLE");
+    expect(out).not.toContain("reserved word");
+  });
+
+  it("delete: copy names the token binding, never the unverified YMMV_HANDLE, and keeps the file", async () => {
+    // Delete acts on the TOKEN's account (the request carries no handle). If YMMV_HANDLE pointed
+    // at someone else, a handle-derived URL here would confirm deletion of the wrong profile.
+    vi.mocked(loadCredential).mockResolvedValue(envCred("carol"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
+    await runDelete({ interactive: false, yes: true });
+    expect(deleteToken).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
+    const out = logs.join("\n");
+    expect(out).toContain("Deleted the profile bound to YMMV_TOKEN.");
+    expect(out).not.toContain("carol");
+  });
+
+  it("delete refusal (non-TTY, no -y) also names the binding, not the handle", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("carol"));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await runDelete({ interactive: false, yes: false });
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const out = errs.join("\n");
+    expect(out).toContain("the profile bound to YMMV_TOKEN");
+    expect(out).not.toContain("carol");
+  });
+
+  it("view stays file-only: an env credential never labels a fetched profile as 'you'", async () => {
+    // No trusted identity exists for YMMV_HANDLE (no whoami endpoint), so view deliberately does
+    // NOT consume env credentials — a mislabeled "you" diff would be confidently wrong output.
+    vi.mocked(loadToken).mockResolvedValue(null); // no file login
+    vi.mocked(loadCredential).mockResolvedValue(envCred("carol")); // env set, must be ignored
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await view("them");
+    // The load-bearing pins: view must never CONSULT the env-aware reader (a regression that
+    // did would exhaust the one-response fetch queue and degrade silently to the same card).
+    expect(loadCredential).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the target profile only, never a "mine" fetch
+    const out = logs.join("\n");
+    expect(out).toContain("them"); // plain card
+    expect(out).not.toContain("you"); // never a diff labeled against YMMV_HANDLE
+    expect(errs.join("\n")).not.toContain("couldn't load"); // no degraded-diff diagnostic either
   });
 });

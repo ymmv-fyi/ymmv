@@ -204,6 +204,16 @@ export async function login(deps: PollDeps = {}): Promise<void> {
         "(a piped or CI shell can't complete the GitHub device flow).",
     );
   }
+  // Warn BEFORE the device flow burns a round trip: the saved login stays shadowed while the env
+  // token wins every credential read. Diagnostic, so stderr; the user can Ctrl+C here.
+  if (process.env.YMMV_TOKEN) {
+    console.error(
+      message(
+        "YMMV_TOKEN is set and takes precedence over stored logins. This login will be saved " +
+          "but not used until you unset it.",
+      ),
+    );
+  }
   const prior = await peekCredential();
   const color = colorEnabled();
   const c = palette(color);

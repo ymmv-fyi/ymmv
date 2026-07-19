@@ -69,7 +69,9 @@ Residual accepted at ship (2026-07-02, Codex P1): the actor must interactively a
 flow from the victim's own terminal session. Real fix is cross-package: mint response
 (`/api/v1/auth/token`) gains a stable `github_id`, `MintResult` in `@ymmv/shared` carries it, the
 CLI compares id instead of handle. Wire-format addition — additive, but touches Worker + shared +
-CLI together.
+CLI together. A trusted identity source would also serve env-token auth (`YMMV_TOKEN`), whose
+`YMMV_HANDLE` is unverified today — it would let `ymmv <handle>` diff and the delete copy safely
+name the account under an env credential (both deliberately restricted at the 2026-07-19 review).
 
 ### Atomic login token rotate
 **Priority:** P4

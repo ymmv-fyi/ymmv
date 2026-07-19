@@ -56,8 +56,39 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
 (shape, statuses, caching, CORS):
 <https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md>.
 
-Color output respects `NO_COLOR`; set `YMMV_API` to point the CLI at a different Worker
-(development).
+## Environment variables
+
+- `NO_COLOR` disables color output (and `FORCE_COLOR=0`/`false` force-disables it).
+- `YMMV_API` points the CLI at a different Worker (development/staging). Bare origin only.
+- `YMMV_TOKEN` authenticates without a browser (CI and scripts, below). Takes precedence over
+  the stored login and is read-only: the CLI never writes, revokes, or deletes it, and
+  `ymmv login` / `ymmv logout` keep acting on the stored login. Viewing (`ymmv <handle>`) also
+  keeps using the stored login for the you-side of a diff. The token is sent to the server
+  `YMMV_API` selects, so set the two together.
+- `YMMV_HANDLE` names the GitHub username `YMMV_TOKEN` belongs to. Required for `ymmv -y` and
+  `ymmv set`/`unset` under an env token (there is no server lookup for it); ignored without
+  `YMMV_TOKEN`.
+
+## Publishing from CI
+
+`ymmv login` needs a browser, so mint the token on your machine and hand it to CI:
+
+1. Run `ymmv login` locally.
+2. Copy the `token` value from the token file:
+   `~/.config/ymmv/token.json` (Linux), `~/Library/Preferences/ymmv/token.json` (macOS),
+   `%APPDATA%\ymmv\Config\token.json` (Windows).
+3. Set it as a CI secret named `YMMV_TOKEN`, and set `YMMV_HANDLE` to your GitHub username.
+4. Run `npx ymmv-cli -y` in the job.
+
+Two things to know:
+
+- `ymmv -y` publishes the merge of your existing profile with what it detects on the machine it
+  runs on. Values you already published always win, but curated keys you have never set get the
+  CI runner's detected values (its OS, shell, and so on). For targeted updates from CI, prefer
+  `ymmv set <key> <value>`.
+- A rejected or revoked `YMMV_TOKEN` fails with an error naming the variable; nothing falls back
+  to an interactive login, and the stored login file on the runner (if any) is left untouched.
+  `ymmv delete` acts on the account the token is bound to, regardless of `YMMV_HANDLE`.
 
 ## License
 

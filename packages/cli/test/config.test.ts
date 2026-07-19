@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseProblem, normalizeBase } from "../src/config.js";
+import { baseProblem, credentialEnvProblem, normalizeBase } from "../src/config.js";
 
 // baseProblem is deliberately a pure function over the raw env value (BASE itself bakes at module
 // load, so env-stubbing after import can't exercise it) — and it validates the NORMALIZED value,
@@ -87,6 +87,57 @@ describe("baseProblem", () => {
       const p = baseProblem(raw) as string;
       expect(p).toContain("YMMV_API");
       expect(p).not.toContain("—");
+    }
+  });
+});
+
+// Pure like baseProblem, same rationale. The one asymmetry: YMMV_API echoes its value in every
+// message, YMMV_TOKEN must never — the token is a secret.
+describe("credentialEnvProblem", () => {
+  it("unset and empty YMMV_TOKEN are fine (empty is the shell way of clearing)", () => {
+    expect(credentialEnvProblem(undefined, undefined)).toBeNull();
+    expect(credentialEnvProblem("", "anything")).toBeNull();
+  });
+
+  it("a well-shaped token, with or without a handle, passes", () => {
+    expect(credentialEnvProblem("ymmv_abc123", undefined)).toBeNull();
+    expect(credentialEnvProblem("ymmv_abc123", "")).toBeNull();
+    expect(credentialEnvProblem("ymmv_abc123", "carol")).toBeNull();
+  });
+
+  it("rejects whitespace/control/non-ASCII tokens naming the variable, WITHOUT echoing the value", () => {
+    // Any of these would corrupt the `Bearer` header into an opaque undici TypeError.
+    for (const tok of ["bad token", "tok\nen", "tok\ten", "tok\ren", "töken"]) {
+      const p = credentialEnvProblem(tok, undefined) as string;
+      expect(p, tok).toContain("YMMV_TOKEN");
+      expect(p, tok).not.toContain(tok); // secret: never echoed, even malformed
+    }
+  });
+
+  it("rejects an invalid-shape YMMV_HANDLE naming the variable", () => {
+    for (const h of ["-lead", "trail-", "double--hyphen", "sp ace", "x".repeat(40)]) {
+      expect(credentialEnvProblem("ymmv_abc", h), h).toContain("YMMV_HANDLE");
+    }
+  });
+
+  it("rejects a reserved YMMV_HANDLE (nothing can ever bind to it)", () => {
+    const p = credentialEnvProblem("ymmv_abc", "login") as string;
+    expect(p).toContain("YMMV_HANDLE");
+    expect(p).toContain("reserved");
+  });
+
+  it("YMMV_HANDLE alone is inert (a stray export must never block file-token use)", () => {
+    expect(credentialEnvProblem(undefined, "-not-even-valid-")).toBeNull();
+  });
+
+  it("sanitizes the echoed HANDLE (env vars are untrusted print input) and stays copy-rule clean", () => {
+    const esc = String.fromCharCode(0x1b);
+    const p = credentialEnvProblem("ymmv_abc", `bad${esc}[31m--handle`) as string;
+    expect(p).not.toContain(esc);
+    for (const bad of ["bad token", undefined] as const) {
+      const msg = credentialEnvProblem(bad ?? "ymmv_abc", bad ? undefined : "-x-");
+      expect(msg).not.toBeNull(); // a null here would silently skip the copy-rule check
+      expect(msg).not.toContain("—");
     }
   });
 });

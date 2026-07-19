@@ -78,7 +78,9 @@ export async function loadToken(): Promise<StoredToken | null> {
 }
 
 /**
- * Lenient read for the login revoke path: base + token only, ANY base, handle ignored. loadToken's
+ * Lenient read for the login revoke path: base + token only, ANY base, handle ignored. NOT a
+ * `Credential` (file-only, no source tag) — despite the name, this reader predates the env-aware
+ * loadCredential below and must stay env-blind (revoke targets the FILE token). loadToken's
  * strictness is what makes a corrupt file read as logged-out — but the token inside may still be
  * live server-side, and re-login is about to overwrite the only copy of it. This reader lets
  * login() revoke (same base) or warn (other base) before the overwrite orphans it.
@@ -91,6 +93,29 @@ export async function peekCredential(): Promise<{ base: string; token: string } 
     parsed.token !== ""
     ? { base: parsed.base, token: parsed.token }
     : null;
+}
+
+export type CredentialSource = "env" | "file";
+
+export interface Credential extends StoredToken {
+  source: CredentialSource;
+}
+
+/**
+ * The credential API calls run under: `YMMV_TOKEN` (with optional `YMMV_HANDLE`) when set, else
+ * the stored file token. Env values are read at call time; empty string means unset (the YMMV_API
+ * convention). The file readers above stay env-blind ON PURPOSE: login's revoke/warn flow and
+ * logout must act on the FILE token only — an env token is read-only config the CLI must never
+ * revoke, overwrite, or delete. Shapes are vetted by credentialEnvProblem() (config.ts) before
+ * main() dispatches, so this reader trusts them.
+ */
+export async function loadCredential(): Promise<Credential | null> {
+  const envToken = process.env.YMMV_TOKEN || "";
+  if (envToken !== "") {
+    return { base: BASE, token: envToken, handle: process.env.YMMV_HANDLE || null, source: "env" };
+  }
+  const stored = await loadToken();
+  return stored ? { ...stored, source: "file" } : null;
 }
 
 export async function deleteToken(): Promise<void> {

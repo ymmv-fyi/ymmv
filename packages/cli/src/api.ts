@@ -10,7 +10,7 @@ import {
   withRetryHint,
 } from "./http.js";
 import { message, sanitizeValue } from "./render.js";
-import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
+import { type Credential, deleteToken, loadCredential } from "./token-store.js";
 
 /** A publish the CLI refuses deterministically — identity drifted mid-command or auth failed after
  *  its one retry. Re-running the SAME attempt can never succeed (a fresh run must rebuild the merge
@@ -24,18 +24,22 @@ export class PublishRefusal extends Error {
   }
 }
 
+/** One diagnosis for a dead env token, shared by publish and delete so the copy can't drift;
+ *  each caller appends its own next step. */
+const ENV_TOKEN_REJECTED = "The server rejected the token in YMMV_TOKEN (revoked or expired).";
+
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
  *  the edge WAF block page is non-JSON, so fall back to a generic line. */
 async function rateLimitMessage(res: Response): Promise<string> {
   return withRetryHint((await serverMessage(res)) ?? "rate limited, too many requests", res);
 }
 
-/** Ensure a token exists for the current base, logging in if needed. */
-export async function ensureLogin(): Promise<StoredToken> {
-  const existing = await loadToken();
+/** Ensure a credential exists for the current base (YMMV_TOKEN wins), logging in if needed. */
+export async function ensureLogin(): Promise<Credential> {
+  const existing = await loadCredential();
   if (existing) return existing;
   await login();
-  const fresh = await loadToken();
+  const fresh = await loadCredential();
   if (!fresh) throw new Error("Login did not persist a token. Run `ymmv login`.");
   return fresh;
 }
@@ -50,7 +54,7 @@ export interface PublishResult {
 }
 
 export async function publishProfile(profile: Profile): Promise<PublishResult> {
-  const send = (c: StoredToken) =>
+  const send = (c: Credential) =>
     safeFetch(
       `${BASE}/api/v1/profile`,
       {
@@ -76,6 +80,19 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   }
   let res = await send(cred);
   if (res.status === 401 || res.status === 409) {
+    // An env credential must NEVER enter the heal below: deleteToken() would destroy an unrelated
+    // file login, and a device flow can't fix an env var. Deterministic for this process (no edit
+    // changes the environment), so PublishRefusal — the interactive loop exits instead of
+    // re-offering a retry that fails identically.
+    if (cred.source === "env") {
+      throw new PublishRefusal(
+        res.status === 401
+          ? `${ENV_TOKEN_REJECTED} Mint a new one with \`ymmv login\` on an interactive ` +
+              "machine and update YMMV_TOKEN."
+          : "The server no longer accepts this handle for the YMMV_TOKEN account. Update " +
+              "YMMV_HANDLE, or mint a fresh token with `ymmv login`.",
+      );
+    }
     // 401: token revoked/expired. 409: the local handle went stale after a GitHub rename. Both heal
     // by re-logging-in (re-mint + refresh the bound handle), then retry once. One line of context
     // first: login()'s device prompt would otherwise appear out of nowhere mid-publish — an
@@ -183,13 +200,15 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
 
 /**
  * Hard-delete the logged-in user's profile (the server revokes ALL the account's tokens).
- * Deliberately NO auto-reauth: a 401 here means the stored token is already dead, and silently
+ * The CALLER passes the credential it just confirmed against — re-reading the store here would
+ * open a confirm-to-send window where a concurrent `ymmv login` swaps accounts and the DELETE
+ * lands on an identity the user never confirmed (publish's drift guard, applied to delete).
+ * Deliberately NO auto-reauth: a 401 here means the token is already dead, and silently
  * re-logging-in could delete a DIFFERENT account than the one the user just confirmed (a device-flow
  * account switch). Make the user re-login + re-run `delete`, which re-confirms the current handle.
  * `redirect: "manual"` so a proxy redirect to a 200 can't masquerade as a successful delete.
  */
-export async function deleteProfile(): Promise<void> {
-  const cred = await ensureLogin();
+export async function deleteProfile(cred: Credential): Promise<void> {
   const res = await safeFetch(
     `${BASE}/api/v1/profile`,
     {
@@ -200,7 +219,13 @@ export async function deleteProfile(): Promise<void> {
     BASE,
   );
   if (res.status === 401) {
-    throw new Error("Session expired. Run `ymmv login`, then `ymmv delete` again.");
+    // Same env split as publish: a dead env token is not healable by `ymmv login` HERE (the env
+    // var keeps winning), so the copy must name the variable instead.
+    throw new Error(
+      cred.source === "env"
+        ? `${ENV_TOKEN_REJECTED} Update YMMV_TOKEN and run \`ymmv delete\` again.`
+        : "Session expired. Run `ymmv login`, then `ymmv delete` again.",
+    );
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
