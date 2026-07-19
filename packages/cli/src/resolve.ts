@@ -47,12 +47,13 @@ const EXTRA_USAGE = `usage: ${SET_EXTRA}`;
 const UNSET_USAGE = `usage: ymmv unset <key>  |  ${UNSET_EXTRA}`;
 const VIEW_USAGE = "usage: ymmv view <handle>";
 
-/** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint. */
+/** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
+ *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). */
 function invalidKeyError(head: string, hint: string): Command {
   return {
     kind: "error",
     message:
-      `"${head}" is not a curated key. Valid keys: ${CURATED_KEYS.join(", ")}.\n` +
+      `"${sanitizeValue(head)}" is not a curated key. Valid keys: ${CURATED_KEYS.join(", ")}.\n` +
       `For anything else, use: ${hint}.`,
   };
 }
@@ -138,9 +139,12 @@ export function resolveArg(argv: string[]): Command {
   if (first === undefined) return { kind: "publish", yes: false };
   if (first === "-y" || first === "--yes") {
     if (rest.length > 0) {
+      // Echo the user's own intent when it's a yes-accepting verb; never advertise the
+      // destructive delete form to someone who typed something else.
+      const example = rest[0] === "delete" || rest[0] === "publish" ? rest[0] : "publish";
       return {
         kind: "error",
-        message: `Put ${first} after the command: ymmv delete -y. A bare ymmv -y publishes without prompts.`,
+        message: `Put ${first} after the command: ymmv ${example} -y. A bare ymmv -y publishes without prompts.`,
       };
     }
     return { kind: "publish", yes: true };
@@ -164,7 +168,8 @@ export function resolveArg(argv: string[]): Command {
     const handle = rest[0];
     if (!handle) return { kind: "error", message: VIEW_USAGE };
     if (!isValidHandle(handle)) {
-      // Invalid input is the one path that echoes UNVALIDATED argv — strip escapes first.
+      // Rejection paths echo UNVALIDATED argv (here, the bare branch, unknown-option,
+      // invalidKeyError) — every one strips escapes before printing.
       return { kind: "error", message: `"${sanitizeValue(handle)}" is not a valid GitHub handle.` };
     }
     if (isReserved(handle)) return reservedError(handle);
@@ -175,7 +180,10 @@ export function resolveArg(argv: string[]): Command {
   // Anything else: an unknown flag is an error; otherwise it's a bare handle to view. Reserved
   // is checked before the trailing guard so `ymmv Set editor vim` hints the verb, not the tail.
   if (first.startsWith("-")) {
-    return { kind: "error", message: `Unknown option "${first}". Run \`ymmv help\`.` };
+    return {
+      kind: "error",
+      message: `Unknown option "${sanitizeValue(first)}". Run \`ymmv help\`.`,
+    };
   }
   if (!isValidHandle(first)) {
     // Same unvalidated-argv echo as the view branch: sanitize before printing.

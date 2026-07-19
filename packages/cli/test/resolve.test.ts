@@ -168,6 +168,15 @@ describe("resolveArg", () => {
     expect(resolveArg(["--yes", "set", "editor", "x"]).kind).toBe("error");
   });
 
+  it("the -y ordering hint never offers delete to a user who typed something else", () => {
+    const cmd = resolveArg(["-y", "set", "editor", "vim"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") {
+      expect(cmd.message).toMatch(/ymmv publish -y/);
+      expect(cmd.message).not.toMatch(/delete/);
+    }
+  });
+
   it("`delete <handle> -y` → usage error, never an unprompted delete of the caller's profile", () => {
     const cmd = resolveArg(["delete", "oldname", "-y"]);
     expect(cmd.kind).toBe("error");
@@ -260,13 +269,20 @@ describe("resolveArg", () => {
   });
 
   it("invalid-handle errors strip escape bytes before echoing argv", () => {
-    // Both echo paths: bare-handle and `view <handle>`. ESC would let crafted argv retitle
-    // the terminal or recolor the line; sanitizeValue must strip it before the message prints.
-    for (const argv of [["]0;pwned_x"], ["view", "[31m_bad[0m"]]) {
+    // Every rejection path that echoes argv: bare-handle, view, unknown option, and the
+    // set/unset invalid-key error. ESC would let crafted argv retitle the terminal or recolor
+    // the line; sanitizeValue must strip it before the message prints.
+    const junk = "]0;pwned_x";
+    for (const argv of [
+      [junk],
+      ["view", junk],
+      [`-${junk}`],
+      ["set", junk, "x"],
+      ["unset", junk],
+    ]) {
       const cmd = resolveArg(argv);
       expect(cmd.kind).toBe("error");
       if (cmd.kind === "error") {
-        expect(cmd.message).toMatch(/not a valid GitHub handle/);
         expect(cmd.message).not.toContain("");
         expect(cmd.message).not.toContain("");
       }
