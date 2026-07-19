@@ -3,7 +3,7 @@ import { SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
-import { authRateLimitKey, writeRateLimitKey } from "../src/lib/rate-limit.ts";
+import { authRateLimitKey, RETRY_AFTER, writeRateLimitKey } from "../src/lib/rate-limit.ts";
 import { handleBindStatements } from "../src/lib/users.ts";
 import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
@@ -119,7 +119,9 @@ describe("rate limiting", () => {
 
     const res = await POST(postCtx(TOK_POST, "rlpost"));
     expect(res.status).toBe(429);
-    expect(res.headers.get("retry-after")).toBe("60");
+    // Not a tautology: wrangler-config.test.ts pins RETRY_AFTER against every binding's period,
+    // so this chain reaches header ↔ constant ↔ deployed config.
+    expect(res.headers.get("retry-after")).toBe(String(RETRY_AFTER));
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("rate_limited");
     // The CLI prints {message} verbatim in the terminal — copy rules bind server strings too:
