@@ -5,9 +5,10 @@ vi.mock("../src/auth-http.js");
 vi.mock("../src/device-flow.js");
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
-import { deleteProfile, publishProfile } from "../src/api.js";
+import { deleteProfile, PublishRefusal, publishProfile } from "../src/api.js";
 import { revokeYmmvToken } from "../src/auth-http.js";
 import { login } from "../src/device-flow.js";
+import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
 import { deleteToken, loadToken, peekBase } from "../src/token-store.js";
 
@@ -52,24 +53,47 @@ describe("ymmv logout", () => {
   });
 
   it("KEEPS the local token when the revoke can't reach the server", async () => {
+    // Class-truthful mock: the real revokeYmmvToken surfaces connectivity failures as safeFetch's
+    // typed NetworkError — logout branches on that type, never on message text.
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
-    vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("offline"));
+    vi.mocked(revokeYmmvToken).mockRejectedValue(new NetworkError("Can't reach B (offline)"));
     await main(["logout"]);
     expect(deleteToken).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
   it("KEEPS the local token when the revoke times out (hung connection, not just refused)", async () => {
-    // The revoke now rides safeFetch's 30s timeout: a hang becomes a throw ≤30s in, and logout's
-    // catch-all still owns the copy — previously a hung revoke stalled logout forever.
+    // A BODY-read timeout escapes safeFetch's wrapper as the bare TimeoutError DOMException —
+    // connectivity-shaped, so it must land in the couldn't-reach branch via isTimeoutError.
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     vi.mocked(revokeYmmvToken).mockRejectedValue(
-      new Error("Can't reach B. Check your connection (request timed out)"),
+      new DOMException("The operation was aborted due to timeout", "TimeoutError"),
     );
     await main(["logout"]);
     expect(deleteToken).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
     expect(errs.join("\n")).toMatch(/Couldn't reach the server to revoke/);
+  });
+
+  it("tells the truth when the server was REACHED but refused the revoke (no connectivity blame)", async () => {
+    // revokeYmmvToken's own throws — `logout failed: 500` (D1 hiccup) and `logout failed:
+    // unexpected response` (middlebox 200) — mean the server answered. "Check your connection"
+    // would misdiagnose and point at the wrong fix; the token is still kept either way.
+    for (const failure of ["logout failed: 500", "logout failed: unexpected response"]) {
+      vi.clearAllMocks();
+      errs.length = 0;
+      vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+      vi.mocked(revokeYmmvToken).mockRejectedValue(new Error(failure));
+      await main(["logout"]);
+      expect(deleteToken).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(errs).toContain(
+        "\n  The server didn't confirm the revoke. Your token is still active. " +
+          "Run `ymmv logout` again shortly.",
+      );
+      expect(errs.join("\n")).not.toMatch(/Couldn't reach/);
+      process.exitCode = undefined;
+    }
   });
 
   it("says 'not logged in' and touches nothing when there's no token", async () => {
@@ -102,7 +126,7 @@ describe("ymmv logout", () => {
 
   it("prints the revoke-unreachable warning as an indented unit on stderr", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
-    vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("offline"));
+    vi.mocked(revokeYmmvToken).mockRejectedValue(new NetworkError("Can't reach B (offline)"));
     await main(["logout"]);
     expect(errs).toContain(
       "\n  Couldn't reach the server to revoke. Your token is still active. " +
@@ -145,8 +169,13 @@ describe("ymmv unset dispatch", () => {
 });
 
 describe("publish auto-reauth", () => {
-  it("on 401: deletes the token, re-logs-in, retries once", async () => {
+  it("on 401: explains the re-login, deletes the token, re-logs-in, retries once", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    // The context line must land BEFORE login()'s device prompt — an unexplained GitHub auth
+    // challenge mid-publish reads as phishing. login is mocked to drop a marker so order is real.
+    vi.mocked(login).mockImplementation(async () => {
+      logs.push("<device-flow-prompt>");
+    });
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(status(401))
@@ -156,9 +185,12 @@ describe("publish auto-reauth", () => {
     expect(deleteToken).toHaveBeenCalledTimes(1);
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(2);
+    const context = logs.indexOf("\n  Session expired. Logging in again to retry the publish.");
+    expect(context).toBeGreaterThanOrEqual(0);
+    expect(context).toBeLessThan(logs.indexOf("<device-flow-prompt>"));
   });
 
-  it("on 409 (stale handle): re-logs-in WITHOUT deleting, then REFUSES the rebound retry", async () => {
+  it("on 409 (stale handle): explains, re-logs-in WITHOUT deleting, then REFUSES the rebound retry", async () => {
     vi.mocked(loadToken)
       .mockResolvedValueOnce({ base: "B", token: "t", handle: "old" })
       .mockResolvedValue({ base: "B", token: "t2", handle: "new" });
@@ -175,6 +207,9 @@ describe("publish auto-reauth", () => {
     expect(deleteToken).not.toHaveBeenCalled();
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(1); // the stale-merge retry POST never went out
+    expect(logs).toContain(
+      "\n  The server no longer recognizes your handle. Logging in again to retry the publish.",
+    );
   });
 
   it("refuses the FIRST send when the stored login no longer matches the merged profile", async () => {
@@ -185,6 +220,15 @@ describe("publish auto-reauth", () => {
     await expect(publishProfile(PROFILE)).rejects.toThrow(/login changed/);
     expect(fetchFn).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
+  });
+
+  it("a 200 with an unreadable body still reports SUCCESS (the commit already happened)", async () => {
+    // A truncated/malformed success body must never resurface as a failed publish — the
+    // interactive loop would falsely print "Nothing was published" for a live profile.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json", { status: 200 })));
+    const res = await publishProfile(PROFILE);
+    expect(res.handle).toBe("carol"); // login-bound fallback echo
   });
 
   it("sanitizes the server-echoed handle in the publish result (callers print it verbatim)", async () => {
@@ -213,10 +257,11 @@ describe("publish auto-reauth", () => {
     await expect(publishProfile(PROFILE)).rejects.toThrow(/authentication failed/i);
   });
 
-  it("second 409 after a same-handle re-login surfaces the SERVER's message (no infinite loop)", async () => {
+  it("second 409 handle_not_bound gets HONEST post-heal copy, never the server's 'run login and retry'", async () => {
     // Same handle re-minted → the rebind guard passes → retry → 409 again → final verdict. The
-    // dominant body is the bound-handle guard's handle_not_bound, whose message is the actionable
-    // copy — surface it instead of the generic handle-taken line.
+    // server's handle_not_bound message says "Run `ymmv login` and retry" — but the CLI has
+    // ALREADY done exactly that; parroting it would send the user in a loop. Branch on the slug
+    // and tell the truth instead.
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     vi.stubGlobal(
       "fetch",
@@ -227,14 +272,50 @@ describe("publish auto-reauth", () => {
         }),
       ),
     );
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/Publish uses the handle bound at login/);
+    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/still refuses this handle after a fresh login/);
+    expect((err as Error).message).not.toMatch(/Run `ymmv login`/);
+    // PublishRefusal is the interactive loop's discriminator: as a plain Error, a repeated `y`
+    // would replay the whole heal (device flow + POST) against a deterministic 409.
+    expect(err).toBeInstanceOf(PublishRefusal);
     expect(login).toHaveBeenCalledTimes(1); // exactly one heal attempt
   });
 
-  it("second 409 with a message-less body falls back to the handle-taken line", async () => {
+  it("the deep refusal sites throw PublishRefusal, not plain Error (the loop's exit contract)", async () => {
+    // Message-text pins alone would keep passing if a site regressed to `throw new Error` — and
+    // the interactive loop would then politely re-offer a retry that can never succeed.
+    // Rebound-after-401 site:
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce({ base: "B", token: "t", handle: "carol" })
+      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
+    await expect(publishProfile(PROFILE)).rejects.toBeInstanceOf(PublishRefusal);
+    // Post-retry second-401 site:
+    vi.clearAllMocks();
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
+    await expect(publishProfile(PROFILE)).rejects.toBeInstanceOf(PublishRefusal);
+  });
+
+  it("second 409 with a message-less handle_not_bound body gets the same honest copy", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_not_bound" })));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+    await expect(publishProfile(PROFILE)).rejects.toThrow(
+      /still refuses this handle after a fresh login/,
+    );
+  });
+
+  it("second 409 with a DIFFERENT slug keeps that server message (only handle_not_bound is stale advice)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          status(409, { error: "handle_reused", message: "That handle moved to a new account." }),
+        ),
+    );
+    await expect(publishProfile(PROFILE)).rejects.toThrow(/That handle moved to a new account/);
   });
 
   it("second 409 with a non-JSON or non-string-message body falls back too", async () => {
@@ -266,6 +347,43 @@ describe("publish auto-reauth", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("boom", { status: 500 })));
     await expect(publishProfile(PROFILE)).rejects.toThrow(/publish failed: 500 boom/);
   });
+
+  it("a generic POST failure with a {message} body surfaces the server's copy, not the dump", async () => {
+    // The server's 4xx bodies carry curated human copy (422 caps, 400 schema upgrade); wrapping
+    // it in `publish failed: 422 {...}` JSON noise defeats the point of writing it.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          status(422, { error: "value_too_long", message: "Values are capped at 256 characters." }),
+        ),
+    );
+    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    expect((err as Error).message).toBe("Values are capped at 256 characters.");
+    expect((err as Error).message).not.toMatch(/publish failed/);
+  });
+
+  it("a schema-rejection 400 surfaces the upgrade instruction AS a refusal (no retry loop)", async () => {
+    // First-publish path: the read 404s (no profile), so the stale CLI reaches the POST and gets
+    // the 400. No edit can change the compiled SCHEMA_VERSION — the interactive loop must exit.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        status(400, {
+          error: "unsupported_schema_version",
+          expected: 2,
+          got: 1,
+          message: "Upgrade the ymmv CLI (npm i -g ymmv-cli).",
+        }),
+      ),
+    );
+    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/^Upgrade the ymmv CLI \(npm i -g ymmv-cli\)\.$/);
+    expect(err).toBeInstanceOf(PublishRefusal);
+  });
 });
 
 describe("deleteProfile", () => {
@@ -291,6 +409,17 @@ describe("deleteProfile", () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(500)));
     await expect(deleteProfile()).rejects.toThrow(/delete failed/);
+  });
+
+  it("surfaces a {message} body instead of the raw dump (same rule as publish)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(status(422, { error: "nope", message: "The server said why." })),
+    );
+    const err = await deleteProfile().catch((e: Error) => e);
+    expect((err as Error).message).toBe("The server said why.");
+    expect((err as Error).message).not.toMatch(/delete failed/);
   });
 });
 

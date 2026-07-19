@@ -1,9 +1,28 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
-import { safeFetch, serverMessage, wireText, withRetryHint } from "./http.js";
-import { sanitizeValue } from "./render.js";
+import {
+  safeFetch,
+  serverMessage,
+  wireBody,
+  wireErrorBody,
+  wireText,
+  withRetryHint,
+} from "./http.js";
+import { message, sanitizeValue } from "./render.js";
 import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
+
+/** A publish the CLI refuses deterministically — identity drifted mid-command or auth failed after
+ *  its one retry. Re-running the SAME attempt can never succeed (a fresh run must rebuild the merge
+ *  under the current login), so the interactive edit loop rethrows this instead of re-offering a
+ *  retry that would fail identically. Transient failures (5xx/429/422/network) stay plain Errors
+ *  and keep the loop's answers alive. */
+export class PublishRefusal extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "PublishRefusal";
+  }
+}
 
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
  *  the edge WAF block page is non-JSON, so fall back to a generic line. */
@@ -22,7 +41,9 @@ export async function ensureLogin(): Promise<StoredToken> {
 }
 
 /** What a successful publish resolved to — the CALLER composes any user-facing message
- *  (IO stays at the command edges; this network layer never prints). */
+ *  (IO stays at the command edges; this network layer never prints, with ONE sanctioned
+ *  exception: the self-heal context line below, which must immediately precede the interactive
+ *  device-flow prompt it explains — login() prints that prompt from this same call site). */
 export interface PublishResult {
   handle: string;
   url: string;
@@ -49,15 +70,24 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
   // merge onto the wrong profile — refuse instead of silently substituting the new handle. Both
   // auth-retry paths below re-check the bound handle after their re-login.
   if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
-    throw new Error(
+    throw new PublishRefusal(
       "The stored login changed while this command was running. Re-run it under the current account.",
     );
   }
   let res = await send(cred);
   if (res.status === 401 || res.status === 409) {
     // 401: token revoked/expired. 409: the local handle went stale after a GitHub rename. Both heal
-    // by re-logging-in (re-mint + refresh the bound handle), then retry once.
+    // by re-logging-in (re-mint + refresh the bound handle), then retry once. One line of context
+    // first: login()'s device prompt would otherwise appear out of nowhere mid-publish — an
+    // unexplained GitHub auth challenge is indistinguishable from a phishing surprise.
     const was401 = res.status === 401;
+    console.log(
+      message(
+        was401
+          ? "Session expired. Logging in again to retry the publish."
+          : "The server no longer recognizes your handle. Logging in again to retry the publish.",
+      ),
+    );
     if (was401) await deleteToken();
     await login();
     cred = await ensureLogin();
@@ -69,7 +99,7 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
     // refuse; a fresh run re-reads under the current handle and rebuilds the merge correctly.
     if ((cred.handle ?? "").toLowerCase() !== profile.handle.toLowerCase()) {
       const bound = sanitizeValue(cred.handle ?? "");
-      throw new Error(
+      throw new PublishRefusal(
         was401
           ? `The re-login bound a different account ("${bound}", not ` +
               `"${sanitizeValue(profile.handle)}"). Nothing was published. Re-run under the account you meant.`
@@ -77,22 +107,54 @@ export async function publishProfile(profile: Profile): Promise<PublishResult> {
       );
     }
     res = await send(cred);
-    if (res.status === 401) throw new Error("Authentication failed. Run `ymmv login`.");
+    if (res.status === 401) throw new PublishRefusal("Authentication failed. Run `ymmv login`.");
     if (res.status === 409) {
-      // The dominant body here since the bound-handle guard is handle_not_bound, whose message
-      // carries the actionable copy ("run ymmv login and retry" — a fresh run re-reads and heals
-      // the race). The hardcoded line stays for a non-JSON body or the rare true handle-reuse.
+      // The dominant body here since the bound-handle guard is handle_not_bound — but the CLI has
+      // ALREADY re-logged-in and retried, so surfacing the server's "Run `ymmv login` and retry."
+      // would instruct the user to repeat what just failed. Say what's true instead. Any OTHER
+      // slug keeps its server message (e.g. a true handle-reuse explanation); the hardcoded line
+      // stays for a non-JSON body. Body read ONCE — a drained Response must never hit
+      // serverMessage(res) again.
+      const { slug, message: srvMsg } = wireErrorBody(await wireBody(res));
+      if (slug === "handle_not_bound") {
+        // PublishRefusal, not Error: the copy says re-run, so the interactive loop must EXIT —
+        // re-offering `y` would replay the whole heal (another device-flow login + POST) against
+        // a deterministic 409, burning auth and write budgets on a loop that can't succeed.
+        throw new PublishRefusal(
+          "The server still refuses this handle after a fresh login. Wait a moment and re-run the command.",
+        );
+      }
       throw new Error(
-        (await serverMessage(res)) ??
+        srvMsg ??
           "that handle is taken by another account (your GitHub handle may have been reused).",
       );
     }
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
-    throw new Error(`publish failed: ${res.status} ${wireText(await res.text())}`);
+    // Server copy first: the Worker's 4xx bodies carry a human {message} (422 caps, 400 schema
+    // upgrade). The status + capped raw dump remains only for bodies without one (plain-text
+    // 500s, proxy pages).
+    const raw = await wireBody(res);
+    const parsed = wireErrorBody(raw);
+    if (res.status === 400 && parsed.slug === "unsupported_schema_version") {
+      // Deterministic for this binary: no edit can change the compiled SCHEMA_VERSION, so the
+      // interactive loop must exit with the upgrade copy, not re-offer a retry that 400s forever.
+      throw new PublishRefusal(parsed.message ?? `publish failed: ${res.status} ${wireText(raw)}`);
+    }
+    throw new Error(parsed.message ?? `publish failed: ${res.status} ${wireText(raw)}`);
   }
-  const data = (await res.json()) as { handle?: unknown };
+  // A 200 status already proves the server committed the write — a truncated, stalled, or
+  // malformed success BODY must not resurface as a failed publish (the interactive loop would
+  // then falsely print "Nothing was published" for a profile that is live). Unlike the error
+  // paths, even a body-read timeout is swallowed here: the commit happened; the body only
+  // supplies the echo handle, and the login-bound one is a correct fallback.
+  let data: { handle?: unknown } = {};
+  try {
+    data = (await res.json()) as { handle?: unknown };
+  } catch {
+    // fall through to the profile.handle fallback below
+  }
   // The confirmation echoes wire data: shape-check + sanitize the server-returned handle before
   // it can reach a terminal (a non-first-party origin could inject terminal escapes here).
   const shown = typeof data.handle === "string" ? sanitizeValue(data.handle) : profile.handle;
@@ -142,6 +204,8 @@ export async function deleteProfile(): Promise<void> {
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
-    throw new Error(`delete failed: ${res.status} ${wireText(await res.text())}`);
+    // Same message-first rule as publish: show the server's human copy when the body carries one.
+    const raw = await wireBody(res);
+    throw new Error(wireErrorBody(raw).message ?? `delete failed: ${res.status} ${wireText(raw)}`);
   }
 }

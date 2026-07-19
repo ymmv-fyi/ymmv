@@ -3,6 +3,7 @@ import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
+import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
 import { type Codes, colorEnabled, message, palette } from "./render.js";
 import { resolveArg } from "./resolve.js";
@@ -31,9 +32,12 @@ ${c.faint}Usage:${c.reset}
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool`;
 
-// `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke can't reach the
-// server, KEEP the local token (deleting it would orphan a still-active token; revoke-all is post-v1)
-// and tell the user to retry. A token for a different base is left untouched (base-scoping).
+// `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke fails, KEEP the
+// local token (deleting it would orphan a still-active token; revoke-all is post-v1) and tell the
+// user to retry — but tell the TRUTH about why: a connectivity failure (NetworkError / a body-read
+// timeout) gets "couldn't reach", while a server-reached failure (revokeYmmvToken's own
+// `logout failed: <status>` / bad-200-body throws) must not blame the user's connection.
+// A token for a different base is left untouched (base-scoping).
 async function logout(): Promise<void> {
   const stored = await loadToken();
   if (!stored) {
@@ -50,10 +54,12 @@ async function logout(): Promise<void> {
   let revoked: boolean;
   try {
     revoked = await revokeYmmvToken(stored.token);
-  } catch {
+  } catch (e) {
     console.error(
       message(
-        "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected.",
+        e instanceof NetworkError || isTimeoutError(e)
+          ? "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected."
+          : "The server didn't confirm the revoke. Your token is still active. Run `ymmv logout` again shortly.",
       ),
     );
     process.exitCode = 1;
