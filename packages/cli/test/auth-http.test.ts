@@ -72,9 +72,28 @@ describe("mintYmmvToken", () => {
     );
   });
 
-  it("throws a generic login-failed error on other non-ok statuses (e.g. foreign-token 401)", async () => {
+  it("maps 401 github_auth_failed to human copy — the post-approval moment must not print a slug", async () => {
     stubFetch({ error: "github_auth_failed" }, 401);
-    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/login failed: 401/i);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(
+      /GitHub rejected the authorization\. Run `ymmv login` to try again\./,
+    );
+  });
+
+  it("maps 500 internal_error to human copy with a retry instruction", async () => {
+    stubFetch({ error: "internal_error" }, 500);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(
+      /The server hit an error minting your login\. Run `ymmv login` again shortly\./,
+    );
+  });
+
+  it("keeps the raw login-failed form for unknown slugs — the slug is the debugging signal", async () => {
+    stubFetch({ error: "missing_access_token" }, 400);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/login failed: 400 missing_access_token/);
+  });
+
+  it("a mapped STATUS with an unknown slug stays raw too (both must match to map)", async () => {
+    stubFetch({ error: "weird_new_code" }, 401);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/login failed: 401 weird_new_code/);
   });
 
   it('sets redirect:"manual" so a 3xx can never masquerade as a successful mint', async () => {

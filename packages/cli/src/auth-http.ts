@@ -58,7 +58,20 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
       );
     }
     const body = ((await bodyJson(res)) ?? {}) as { error?: string };
-    throw new Error(`login failed: ${res.status} ${wireText(body.error ?? "")}`.trim());
+    const slug = typeof body.error === "string" ? body.error : "";
+    // Map the two server slugs a real user can hit at this moment — right after approving the
+    // device flow, the highest-stakes step of onboarding — to human copy with a next step. The
+    // 400 slugs (bad_json, missing_access_token) are unreachable from a well-formed CLI, and any
+    // unknown code keeps the raw form: for those, the slug IS the most useful thing to print.
+    if (res.status === 401 && slug === "github_auth_failed") {
+      throw new Error("GitHub rejected the authorization. Run `ymmv login` to try again.");
+    }
+    if (res.status === 500 && slug === "internal_error") {
+      throw new Error(
+        "The server hit an error minting your login. Run `ymmv login` again shortly.",
+      );
+    }
+    throw new Error(`login failed: ${res.status} ${wireText(slug)}`.trim());
   }
   // Shape-check the mint response BEFORE it can touch the token store: a middlebox 200 with `{}`
   // (or non-JSON) must not overwrite a previously valid token.json with a token-less blob — that
