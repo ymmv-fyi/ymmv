@@ -8,14 +8,18 @@ import { env } from "cloudflare:workers";
 //   • RL_AUTH  — per client IP. Gates the UNAUTHENTICATED mint endpoint BEFORE it makes its outbound
 //     GitHub introspection call, so a single-IP junk-token flood can't amplify into unbounded outbound
 //     subrequests. No identity exists yet there, so the IP is the only thing to key on.
-// The WAF rule (per IP, at the edge) is the real volumetric shield; both bindings are in-code backstops.
+// The WAF rule (per IP per colo, at the edge; provision/verify via infra/waf-ratelimit.sh) is the
+// volumetric shield; both bindings are in-code backstops. Mint has both halves; logout has NO
+// binding and relies on the WAF rule alone.
 //
 // NOTE: Cloudflare rate-limit bindings count per data-center (colo), so the effective ceiling is
 // ~limit×(#colos)/period for a globally-distributed caller — a backstop against runaway/abusive
 // traffic, not a precise global quota.
 
-// Retry-After hint (seconds) — matches each binding's `period`. Advisory; the limiter is the gate.
-const RETRY_AFTER = 60;
+// Retry-After hint (seconds). Must equal every binding's `period` in wrangler.jsonc — enforced by
+// test/wrangler-config.test.ts, so a period edit fails CI here instead of shipping a stale hint.
+// Advisory; the limiter is the gate.
+export const RETRY_AFTER = 60;
 
 /** The 429 a rate-limited caller receives. The contract the CLI keys on is the HTTP 429 status,
  *  the optional JSON `{message}` (printed verbatim), and the delta-seconds `retry-after` — NOT the

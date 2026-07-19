@@ -14,6 +14,9 @@
   // `ymmv-dev` Worker (name above) — NOT the prod Worker. Prod + staging go through `CLOUDFLARE_ENV`
   // + `--env` (CI bakes them). CAVEAT: a bare `wrangler deploy`/`--remote` still BINDS this shared
   // prod D1, so always pass `CLOUDFLARE_ENV=...` for remote work — never bare-deploy against prod.
+  // The same hazard is why the ratelimits below use their own namespace ids (1000/2000): counters
+  // are shared account-wide per namespace_id, so a bare-deployed ymmv-dev reusing prod's ids
+  // (1001/2001) would consume prod's live rate-limit budget (staging isolates too: 1002/2002).
   "d1_databases": [
     {
       "binding": "DB",
@@ -29,12 +32,12 @@
   "ratelimits": [
     {
       "name": "RL_WRITE",
-      "namespace_id": "1001",
+      "namespace_id": "1000",
       "simple": { "limit": 60, "period": 60 }
     },
     {
       "name": "RL_AUTH",
-      "namespace_id": "2001",
+      "namespace_id": "2000",
       "simple": { "limit": 60, "period": 60 }
     }
   ],
