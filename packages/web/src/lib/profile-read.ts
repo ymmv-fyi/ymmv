@@ -12,7 +12,15 @@ import {
 // JSON can never disagree on what a handle resolves to. It does NOT catch D1 errors: a throw bubbles
 // to the caller, which surfaces a 500 (error honesty) rather than masking a fault as a 404.
 
-type LiveRow = { github_id: number; handle: string; extras: string; updated_at: string };
+// One row of the live-owner LEFT JOIN: owner columns repeat per entry row; a zero-entry profile
+// yields exactly one row with NULL entry columns.
+type LiveEntryRow = {
+  handle: string;
+  extras: string;
+  updated_at: string;
+  key: string | null;
+  value: string | null;
+};
 
 /** Discriminated outcome of resolving a handle. `handle` on `renamed` is the owner's CURRENT handle. */
 export type ProfileRead =
@@ -65,24 +73,32 @@ export async function resolveProfile(
   }
 
   // LIVE owner first — a published row whose handle is currently this one wins over any history.
-  const live = await db
+  // Owner + entries in ONE statement: a lone SELECT is a single atomic snapshot, so a concurrent
+  // delete can never produce a torn 200 (live owner row paired with already-deleted entries).
+  // Splitting this back into sequential reads reopens that window — the statement-count test in
+  // api.test.ts pins it.
+  const { results: liveRows } = await db
     .prepare(
-      "SELECT github_id, handle, extras, updated_at FROM users WHERE handle_lower = ? AND updated_at IS NOT NULL",
+      "SELECT u.handle, u.extras, u.updated_at, pe.key, pe.value FROM users u " +
+        "LEFT JOIN profile_entries pe ON pe.github_id = u.github_id " +
+        "WHERE u.handle_lower = ? AND u.updated_at IS NOT NULL",
     )
     .bind(handleLower)
-    .first<LiveRow>();
+    .all<LiveEntryRow>();
 
+  const live = liveRows[0];
   if (live) {
-    const { results } = await db
-      .prepare("SELECT key, value FROM profile_entries WHERE github_id = ?")
-      .bind(live.github_id)
-      .all<{ key: string; value: string }>();
     return {
       kind: "live",
       profile: {
         schema_version: SCHEMA_VERSION,
         handle: live.handle,
-        entries: orderEntries(results),
+        entries: orderEntries(
+          liveRows.filter(
+            (r): r is LiveEntryRow & { key: string; value: string } =>
+              r.key !== null && r.value !== null,
+          ),
+        ),
         extras: parseExtras(live.extras),
         updated_at: live.updated_at,
       },

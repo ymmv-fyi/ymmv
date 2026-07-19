@@ -719,3 +719,116 @@ describe("DELETE — hard delete + reclaim protection", () => {
     expect((await readProfile("alice")).entries).toEqual([{ key: "os", value: "macOS" }]);
   });
 });
+
+describe("GET error contract + CORS (the public read surface)", () => {
+  it("404 returns the JSON envelope with content-type, ACAO, and the unchanged cache-control", async () => {
+    const res = await GET(getCtx("nobody-here-xyz"));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    // Not just presence: the exact value pins that the envelope change didn't drop or alter the
+    // short not-found TTL (a freshly published handle must appear within ~10s).
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=0, s-maxage=10, stale-while-revalidate=60",
+    );
+    expect(await res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("500 returns the JSON envelope with ACAO and no-store when D1 throws", async () => {
+    const spy = vi.spyOn(env.DB, "prepare").mockImplementationOnce(() => {
+      throw new Error("D1_ERROR: boom");
+    });
+    const res = await GET(getCtx("alice"));
+    spy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    // no-store: profile-read.ts contemplates a future Cache-Everything edge rule; an unmarked
+    // 500 could be edge-cached and outlive the outage.
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "internal_error" });
+  });
+
+  it("200 carries content-type and ACAO", async () => {
+    // Dedicated identity: the RL_WRITE limiter keys on github_id and its state persists across
+    // tests in this file, so new tests must not spend gid1's write budget (past flake class).
+    await seedToken("cors-tok", 4104);
+    await bindHandle(4104, "corsy");
+    await publish("cors-tok", profile("corsy", [{ key: "editor", value: "Vim" }]));
+    const res = await GET(getCtx("corsy"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+  });
+
+  it("301 carries ACAO and keeps the renamed cache policy (a cross-origin fetch may observe the hop)", async () => {
+    await seedToken("cors-tok2", 4105);
+    await bindHandle(4105, "corsyold");
+    await publish("cors-tok2", profile("corsyold", [{ key: "editor", value: "Vim" }]));
+    await bindHandle(4105, "corsynew");
+    await publish("cors-tok2", profile("corsynew", [{ key: "editor", value: "Vim" }]));
+    const res = await GET(getCtx("corsyold"));
+    expect(res.status).toBe(301);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    // The 301 branch's header object was rewritten with the CORS spread; pin its cache policy
+    // exactly like the 404/500 pins so dropping readCacheControl("renamed") fails a test.
+    expect(res.headers.get("cache-control")).toBe(
+      "public, max-age=0, s-maxage=30, stale-while-revalidate=86400",
+    );
+  });
+
+  it("OPTIONS preflight gets 204 + the CORS grant (custom-header clients preflight before GET)", async () => {
+    // Dynamic import so a missing export fails THIS test, not the module load for the whole file.
+    const mod = (await import("../src/pages/api/v1/u/[handle].ts")) as {
+      OPTIONS?: (ctx: APIContext) => Promise<Response> | Response;
+    };
+    expect(mod.OPTIONS).toBeDefined();
+    const res = await mod.OPTIONS?.(getCtx("alice"));
+    expect(res?.status).toBe(204);
+    expect(res?.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res?.headers.get("access-control-allow-methods")).toContain("GET");
+    // The wildcard does not cover Authorization per the Fetch spec; it must be named for
+    // browser clients whose HTTP lib attaches a default bearer.
+    expect(res?.headers.get("access-control-allow-headers")).toBe("*, authorization");
+  });
+});
+
+describe("live read is one atomic statement (no torn read)", () => {
+  it("a live-profile GET runs exactly ONE D1 statement (owner + entries in one snapshot)", async () => {
+    // Dedicated identity, same RL_WRITE-budget rationale as the CORS describe above.
+    await seedToken("atomic-tok", 4106);
+    await bindHandle(4106, "atomica");
+    await publish(
+      "atomic-tok",
+      profile("atomica", [
+        { key: "editor", value: "Vim" },
+        { key: "os", value: "Arch" },
+      ]),
+    );
+    const spy = vi.spyOn(env.DB, "prepare");
+    const p = await readProfile("atomica");
+    // Two sequential reads here reopen the mid-delete torn-200 window (a delete committing
+    // between owner read and entries read served a live 200 with entries: []).
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    expect(p.entries).toEqual([
+      { key: "editor", value: "Vim" },
+      { key: "os", value: "Arch" },
+    ]);
+  });
+
+  it("a zero-entry live profile (extras only) still reads entries: [] through the JOIN", async () => {
+    await seedToken("atomic-tok2", 4107);
+    await bindHandle(4107, "extrasonly");
+    await publish(
+      "atomic-tok2",
+      profile("extrasonly", [], [{ label: "Launcher", value: "Raycast" }]),
+    );
+    const spy = vi.spyOn(env.DB, "prepare");
+    const p = await readProfile("extrasonly");
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+    expect(p.entries).toEqual([]);
+    expect(p.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+  });
+});
