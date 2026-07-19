@@ -2,6 +2,13 @@
 
 ## Web
 
+### Link the API contract doc from the site footer
+**Priority:** P4
+The footer's reference block names the JSON API but gives readers no path to the contract doc
+(`docs/api.md`). One anchor in the web Layout footer (GitHub blob URL, same convention as the cli
+README pointer) plus the footer e2e assert update (`web.e2e.ts` pins the json note). Ride along
+with the next web change. Surfaced by the public-API eng review (2026-07-19).
+
 ### Full bidi/Trojan-source sanitizer for web surfaces
 **Priority:** P3
 The CLI strips bidi controls (U+202A–202E, U+2066–2069, LRM/RLM) from every untrusted value;

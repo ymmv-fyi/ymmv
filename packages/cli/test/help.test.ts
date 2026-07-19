@@ -13,3 +13,14 @@ describe("HELP text stays in sync with CURATED_KEYS", () => {
     expect(source).toContain(key);
   });
 });
+
+// docs/api.md hand-maintains the same list for API consumers (the published contract doc).
+// Same tripwire, same rationale: add a curated key without touching the doc and this fails.
+// Keys appear backtick-wrapped in the doc, so the match is word-bounded.
+describe("docs/api.md stays in sync with CURATED_KEYS", () => {
+  const doc = readFileSync(new URL("../../../docs/api.md", import.meta.url), "utf8");
+
+  it.each([...CURATED_KEYS])("lists %s", (key) => {
+    expect(doc).toContain(`\`${key}\``);
+  });
+});
