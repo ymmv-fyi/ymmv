@@ -12,6 +12,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   and extra labels over 64 locally, a 33rd extra is refused with the cap named, and an over-long
   answer in the interactive publish re-asks that one field instead of failing after all the
   prompts. The caps are documented in the README.
+- **Logging in again revokes the replaced token.** A repeat `ymmv login` retires the previous
+  session's token on the server when it is reachable, and a login against a different `YMMV_API`
+  base warns before the stored token is overwritten.
 
 ### Fixed
 - **Stray arguments error instead of being silently ignored.** `ymmv -y delete` errors with an
@@ -35,6 +38,17 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **A repeated handle conflict stops advising a re-login.** When publish has already re-logged
   in and retried, the CLI says the conflict persists instead of repeating the server's
   "run `ymmv login` and retry".
+- **`FORCE_COLOR=false` disables color.** It previously force-enabled ANSI output, inverting the
+  supports-color convention the CLI follows; `false` now behaves like `0`.
+- **A misconfigured `YMMV_API` reports itself.** A scheme-less, path-mounted, or otherwise
+  invalid value errors up front naming the variable, instead of surfacing later as a
+  connectivity failure.
+- **A corrupt token file reads as logged out.** A hand-edited or truncated token.json triggers a
+  clean re-login instead of a wrong "reserved word" message or a crash, and the token inside is
+  still revoked on the next login.
+- **Viewing a profile no longer suggests publishing when your own profile merely failed to
+  load.** The diff is skipped with a note; the publish nudge stays for accounts that have never
+  published.
 
 ### Changed
 - **Help documents `ymmv delete -y` and the `-e` shorthand for `--extra`.** The README command

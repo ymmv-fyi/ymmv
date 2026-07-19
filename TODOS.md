@@ -71,6 +71,17 @@ flow from the victim's own terminal session. Real fix is cross-package: mint res
 CLI compares id instead of handle. Wire-format addition — additive, but touches Worker + shared +
 CLI together.
 
+### Atomic login token rotate
+**Priority:** P4
+`ymmv login` retires the token it replaces after saving the new one (best-effort, client-side),
+so replacement is not transactional: two concurrent logins, or a process killed between the save
+and the revoke, can leave the replaced token active with no client-side path left to revoke it
+(the file now holds only the newer token). A
+server-side rotate on the mint endpoint (mint + revoke-previous in one step) would make
+replacement atomic and drop the "when the server is reachable" caveat. Cross-package (Worker +
+`@ymmv/shared` + CLI wire addition); rides a CLI tag. Surfaced by the login-revoke eng review
+outside voice (2026-07-19, cross-model).
+
 ### CLI visible-content pre-check for zero-width-only values
 **Priority:** P4
 `promptEntries`/`parseSet` length-check input locally, but a value made only of invisible
