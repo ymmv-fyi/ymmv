@@ -13,7 +13,14 @@ vi.mock("node:fs/promises", () => ({
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { BASE } from "../src/config.js";
-import { deleteToken, loadToken, peekBase, saveToken, tokenFilePath } from "../src/token-store.js";
+import {
+  deleteToken,
+  loadToken,
+  peekBase,
+  peekCredential,
+  saveToken,
+  tokenFilePath,
+} from "../src/token-store.js";
 
 const PATH = tokenFilePath();
 const DIR = dirname(PATH);
@@ -60,6 +67,69 @@ describe("loadToken", () => {
   it("returns null on malformed JSON", async () => {
     vi.mocked(readFile).mockResolvedValue("{not json");
     expect(await loadToken()).toBeNull();
+  });
+
+  // Corrupt-file shapes read as logged-out (clean re-login) instead of surfacing the misleading
+  // "reserved word" copy (missing handle) or crashing later on .toLowerCase() (non-string handle).
+  it("returns null (no throw) when the file holds literal JSON null", async () => {
+    vi.mocked(readFile).mockResolvedValue("null");
+    expect(await loadToken()).toBeNull();
+  });
+
+  it("returns null when handle is absent (truncated/foreign-schema file)", async () => {
+    vi.mocked(readFile).mockResolvedValue(JSON.stringify({ base: BASE, token: "ymmv_x" }));
+    expect(await loadToken()).toBeNull();
+  });
+
+  it("returns null when handle is a non-string (hand-edited file)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: 5 }),
+    );
+    expect(await loadToken()).toBeNull();
+  });
+
+  it("returns null on an empty-string token (a `Bearer ` request is corruption, not a login)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "", handle: "carol" }),
+    );
+    expect(await loadToken()).toBeNull();
+  });
+
+  it("still loads handle: null (the legit reserved-username state)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: null }),
+    );
+    expect(await loadToken()).toEqual({ base: BASE, token: "ymmv_x", handle: null });
+  });
+});
+
+describe("peekCredential", () => {
+  it("returns base + token from a corrupt-handle file loadToken rejects (revoke path)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: 5 }),
+    );
+    expect(await loadToken()).toBeNull(); // strict reader: logged out
+    expect(await peekCredential()).toEqual({ base: BASE, token: "ymmv_x" }); // lenient: revocable
+  });
+
+  it("returns a foreign-base credential (login's cross-base warn needs it)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: "https://other.example", token: "ymmv_y", handle: "c" }),
+    );
+    expect(await peekCredential()).toEqual({ base: "https://other.example", token: "ymmv_y" });
+  });
+
+  it("returns null on a missing file, malformed JSON, a null root, or a token-less shape", async () => {
+    vi.mocked(readFile).mockRejectedValueOnce(new Error("ENOENT"));
+    expect(await peekCredential()).toBeNull();
+    vi.mocked(readFile).mockResolvedValueOnce("{not json");
+    expect(await peekCredential()).toBeNull();
+    vi.mocked(readFile).mockResolvedValueOnce("null");
+    expect(await peekCredential()).toBeNull();
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ base: BASE }));
+    expect(await peekCredential()).toBeNull();
+    vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ base: BASE, token: "" }));
+    expect(await peekCredential()).toBeNull(); // nothing to revoke behind `Bearer `
   });
 });
 
