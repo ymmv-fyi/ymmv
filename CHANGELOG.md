@@ -8,6 +8,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **`ymmv version` and `ymmv publish` work as commands.** The bare words now dispatch like
   their flag and default forms, and both names are reserved handles so the words can never
   collide with a profile.
+- **Value caps are enforced before the network.** `ymmv set` rejects values over 256 characters
+  and extra labels over 64 locally, a 33rd extra is refused with the cap named, and an over-long
+  answer in the interactive publish re-asks that one field instead of failing after all the
+  prompts. The caps are documented in the README.
 
 ### Fixed
 - **Stray arguments error instead of being silently ignored.** `ymmv -y delete` errors with an
@@ -17,6 +21,20 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   still join multi-word values.
 - **Capitalized verbs point at the command.** `ymmv Set` now suggests `ymmv set` instead of
   only reporting a reserved name.
+- **A failed publish no longer discards your interactive answers.** The edit loop prints the
+  error and returns to the confirm step with everything you typed intact; deterministic
+  refusals (an account switch mid-command) still exit.
+- **Server rejections explain themselves.** Publish and delete failures show the server's
+  message instead of a raw status and body dump, every server-side validation error now
+  carries one, login failures name the cause instead of an internal code, and a stale CLI
+  reading a newer profile says to upgrade.
+- **`ymmv logout` reports the right failure.** A revoke the server refused says so instead of
+  claiming the server was unreachable.
+- **The automatic re-login during publish says why.** A session expiry or handle change prints
+  one line of context before the device-flow prompt appears.
+- **A repeated handle conflict stops advising a re-login.** When publish has already re-logged
+  in and retried, the CLI says the conflict persists instead of repeating the server's
+  "run `ymmv login` and retry".
 
 ### Changed
 - **Help documents `ymmv delete -y` and the `-e` shorthand for `--extra`.** The README command
