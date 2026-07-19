@@ -20,6 +20,15 @@ describe("isReserved()", () => {
     expect(isReserved("404")).toBe(true);
   });
 
+  it("reserves version and publish — command words users predictably type as verbs", () => {
+    // Both are valid GitHub logins; unreserved they'd be squattable profile views for
+    // everyone typing `ymmv version` / `ymmv publish` expecting the command.
+    expect(isValidHandle("version")).toBe(true);
+    expect(isReserved("version")).toBe(true);
+    expect(isValidHandle("publish")).toBe(true);
+    expect(isReserved("publish")).toBe(true);
+  });
+
   it("does not reserve an ordinary handle", () => {
     expect(isReserved("antfu")).toBe(false);
     expect(isReserved("bah")).toBe(false);

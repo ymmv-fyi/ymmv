@@ -40,13 +40,14 @@ via npm Trusted Publishing, with provenance.
 
 ## Commands
 
-- `ymmv` detects, confirms, and publishes (re-run any time to update)
+- `ymmv` detects, confirms, and publishes (re-run any time to update; `ymmv publish` is the same command)
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
-- `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own
+- `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own (`-e` works too)
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
-- `ymmv delete` removes your profile
+- `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
 - `ymmv login` / `ymmv logout` sign in / out
+- `ymmv version` prints the CLI version
 
 Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 

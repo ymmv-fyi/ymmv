@@ -53,6 +53,22 @@ describe("built bin entry", () => {
     expect(version.stdout).toMatch(/^ymmv-cli /);
   });
 
+  // Dispatch wiring, not resolver logic: the pure table is pinned in resolve.test.ts; these
+  // prove the words actually reach their commands through the built bin.
+  it("dispatches the bare `version` word through the built bin", () => {
+    const res = spawnSync(process.execPath, [binPath, "version"], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/^ymmv-cli /);
+  });
+
+  it("flag-first `-y delete` exits 1 with the ordering hint, publishing nothing", () => {
+    // Errors in resolveArg before any command runs, so no network is ever touched.
+    const res = spawnSync(process.execPath, [binPath, "-y", "delete"], { encoding: "utf8" });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain("ymmv delete -y");
+    expect(res.stdout).toBe("");
+  });
+
   it("prints arg errors as indented units on stderr, leaving stdout byte-clean", () => {
     const res = spawnSync(process.execPath, [binPath, "set", "bogus-key", "x"], {
       encoding: "utf8",
