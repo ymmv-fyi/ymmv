@@ -128,6 +128,24 @@ test.describe("routing", () => {
     const json = await request.get("/api/v1/u/antfuold", { maxRedirects: 0 });
     expect(json.status()).toBe(301);
     expect(json.headers().location).toBe("/api/v1/u/antfu");
+    expect(json.headers()["access-control-allow-origin"]).toBe("*");
+  });
+
+  test("the JSON read is cross-origin readable and preflightable (the open-data contract)", async ({
+    request,
+  }) => {
+    // Headers must survive the REAL worker + Astro routing, not just the unit-called handler.
+    const res = await request.get("/api/v1/u/antfu");
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("application/json");
+    expect(res.headers()["access-control-allow-origin"]).toBe("*");
+
+    // A browser client with any custom request header preflights first; without this handler the
+    // OPTIONS would fall through to the HTML 404 and the fetch dies as an opaque CORS TypeError.
+    const preflight = await request.fetch("/api/v1/u/antfu", { method: "OPTIONS" });
+    expect(preflight.status()).toBe(204);
+    expect(preflight.headers()["access-control-allow-origin"]).toBe("*");
+    expect(preflight.headers()["access-control-allow-methods"]).toContain("GET");
   });
 
   test("404s an unknown handle with the friendly empty state", async ({ page }) => {
@@ -160,6 +178,10 @@ test.describe("routing", () => {
     const json = await request.get("/api/v1/u/404", { maxRedirects: 0 });
     expect(json.status()).toBe(404);
     expect(await json.text()).not.toContain("Neovim");
+    // The 404 is a machine-readable JSON envelope (a consumer's res.json() must never throw).
+    expect(json.headers()["content-type"]).toContain("application/json");
+    expect(json.headers()["access-control-allow-origin"]).toBe("*");
+    expect(await json.json()).toEqual({ error: "not_found" });
   });
 
   test("sends the edge-cache header on a profile read", async ({ request }) => {
