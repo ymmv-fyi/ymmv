@@ -1,3 +1,4 @@
+import { isReserved, isValidHandle } from "@ymmv/shared";
 import { sanitizeValue } from "./render.js";
 
 // Worker API base. Defaults to production (ymmv.fyi); `YMMV_API` overrides it (set to
@@ -53,6 +54,37 @@ export function baseProblem(raw: string | undefined = process.env.YMMV_API): str
   // token.json under a junk base, and smuggle shell metacharacters into recovery copy.
   if (base !== url.origin) {
     return `${shown} which is not in canonical form. Use exactly the scheme and host, like https://ymmv.fyi.`;
+  }
+  return null;
+}
+
+/**
+ * Why the configured YMMV_TOKEN / YMMV_HANDLE pair can't be used (a full user-facing message), or
+ * null when it's fine (unset, or well-shaped). Runs beside baseProblem() at the top of main() —
+ * same rationale (a config mistake must fail with its real diagnosis, not deep in a fetch), same
+ * logout exemption (logout is env-blind: it acts on the file token, so a malformed env token must
+ * not strand it). YMMV_HANDLE without a token is inert: nothing reads it, so a stray export must
+ * never block file-token use. Unlike YMMV_API, the TOKEN VALUE IS NEVER ECHOED — it's a secret.
+ */
+export function credentialEnvProblem(
+  rawToken: string | undefined = process.env.YMMV_TOKEN,
+  rawHandle: string | undefined = process.env.YMMV_HANDLE,
+): string | null {
+  // Empty means unset (`YMMV_TOKEN= ymmv` clears it), matching YMMV_API.
+  if (rawToken === undefined || rawToken === "") return null;
+  // Printable ASCII only: whitespace or control characters would corrupt the `Bearer` header into
+  // an opaque undici TypeError (or worse, split it), and no server-minted token contains them.
+  if (!/^[\x21-\x7E]+$/.test(rawToken)) {
+    return "YMMV_TOKEN contains whitespace, control, or non-ASCII characters. Set it to the exact token value.";
+  }
+  if (rawHandle !== undefined && rawHandle !== "") {
+    const shown = `YMMV_HANDLE is set to "${sanitizeValue(rawHandle)}"`;
+    if (!isValidHandle(rawHandle)) {
+      return `${shown} which is not a valid GitHub username. Set it to the handle bound to YMMV_TOKEN.`;
+    }
+    if (isReserved(rawHandle)) {
+      return `${shown} which is a reserved word, so no handle can be bound to it.`;
+    }
   }
   return null;
 }

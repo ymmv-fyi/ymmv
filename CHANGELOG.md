@@ -5,6 +5,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ## [Unreleased]
 
 ### Added
+- **`YMMV_TOKEN` authenticates without a browser.** Setting `YMMV_TOKEN` (plus `YMMV_HANDLE`
+  for publish and set/unset) lets CI and scripts run `ymmv -y` with a token minted by a local
+  `ymmv login`. The env token takes precedence over the stored login, is never written or
+  deleted by the CLI, and a rejected value fails with the variable named; `ymmv login` and
+  `ymmv logout` keep acting on the stored login. The README documents the recipe and the token
+  file location.
 - **`ymmv version` and `ymmv publish` work as commands.** The bare words now dispatch like
   their flag and default forms, and both names are reserved handles so the words can never
   collide with a profile.

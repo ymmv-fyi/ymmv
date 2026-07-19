@@ -397,6 +397,40 @@ describe("login() orchestration", () => {
     logSpy.mockRestore();
   });
 
+  it("warns on stderr when YMMV_TOKEN is set — BEFORE the device flow starts (Ctrl+C window)", async () => {
+    // The saved login would be shadowed: loadCredential prefers the env token on every read.
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    const errs: string[] = [];
+    const errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errs.push(a.join(" "));
+    });
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.join(" "));
+    });
+    const fetchFn = fetchSeq(DC, { access_token: "gho_x" }) as ReturnType<typeof vi.fn>;
+    try {
+      await withTTY(true, async () => {
+        await login({ fetch: fetchFn as unknown as typeof fetch, sleep: noSleep, now: at0 });
+      });
+      expect(errs.join("\n")).toContain("YMMV_TOKEN is set and takes precedence");
+      // BEFORE the flow, not merely somewhere: the warn's whole point is the Ctrl+C window
+      // ahead of the device-code request. Call order pins it.
+      const warnOrder = (errSpy as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+      const firstFetchOrder = fetchFn.mock.invocationCallOrder[0];
+      expect(warnOrder).toBeDefined();
+      expect(warnOrder as number).toBeLessThan(firstFetchOrder as number);
+      // Still completes and saves: the login is legitimate, just shadowed until the env is unset.
+      expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_abc", handle: "carol" });
+      expect(logs.join("\n")).toContain("Logged in as carol.");
+    } finally {
+      vi.unstubAllEnvs();
+      errSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
   it("prints a SANITIZED user code and the waiting line (both come off the wire)", async () => {
     vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
     const esc = String.fromCharCode(0x1b);

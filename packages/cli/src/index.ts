@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
-import { BASE, baseProblem } from "./config.js";
+import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
 import { login } from "./device-flow.js";
 import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
@@ -93,13 +93,14 @@ async function interactive(run: (io: InteractiveIO) => Promise<void>, yes: boole
 
 export async function main(argv: string[]): Promise<void> {
   const cmd = resolveArg(argv);
-  // Config gate before dispatch (help/version included): a broken YMMV_API should fail with its
-  // real diagnosis at the first opportunity, not lie dormant until a network verb wraps the
-  // URL-parse throw in "Check your connection". EXCEPT logout: it only needs BASE to hit the
-  // revoke URL that worked when the token was minted, and gating it would permanently strand
-  // tokens stored under bases the gate now rejects (older CLIs accepted them).
+  // Config gate before dispatch (help/version included): a broken YMMV_API or YMMV_TOKEN should
+  // fail with its real diagnosis at the first opportunity, not lie dormant until a network verb
+  // wraps the failure in "Check your connection". EXCEPT logout: it only needs BASE to hit the
+  // revoke URL that worked when the token was minted, gating it would permanently strand tokens
+  // stored under bases the gate now rejects (older CLIs accepted them) — and logout is env-blind
+  // (file token only), so a malformed env credential must not strand it either.
   if (cmd.kind !== "logout") {
-    const problem = baseProblem();
+    const problem = baseProblem() ?? credentialEnvProblem();
     if (problem) {
       console.error(message(problem));
       process.exitCode = 1;
@@ -131,6 +132,15 @@ export async function main(argv: string[]): Promise<void> {
     }
     case "logout":
       await logout();
+      // True on every branch above (revoked, nothing stored, or a failed revoke): the env token
+      // is not the CLI's to revoke or unset, so "logged out" must not read as "unauthenticated".
+      if (process.env.YMMV_TOKEN) {
+        console.error(
+          message(
+            "Note: YMMV_TOKEN is set and still authenticates API calls. Unset it to stop using that token.",
+          ),
+        );
+      }
       break;
     case "help":
       console.log(help(palette(colorEnabled())));

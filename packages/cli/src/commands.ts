@@ -43,7 +43,7 @@ import {
   sanitizeValue,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
-import { deleteToken, loadToken, type StoredToken } from "./token-store.js";
+import { type Credential, deleteToken, loadToken } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
 // token store. Each command keeps its IO at the edges so the branching logic stays testable.
@@ -56,14 +56,19 @@ export interface InteractiveIO {
 
 /**
  * The bound handle, or null after printing the canonical "no handle" error + setting the exit code.
- * A reserved GitHub username binds to a null handle; publish/set both refuse.
+ * A reserved GitHub username binds to a null handle; publish/set both refuse. An env credential
+ * without YMMV_HANDLE is a different diagnosis: the token may be fine, the handle is just unset —
+ * the reserved-word copy would be a lie there.
  */
-function requireHandle(cred: StoredToken): string | null {
+function requireHandle(cred: Credential): string | null {
   if (cred.handle) return cred.handle;
   console.error(
     message(
-      "Your GitHub username is a reserved word, so no handle is bound. " +
-        "Rename on GitHub, then run `ymmv login` again.",
+      cred.source === "env"
+        ? "YMMV_TOKEN is set but YMMV_HANDLE is not. Set YMMV_HANDLE to the GitHub username " +
+            "the token belongs to."
+        : "Your GitHub username is a reserved word, so no handle is bound. " +
+            "Rename on GitHub, then run `ymmv login` again.",
     ),
   );
   process.exitCode = 1;
@@ -330,7 +335,11 @@ export async function view(handle: string): Promise<void> {
     return;
   }
 
-  const cred = await loadToken(); // view never forces a login
+  // view never forces a login, and stays ENV-BLIND on purpose (loadToken, not loadCredential):
+  // YMMV_HANDLE is unverified input, so an env credential must never label a fetched profile as
+  // "you" — a mislabeled diff is confidently wrong output (pinned in commands.test.ts; see the
+  // TODOS identity entry for the trusted-identity path that would lift this).
+  const cred = await loadToken();
   if (cred?.handle) {
     // A transient failure fetching MY profile degrades to a plain view (read-only path, no
     // writes) — but it must NOT be conflated with the genuine 404 null below: telling a published
@@ -435,8 +444,16 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
 export async function runDelete(io: InteractiveIO): Promise<void> {
   const cred = await ensureLogin();
   // BASE-derived like every other printed page reference — consent for a permanent delete must
-  // name the host actually being hit (YMMV_API can point this at a dev/staging Worker).
-  const target = cred.handle ? `${displayUrl(BASE)}/${sanitizeValue(cred.handle)}` : "your profile";
+  // name the host actually being hit (YMMV_API can point this at a dev/staging Worker). But delete
+  // acts on the TOKEN's account (the request carries no handle), and an env credential's handle is
+  // unverified YMMV_HANDLE input — echoing it could confirm deletion of a profile the token does
+  // not own. Name the binding instead; a file credential's handle was server-minted at login.
+  const target =
+    cred.source === "env"
+      ? "the profile bound to YMMV_TOKEN"
+      : cred.handle
+        ? `${displayUrl(BASE)}/${sanitizeValue(cred.handle)}`
+        : "your profile";
 
   // Destructive: require explicit consent. Interactive → confirm prompt; non-interactive (pipe / CI
   // / no TTY) → REFUSE unless -y was passed. Never hard-delete a profile with neither a prompt nor an
@@ -468,7 +485,11 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       return;
     }
   }
-  await deleteProfile();
-  await deleteToken(); // the server revoked every token for this account; drop the dead local one
+  // The credential the user just confirmed — deleteProfile must never re-read the store.
+  await deleteProfile(cred);
+  // The server revoked every token for the deleted account; drop the dead local one. An env
+  // credential leaves the file ALONE: it may hold a different account's still-live token, and the
+  // env var itself is not the CLI's to delete.
+  if (cred.source === "file") await deleteToken();
   console.log(message(`Deleted ${target}. Run \`ymmv\` to publish again.`));
 }

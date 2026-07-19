@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("env-paths", () => ({ default: vi.fn(() => ({ config: "/fake/cfg" })) }));
 vi.mock("node:fs/promises", () => ({
@@ -15,6 +15,7 @@ import { dirname } from "node:path";
 import { BASE } from "../src/config.js";
 import {
   deleteToken,
+  loadCredential,
   loadToken,
   peekBase,
   peekCredential,
@@ -130,6 +131,60 @@ describe("peekCredential", () => {
     expect(await peekCredential()).toBeNull();
     vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify({ base: BASE, token: "" }));
     expect(await peekCredential()).toBeNull(); // nothing to revoke behind `Bearer `
+  });
+});
+
+describe("loadCredential", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("prefers YMMV_TOKEN over the file token: source env, base BASE, handle from YMMV_HANDLE", async () => {
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    vi.stubEnv("YMMV_HANDLE", "carol");
+    // A DIFFERENT file token exists and must not win (nor even be read for the result).
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_file", handle: "someone-else" }),
+    );
+    expect(await loadCredential()).toEqual({
+      base: BASE,
+      token: "ymmv_env",
+      handle: "carol",
+      source: "env",
+    });
+    expect(readFile).not.toHaveBeenCalled(); // env wins WITHOUT touching the store
+  });
+
+  it("empty YMMV_TOKEN means unset: falls through to the file token with source file", async () => {
+    vi.stubEnv("YMMV_TOKEN", "");
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_file", handle: "carol" }),
+    );
+    expect(await loadCredential()).toEqual({
+      base: BASE,
+      token: "ymmv_file",
+      handle: "carol",
+      source: "file",
+    });
+  });
+
+  it("env token without YMMV_HANDLE (unset or empty) yields handle null", async () => {
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    expect((await loadCredential())?.handle).toBeNull();
+    vi.stubEnv("YMMV_HANDLE", "");
+    expect((await loadCredential())?.handle).toBeNull();
+  });
+
+  it("returns null when neither an env token nor a stored file exists", async () => {
+    vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+    expect(await loadCredential()).toBeNull();
+  });
+
+  it("loadToken, peekCredential, and peekBase stay env-blind (revoke/logout must never see the env token)", async () => {
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    vi.stubEnv("YMMV_HANDLE", "carol");
+    vi.mocked(readFile).mockRejectedValue(Object.assign(new Error("nope"), { code: "ENOENT" }));
+    expect(await loadToken()).toBeNull();
+    expect(await peekCredential()).toBeNull();
+    expect(await peekBase()).toBeNull();
   });
 });
 
