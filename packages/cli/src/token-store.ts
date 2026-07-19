@@ -45,34 +45,62 @@ export async function saveToken(data: Omit<StoredToken, "base">): Promise<void> 
   }
 }
 
-/** Load the stored token IFF it was minted for the current base; otherwise null (forces re-login). */
-export async function loadToken(): Promise<StoredToken | null> {
-  let raw: string;
+/** The one raw read of token.json: file content parsed, or null on any failure (ENOENT, malformed
+ *  JSON, a non-object root such as a file holding literal `null`). Every reader below applies its
+ *  own field predicates on this — three hand-rolled read/parse copies drifted before. */
+async function readTokenFile(): Promise<Partial<StoredToken> | null> {
   try {
-    raw = await readFile(tokenFilePath(), "utf8");
-  } catch {
-    return null; // ENOENT etc.
-  }
-  let parsed: StoredToken;
-  try {
-    parsed = JSON.parse(raw) as StoredToken;
+    const parsed = JSON.parse(await readFile(tokenFilePath(), "utf8")) as unknown;
+    return typeof parsed === "object" && parsed !== null ? (parsed as Partial<StoredToken>) : null;
   } catch {
     return null;
   }
-  if (parsed.base !== BASE || typeof parsed.token !== "string") return null;
-  return parsed;
+}
+
+/** Load the stored token IFF it was minted for the current base; otherwise null (forces re-login). */
+export async function loadToken(): Promise<StoredToken | null> {
+  const parsed = await readTokenFile();
+  // `handle` must be string-or-null — a missing handle would make requireHandle print the wrong
+  // "reserved word" diagnosis, and a non-string truthy one would crash later on .toLowerCase().
+  // A present-but-empty token is corruption too (`Bearer ` requests). Any corruption reads as
+  // logged-out (clean re-login); login() still revokes the old token via peekCredential, which
+  // ignores the handle.
+  if (
+    !parsed ||
+    parsed.base !== BASE ||
+    typeof parsed.token !== "string" ||
+    parsed.token === "" ||
+    (parsed.handle !== null && typeof parsed.handle !== "string")
+  ) {
+    return null;
+  }
+  return parsed as StoredToken;
+}
+
+/**
+ * Lenient read for the login revoke path: base + token only, ANY base, handle ignored. loadToken's
+ * strictness is what makes a corrupt file read as logged-out — but the token inside may still be
+ * live server-side, and re-login is about to overwrite the only copy of it. This reader lets
+ * login() revoke (same base) or warn (other base) before the overwrite orphans it.
+ */
+export async function peekCredential(): Promise<{ base: string; token: string } | null> {
+  const parsed = await readTokenFile();
+  return parsed &&
+    typeof parsed.base === "string" &&
+    typeof parsed.token === "string" &&
+    parsed.token !== ""
+    ? { base: parsed.base, token: parsed.token }
+    : null;
 }
 
 export async function deleteToken(): Promise<void> {
   await rm(tokenFilePath(), { force: true });
 }
 
-/** The base a stored token was minted for, regardless of the current base — for logout messaging. */
+/** The base a stored token was minted for, regardless of the current base — for logout messaging.
+ *  Deliberately looser than peekCredential (no token check): "a token file for X exists" is still
+ *  the right logout message when the token field itself is corrupt. */
 export async function peekBase(): Promise<string | null> {
-  try {
-    const parsed = JSON.parse(await readFile(tokenFilePath(), "utf8")) as Partial<StoredToken>;
-    return typeof parsed.base === "string" ? parsed.base : null;
-  } catch {
-    return null;
-  }
+  const parsed = await readTokenFile();
+  return typeof parsed?.base === "string" ? parsed.base : null;
 }
