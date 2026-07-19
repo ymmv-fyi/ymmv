@@ -2,13 +2,6 @@
 
 ## Web
 
-### Link the API contract doc from the site footer
-**Priority:** P4
-The footer's reference block names the JSON API but gives readers no path to the contract doc
-(`docs/api.md`). One anchor in the web Layout footer (GitHub blob URL, same convention as the cli
-README pointer) plus the footer e2e assert update (`web.e2e.ts` pins the json note). Ride along
-with the next web change. Surfaced by the public-API eng review (2026-07-19).
-
 ### Full bidi/Trojan-source sanitizer for web surfaces
 **Priority:** P3
 The CLI strips bidi controls (U+202A–202E, U+2066–2069, LRM/RLM) from every untrusted value;
@@ -96,50 +89,3 @@ the publish-resilience eng review outside voice (2026-07-18).
 (only a config comment). Also: an orphaned workerd process can hold `.wrangler/state` locked
 (EPERM on cleanup) with the port free. Consider a seed canary asserted in global-setup, or
 keying reuse on a hash of dist+seed.sql.
-
-## Completed
-
-### Surface the server's publish-409 message in the CLI
-**Done 2026-07-11** (branch `cli-quickwins`). The second publish-409 now prefers the server's
-`message` (the bound-handle guard's actionable copy) via the shared `serverMessage` helper,
-sanitized and capped; the generic handle-taken line remains the fallback for non-JSON bodies.
-
-### CLI has no `isReserved` pre-check
-**Done 2026-07-11** (branch `cli-quickwins`). Both view paths (`ymmv <handle>` and
-`ymmv view <handle>`) reject reserved names locally with a clear error instead of a round-trip
-that misreported "no profile yet". The API stays the trust boundary; `reserved.ts` documents that
-removals from the baked list are breaking for shipped CLIs.
-
-### Default request timeout on CLI fetches
-**Done 2026-07-11** (branch `cli-quickwins`). `safeFetch` defaults every request to
-`AbortSignal.timeout(30_000)` (explicit signals win), the logout revoke rides it too, and the
-device-flow poll carries its own 30s signal feeding the transient counter. Timeouts print
-"request timed out" on every surface, including body-read aborts via the bin's catch (logout is
-the one exception: it keeps its own token-still-active retry copy for any revoke failure).
-
-### Theme resync after BFCache restore / cross-tab toggle
-**Done 2026-07-11** (branch `web-quickwins`). Layout.astro's toggle script gained `storedTheme()` +
-`applyTheme()` (single source for the whitelist + system fallback) wired to `pageshow` (persisted
-only) and `storage` (ymmv-theme) listeners; the matchMedia change callback simplified onto the same
-resolver. Data-theme, aria-pressed, and the theme-color meta re-sync on a BFCache restore and follow
-a toggle in another same-origin tab. e2e covers cross-tab, synthetic pageshow, the matchMedia
-regression, and the removeItem → system fallback.
-
-### InstallCommand is a dead button without JS
-**Done 2026-07-11** (branch `web-quickwins`). InstallCommand renders a plain `<span>`; the delegated
-copy script promotes it to an ARIA button (role + tabindex + `aria-label` with the "Copy install
-command:" action wording) and wires click plus Enter/Space (Space preventDefault so it doesn't
-scroll) only when the Clipboard API is present. With no JS the command stays selectable text with no
-focusable dead control. e2e covers the promoted button, Enter/Space copy, and the no-JS state.
-
-### Trim entry values on the write path
-**Done 2026-07-11** (branch `web-quickwins`). `POST /api/v1/profile` now trims entry values and tests
-emptiness with `hasVisibleContent` before storing the trimmed original, mirroring the extras guard
-(plain `.trim()` misses zero-width chars). Padded values store trimmed, wholly-invisible values are
-rejected, and an invisible char decorating real text is preserved. No migration or seed change.
-
-### publishProfile 401-retry can rebind a different account mid-RMW
-**Done 2026-07-02** (branch `cli-restyle`). Both auth-retry paths now refuse a rebound handle:
-401 and 409 alike throw instead of retrying the pre-reauth merge (a fresh run re-reads under the
-current handle). Tests pin both refusals (no second POST). Residual same-handle/different-identity
-case tracked under "Compare auth-retry identity by account id".

@@ -116,6 +116,12 @@ test.describe("landing", () => {
     await expect(foot.locator(".foot-h")).toContainText("Reference");
     await expect(foot).toContainText("json"); // the data-row note is filled in
     await expect(foot).toContainText("code + issues"); // the source-row note
+    // The data-row note links the API contract doc — a consumer who discovers the API from a
+    // profile page needs a path to the contract, not just the URL shape.
+    const docLink = foot.locator(
+      'a[href="https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md"]',
+    );
+    await expect(docLink).toContainText("json");
   });
 });
 
