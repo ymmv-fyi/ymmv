@@ -47,6 +47,7 @@ instant. Works on macOS, Linux, Windows, and WSL.
   go straight to `ymmv.fyi/<them>/vs/<you>`.
 
 - **Open data.** Every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
+  Full contract (shape, statuses, caching, CORS): [docs/api.md](docs/api.md).
 
 ## Commands
 
