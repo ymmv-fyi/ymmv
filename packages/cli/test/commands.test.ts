@@ -90,6 +90,26 @@ describe("view — the 3 branches", () => {
     expect(logs.join("\n")).toMatch(/updated 2026-01-01\n\n {2}publish yours to diff/);
   });
 
+  it("a transient failure on the OWN-profile fetch degrades honestly: card + stderr note, no nudge", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("antfu", [{ key: "shell", value: "fish" }]))) // theirs
+        .mockResolvedValueOnce(fail(503)), // mine: a real error, NOT a 404
+    );
+    await view("antfu");
+    const out = logs.join("\n");
+    expect(out).toMatch(/antfu/); // the requested card still renders
+    // The nudge would be wrong copy (this user may well have published) — the note replaces it,
+    // on stderr so piped stdout stays deterministic. Exit stays 0: the view itself succeeded.
+    expect(out).not.toMatch(/publish yours to diff/);
+    expect(out).not.toMatch(/couldn't load your profile/);
+    expect(errs.join("\n")).toContain("(couldn't load your profile to diff)");
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("logged out → plain view, no nudge/diff", async () => {
     vi.mocked(loadToken).mockResolvedValue(null);
     vi.stubGlobal(

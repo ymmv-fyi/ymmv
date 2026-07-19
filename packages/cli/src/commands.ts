@@ -332,8 +332,15 @@ export async function view(handle: string): Promise<void> {
 
   const cred = await loadToken(); // view never forces a login
   if (cred?.handle) {
-    // A transient failure fetching MY profile degrades to a plain view (read-only path, no writes).
-    const mine = await fetchProfileJson(cred.handle).catch(() => null);
+    // A transient failure fetching MY profile degrades to a plain view (read-only path, no
+    // writes) — but it must NOT be conflated with the genuine 404 null below: telling a published
+    // user "publish yours to diff" because a fetch timed out is wrong copy. The sentinel keeps
+    // the two apart.
+    let mineFailed = false;
+    const mine = await fetchProfileJson(cred.handle).catch(() => {
+      mineFailed = true;
+      return null;
+    });
     if (mine && mine.handle.toLowerCase() !== theirs.handle.toLowerCase()) {
       console.log(
         renderDiff(diff(mine, theirs), { color: c, theirsLabel: theirs.handle, mineLabel: "you" }),
@@ -341,9 +348,16 @@ export async function view(handle: string): Promise<void> {
       return;
     }
     if (!mine) {
-      // Logged in but haven't published — show theirs plus the one amber nudge.
       console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
-      console.log(nudge(c));
+      if (mineFailed) {
+        // Degradation diagnostic, so stderr: piped stdout stays deterministic (the card only),
+        // and exit stays 0 — the requested profile DID render.
+        const codes = palette(c);
+        console.error(message(`${codes.faint}(couldn't load your profile to diff)${codes.reset}`));
+      } else {
+        // Logged in but genuinely never published — the one amber nudge.
+        console.log(nudge(c));
+      }
       return;
     }
     // Viewing your own handle: just show it (no self-diff).
