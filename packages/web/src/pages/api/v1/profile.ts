@@ -3,6 +3,10 @@ import {
   isCuratedKey,
   isReserved,
   isValidHandle,
+  MAX_ENTRIES,
+  MAX_EXTRAS,
+  MAX_LABEL,
+  MAX_VALUE,
   type Profile,
   SCHEMA_VERSION,
 } from "@ymmv/shared";
@@ -10,14 +14,11 @@ import type { APIRoute } from "astro";
 import { authenticateRequest } from "../../../lib/auth.ts";
 import { checkWriteRateLimit } from "../../../lib/rate-limit.ts";
 
-// Conservative input caps — curated entries are naturally ≤ CURATED_KEYS.length (13) after dedup
-// (plus any newer-taxonomy keys a skewed client carries through verbatim), but bound the pre-dedup
-// count, the free-form extras, and any value length so one write can't bloat D1 or every future
-// read of the profile.
-const MAX_ENTRIES = 50;
-const MAX_EXTRAS = 32;
-const MAX_LABEL = 64;
-const MAX_VALUE = 256;
+// Input caps live in @ymmv/shared (`caps.ts`) so the CLI pre-flights the same numbers this handler
+// enforces. Rationale unchanged: curated entries are naturally ≤ CURATED_KEYS.length (13) after
+// dedup (plus any newer-taxonomy keys a skewed client carries through verbatim), but bound the
+// pre-dedup count, the free-form extras, and any value length so one write can't bloat D1 or every
+// future read of the profile.
 
 // Code points that occupy no visual space: zero-width space/joiners, bidi marks and embedding
 // controls, variation selectors, the Arabic letter mark, and the rest of Unicode's
@@ -74,7 +75,11 @@ export const POST: APIRoute = async ({ request }) => {
   const handle = String(payload.handle ?? "").trim();
   const handleLower = handle.toLowerCase();
   if (!isValidHandle(handle) || isReserved(handleLower)) {
-    return err(422, "invalid_handle");
+    // No retry advice on purpose: for the one real human who hits this (a GitHub handle that IS a
+    // reserved word), no re-login can ever succeed — state the fact instead of prescribing a loop.
+    return err(422, "invalid_handle", {
+      message: "That handle can't be published (invalid or reserved).",
+    });
   }
 
   // entries: curated key + a value with visible content within caps; dedupe by key (last-wins).
@@ -82,21 +87,38 @@ export const POST: APIRoute = async ({ request }) => {
   // is not content, so a padded value must neither pass the empty check, consume the length
   // budget, nor render padded. `hasVisibleContent` extends that to wholly-invisible values.
   if (payload.entries !== undefined && !Array.isArray(payload.entries)) {
-    return err(422, "invalid_entries");
+    return err(422, "invalid_entries", { message: "Entries must be an array." });
   }
   const rawEntries = (Array.isArray(payload.entries) ? payload.entries : []) as unknown[];
-  if (rawEntries.length > MAX_ENTRIES) return err(422, "too_many_entries", { max: MAX_ENTRIES });
+  if (rawEntries.length > MAX_ENTRIES) {
+    return err(422, "too_many_entries", {
+      max: MAX_ENTRIES,
+      message: `A profile holds at most ${MAX_ENTRIES} entries.`,
+    });
+  }
   const entryMap = new Map<string, string>();
   for (const e of rawEntries) {
     const key = (e as { key?: unknown })?.key;
     const rawValue = (e as { value?: unknown })?.value;
     if (typeof key !== "string" || !isCuratedKey(key)) {
-      return err(422, "invalid_key", { key: typeof key === "string" ? key : null });
+      return err(422, "invalid_key", {
+        key: typeof key === "string" ? key : null,
+        message: "Not a curated key. Run `ymmv help` to list them.",
+      });
     }
-    if (typeof rawValue !== "string") return err(422, "invalid_value", { key });
+    if (typeof rawValue !== "string") {
+      return err(422, "invalid_value", { key, message: "Entry values must be text." });
+    }
     const value = rawValue.trim();
-    if (!hasVisibleContent(value)) return err(422, "invalid_value", { key });
-    if (value.length > MAX_VALUE) return err(422, "value_too_long", { key });
+    if (!hasVisibleContent(value)) {
+      return err(422, "invalid_value", { key, message: "Entry values need visible text." });
+    }
+    if (value.length > MAX_VALUE) {
+      return err(422, "value_too_long", {
+        key,
+        message: `Values are capped at ${MAX_VALUE} characters.`,
+      });
+    }
     entryMap.set(key, value);
   }
 
@@ -106,21 +128,32 @@ export const POST: APIRoute = async ({ request }) => {
   // page. `hasVisibleContent` extends that to characters that render as nothing at all.
   // Mirrors the entries rule above (and the CLI, which requires both non-empty).
   if (payload.extras !== undefined && !Array.isArray(payload.extras)) {
-    return err(422, "invalid_extras");
+    return err(422, "invalid_extras", { message: "Extras must be an array." });
   }
   const rawExtras = (Array.isArray(payload.extras) ? payload.extras : []) as unknown[];
-  if (rawExtras.length > MAX_EXTRAS) return err(422, "too_many_extras", { max: MAX_EXTRAS });
+  if (rawExtras.length > MAX_EXTRAS) {
+    return err(422, "too_many_extras", {
+      max: MAX_EXTRAS,
+      message: `A profile holds at most ${MAX_EXTRAS} extras.`,
+    });
+  }
   const extras: { label: string; value: string }[] = [];
   for (const x of rawExtras) {
     const rawLabel = (x as { label?: unknown })?.label;
     const rawValue = (x as { value?: unknown })?.value;
     if (typeof rawLabel !== "string" || typeof rawValue !== "string") {
-      return err(422, "invalid_extra");
+      return err(422, "invalid_extra", { message: "Extras need a text label and value." });
     }
     const label = rawLabel.trim();
     const value = rawValue.trim();
-    if (!hasVisibleContent(label) || !hasVisibleContent(value)) return err(422, "invalid_extra");
-    if (label.length > MAX_LABEL || value.length > MAX_VALUE) return err(422, "extra_too_long");
+    if (!hasVisibleContent(label) || !hasVisibleContent(value)) {
+      return err(422, "invalid_extra", { message: "Extras need a visible label and value." });
+    }
+    if (label.length > MAX_LABEL || value.length > MAX_VALUE) {
+      return err(422, "extra_too_long", {
+        message: `Extra labels are capped at ${MAX_LABEL} characters and values at ${MAX_VALUE}.`,
+      });
+    }
     extras.push({ label, value });
   }
 
@@ -175,7 +208,9 @@ export const POST: APIRoute = async ({ request }) => {
     }
   } catch (e) {
     console.error("profile upsert failed for", handleLower, e);
-    return err(500, "internal_error");
+    return err(500, "internal_error", {
+      message: "The server hit an error saving your profile. Try again shortly.",
+    });
   }
 
   // Echo the STORED handle, not the payload: display casing is login-proven (GitHub's exact login
@@ -222,7 +257,9 @@ export const DELETE: APIRoute = async ({ request }) => {
     ]);
   } catch (e) {
     console.error("profile delete failed for github_id", githubId, e);
-    return err(500, "internal_error");
+    return err(500, "internal_error", {
+      message: "The server hit an error deleting your profile. Try again shortly.",
+    });
   }
 
   return new Response(JSON.stringify({ ok: true }), {
