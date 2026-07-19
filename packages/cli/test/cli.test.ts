@@ -428,7 +428,7 @@ describe("write rate limit (429)", () => {
     new Response(
       JSON.stringify({
         error: "rate_limited",
-        message: "Too many writes — slow down and try again shortly.",
+        message: "Too many writes. Slow down and try again shortly.",
       }),
       { status: 429, headers: { "retry-after": "60" } },
     );
