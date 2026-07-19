@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { CURATED_KEYS } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
@@ -63,5 +64,57 @@ describe("README Auto-detected list stays in sync with DETECTED_KEYS", () => {
     const label = README_LABELS[key];
     expect(label, `add a README label mapping for new detected key "${key}"`).toBeTruthy();
     expect(bullet).toContain(label);
+  });
+});
+
+// infra/waf-ratelimit.sh is the committed source of the zone-side WAF rate-limit rule, and two
+// web sources point readers at it. Same repo-honesty class as the doc tripwires above (the
+// original defect was exactly this pointer dangling), and it lives here because web tests run in
+// workerd with no filesystem — this suite already reads repo-root files.
+describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => {
+  const scriptUrl = new URL("../../../infra/waf-ratelimit.sh", import.meta.url);
+  const script = readFileSync(scriptUrl, "utf8"); // a missing/renamed file throws right here
+
+  it("carries the load-bearing atoms of the deployed rule", () => {
+    for (const atom of [
+      "http_ratelimit",
+      "/api/v1/profile",
+      "/api/v1/auth",
+      '"POST"',
+      '"DELETE"',
+    ]) {
+      expect(script).toContain(atom);
+    }
+  });
+
+  it("takes credentials from env only and commits no secret-shaped literals", () => {
+    expect(script).toContain("CLOUDFLARE_API_TOKEN");
+    expect(script).toContain("CLOUDFLARE_ZONE_ID");
+    expect(script).not.toMatch(/Bearer [A-Za-z0-9_-]{20,}/);
+    // A 32-hex literal would be a pasted zone/ruleset/rule id — matching is by description and
+    // expression precisely so no account-specific id needs committing.
+    expect(script).not.toMatch(/\b[0-9a-f]{32}\b/);
+  });
+
+  it("both referencing web sources still point at this path (a rename trips here)", () => {
+    for (const ref of [
+      "../../../packages/web/wrangler.jsonc",
+      "../../../packages/web/src/lib/rate-limit.ts",
+    ]) {
+      expect(readFileSync(new URL(ref, import.meta.url), "utf8")).toContain(
+        "infra/waf-ratelimit.sh",
+      );
+    }
+  });
+
+  it("parses as bash (syntax tripwire; skips only where bash is unavailable)", () => {
+    // The script is piped on stdin so this works under ANY bash (Git Bash, WSL, Linux CI) —
+    // a Windows file path would be mangled by WSL's path rules.
+    const res = spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
+    if (res.error) {
+      console.warn("bash not on PATH; skipping the waf-ratelimit.sh syntax check");
+      return;
+    }
+    expect(res.status, res.stderr).toBe(0);
   });
 });
