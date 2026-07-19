@@ -27,7 +27,7 @@ describe("mintYmmvToken", () => {
     stubFetch(
       {
         error: "rate_limited",
-        message: "Too many login attempts — slow down and try again shortly.",
+        message: "Too many login attempts. Slow down and try again shortly.",
       },
       429,
       { "retry-after": "60" },
@@ -36,7 +36,7 @@ describe("mintYmmvToken", () => {
   });
 
   it("surfaces a 503 (GitHub unavailable) with a friendly message", async () => {
-    stubFetch({ error: "github_unavailable", message: "GitHub is unavailable — try again." }, 503);
+    stubFetch({ error: "github_unavailable", message: "GitHub is unavailable. Try again." }, 503);
     await expect(mintYmmvToken("gho_x")).rejects.toThrow(/github is unavailable/i);
   });
 

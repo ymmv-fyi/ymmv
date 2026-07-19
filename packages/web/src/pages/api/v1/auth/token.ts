@@ -50,7 +50,7 @@ export const POST: APIRoute = async ({ request }) => {
   if (user.kind === "transient") {
     return json(503, {
       error: "github_unavailable",
-      message: "GitHub is unavailable — try again.",
+      message: "GitHub is unavailable. Try again.",
     });
   }
 

@@ -17,7 +17,9 @@ import { env } from "cloudflare:workers";
 // Retry-After hint (seconds) — matches each binding's `period`. Advisory; the limiter is the gate.
 const RETRY_AFTER = 60;
 
-/** The 429 a rate-limited caller receives. `error:"rate_limited"` is the contract the CLI keys on. */
+/** The 429 a rate-limited caller receives. The contract the CLI keys on is the HTTP 429 status,
+ *  the optional JSON `{message}` (printed verbatim), and the delta-seconds `retry-after` — NOT the
+ *  `error` slug, which is informational and pinned only by test fixtures. */
 function rateLimited(message: string): Response {
   return new Response(JSON.stringify({ error: "rate_limited", message }), {
     status: 429,
@@ -49,7 +51,7 @@ export async function checkWriteRateLimit(githubId: number): Promise<Response | 
   if (!limiter) return null;
 
   const { success } = await limiter.limit({ key: writeRateLimitKey(githubId) });
-  return success ? null : rateLimited("Too many writes — slow down and try again shortly.");
+  return success ? null : rateLimited("Too many writes. Slow down and try again shortly.");
 }
 
 /**
@@ -63,5 +65,5 @@ export async function checkAuthRateLimit(ip: string | null): Promise<Response | 
   if (!limiter || !ip) return null;
 
   const { success } = await limiter.limit({ key: authRateLimitKey(ip) });
-  return success ? null : rateLimited("Too many login attempts — slow down and try again shortly.");
+  return success ? null : rateLimited("Too many login attempts. Slow down and try again shortly.");
 }

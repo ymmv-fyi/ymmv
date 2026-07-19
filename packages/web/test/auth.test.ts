@@ -137,7 +137,11 @@ describe("POST /api/v1/auth/token — mint", () => {
       stubGithub(() => new Response("", { status }));
       const res = await MINT(mintCtx({ access_token: "gho_valid" }));
       expect(res.status).toBe(503);
-      expect(((await res.json()) as { error: string }).error).toBe("github_unavailable");
+      const body = (await res.json()) as { error: string; message: string };
+      expect(body.error).toBe("github_unavailable");
+      // serverMessage() prints this verbatim in the terminal — copy rules: no em dash.
+      expect(body.message).toBeTruthy();
+      expect(body.message).not.toContain("—");
     }
   });
 

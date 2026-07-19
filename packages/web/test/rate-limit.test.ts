@@ -120,7 +120,12 @@ describe("rate limiting", () => {
     const res = await POST(postCtx(TOK_POST, "rlpost"));
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("60");
-    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("rate_limited");
+    // The CLI prints {message} verbatim in the terminal — copy rules bind server strings too:
+    // non-empty, and no em dash (sentence-break style like the CLI's own fallbacks).
+    expect(body.message).toBeTruthy();
+    expect(body.message).not.toContain("—");
 
     // 429 short-circuits before any D1 write — the handle was never claimed.
     const row = await env.DB.prepare(
@@ -182,7 +187,11 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
 
     const res = await MINT(mintCtx("gho_x", IP_MINT_CAP));
     expect(res.status).toBe(429);
-    expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("rate_limited");
+    // Same copy contract as the write 429: printed verbatim by the CLI, so no em dash.
+    expect(body.message).toBeTruthy();
+    expect(body.message).not.toContain("—");
     expect(fetchFn).not.toHaveBeenCalled(); // IP cap short-circuits before GitHub is ever hit
   });
 
