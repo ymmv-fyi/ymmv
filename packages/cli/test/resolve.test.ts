@@ -79,6 +79,57 @@ describe("resolveArg", () => {
     expect(resolveArg(["set", "--extra", "Launcher"]).kind).toBe("error");
   });
 
+  it("`set <key>` with an over-cap value → local cap error naming lengths only, no network", () => {
+    // Pre-flight of the shared write cap: the server would 422 this anyway, but the CLI must say
+    // so before any login/round-trip — and echo the LENGTH, never the value itself.
+    const cmd = resolveArg(["set", "editor", "x".repeat(300)]);
+    expect(cmd).toEqual({
+      kind: "error",
+      message: "That value is 300 characters; the cap is 256.",
+    });
+  });
+
+  it("`set <key>` with a value exactly at the cap still parses as a set", () => {
+    const value = "x".repeat(256);
+    expect(resolveArg(["set", "editor", value])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value },
+    });
+  });
+
+  it("`set --extra` with an over-cap label → local cap error", () => {
+    const cmd = resolveArg(["set", "--extra", `${"l".repeat(65)}=v`]);
+    expect(cmd).toEqual({
+      kind: "error",
+      message: "That label is 65 characters; the cap is 64.",
+    });
+  });
+
+  it("`set --extra` with an over-cap value → local cap error", () => {
+    const cmd = resolveArg(["set", "--extra", `Keyboard=${"v".repeat(257)}`]);
+    expect(cmd).toEqual({
+      kind: "error",
+      message: "That value is 257 characters; the cap is 256.",
+    });
+  });
+
+  it("`set --extra` at both caps exactly (64-char label, 256-char value) still parses", () => {
+    const label = "l".repeat(64);
+    const value = "v".repeat(256);
+    expect(resolveArg(["set", "--extra", `${label}=${value}`])).toEqual({
+      kind: "set",
+      target: { kind: "extra", label, value },
+    });
+  });
+
+  it('`set --extra "over-cap-label=-"` still unsets — the "-" sentinel outranks the cap check', () => {
+    // Unsetting by an over-long label is a harmless no-op lookup; only STORES are capped.
+    expect(resolveArg(["set", "--extra", `${"l".repeat(65)}=-`])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "l".repeat(65) },
+    });
+  });
+
   it("`unset <key>` → curated unset target", () => {
     expect(resolveArg(["unset", "editor"])).toEqual({
       kind: "unset",

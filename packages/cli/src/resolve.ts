@@ -5,6 +5,8 @@ import {
   isCuratedKey,
   isReserved,
   isValidHandle,
+  MAX_LABEL,
+  MAX_VALUE,
 } from "@ymmv/shared";
 import { sanitizeValue } from "./render.js";
 
@@ -71,6 +73,22 @@ function yesOnly(usage: string, rest: string[], make: (yes: boolean) => Command)
   return { kind: "error", message: usage };
 }
 
+// Pre-flight the shared write caps at the argv boundary: the server would 422 these anyway, but
+// failing locally costs no round trip and no login. Echo LENGTHS only, never the over-long value
+// itself — the sanitize-every-argv-echo rule holds by construction when nothing is echoed.
+function labelCapError(label: string): Command {
+  return {
+    kind: "error",
+    message: `That label is ${label.length} characters; the cap is ${MAX_LABEL}.`,
+  };
+}
+function valueCapError(value: string): Command {
+  return {
+    kind: "error",
+    message: `That value is ${value.length} characters; the cap is ${MAX_VALUE}.`,
+  };
+}
+
 function parseSet(rest: string[]): Command {
   const head = rest[0];
   if (head === "--extra" || head === "-e") {
@@ -84,6 +102,8 @@ function parseSet(rest: string[]): Command {
     // A lone "-" means clear, same as the interactive publish prompt (a literal "-" value is
     // deliberately unrepresentable — that's the footgun this rewrite removes).
     if (value === "-") return { kind: "unset", target: { kind: "extra", label } };
+    if (label.length > MAX_LABEL) return labelCapError(label);
+    if (value.length > MAX_VALUE) return valueCapError(value);
     return { kind: "set", target: { kind: "extra", label, value } };
   }
   if (!head) return { kind: "error", message: SET_USAGE };
@@ -93,6 +113,7 @@ function parseSet(rest: string[]): Command {
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
   // so multi-token values like "- foo" or "Fira-Code" stay literal sets.
   if (value === "-") return { kind: "unset", target: { kind: "curated", key: head } };
+  if (value.length > MAX_VALUE) return valueCapError(value);
   return { kind: "set", target: { kind: "curated", key: head, value } };
 }
 
