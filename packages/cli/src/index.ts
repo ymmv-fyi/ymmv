@@ -21,12 +21,12 @@ ${c.faint}Usage:${c.reset}
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
   ymmv set <key> <value>    set one curated key
-  ymmv set --extra "L=V"    set a free-form extra
+  ymmv set --extra "L=V"    set a free-form extra (-e works too)
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
   ymmv unset --extra "L"    remove a free-form extra
-  ymmv delete               delete your profile (permanent)
+  ymmv delete [-y]          delete your profile (permanent; -y skips the confirm)
   ymmv login | logout       GitHub device-flow auth
-  ymmv help | --version
+  ymmv help | version
 
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool`;

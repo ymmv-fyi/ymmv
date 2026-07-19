@@ -2,6 +2,25 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **`ymmv version` and `ymmv publish` work as commands.** The bare words now dispatch like
+  their flag and default forms, and both names are reserved handles so the words can never
+  collide with a profile.
+
+### Fixed
+- **Commands reject unexpected trailing arguments.** `ymmv -y delete` errors with an ordering
+  hint instead of publishing, `ymmv delete <handle> -y` errors instead of deleting the caller's
+  profile unprompted, and login/logout/view/bare-handle forms error instead of silently
+  ignoring extra arguments. `ymmv help` still accepts anything after it.
+- **Capitalized verbs point at the command.** `ymmv Set` now suggests `ymmv set` instead of
+  only reporting a reserved name.
+
+### Changed
+- **Help documents `ymmv delete -y` and the `-e` shorthand for `--extra`.** The README command
+  list gains the same forms.
+
 ## [0.7.0] - 2026-07-11
 
 ### Added

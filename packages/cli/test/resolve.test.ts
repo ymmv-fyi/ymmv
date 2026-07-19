@@ -153,6 +153,91 @@ describe("resolveArg", () => {
     });
   });
 
+  it("`-y <anything>` → error, never a publish (consent stays scoped to the intended command)", () => {
+    // `ymmv -y delete` used to publish unconfirmed detection — the -y was consent for delete.
+    const cmd = resolveArg(["-y", "delete"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/ymmv delete -y/);
+    expect(resolveArg(["--yes", "set", "editor", "x"]).kind).toBe("error");
+  });
+
+  it("`delete <handle> -y` → usage error, never an unprompted delete of the caller's profile", () => {
+    const cmd = resolveArg(["delete", "oldname", "-y"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/usage: ymmv delete/);
+  });
+
+  it("`delete --yes` keeps working (regression: the guard rewrite touches exactly this path)", () => {
+    expect(resolveArg(["delete", "--yes"])).toEqual({ kind: "delete", yes: true });
+  });
+
+  it("`delete -y -y` → error (exactly one consent token)", () => {
+    expect(resolveArg(["delete", "-y", "-y"]).kind).toBe("error");
+  });
+
+  it("login/logout reject trailing tokens", () => {
+    expect(resolveArg(["login", "--scopes", "x"]).kind).toBe("error");
+    expect(resolveArg(["logout", "--all"]).kind).toBe("error");
+  });
+
+  it("`view <handle> <extra>` → usage error (second handle never silently dropped)", () => {
+    expect(resolveArg(["view", "a", "b"]).kind).toBe("error");
+  });
+
+  it("a bare handle rejects trailing tokens", () => {
+    expect(resolveArg(["antfu", "--json"]).kind).toBe("error");
+  });
+
+  it("`version` word works like the flags; trailing tokens error", () => {
+    expect(resolveArg(["version"])).toEqual({ kind: "version" });
+    expect(resolveArg(["version", "extra"]).kind).toBe("error");
+  });
+
+  it("`publish` word is the explicit default command; -y is its only extra token", () => {
+    expect(resolveArg(["publish"])).toEqual({ kind: "publish", yes: false });
+    expect(resolveArg(["publish", "-y"])).toEqual({ kind: "publish", yes: true });
+    expect(resolveArg(["publish", "--yes"])).toEqual({ kind: "publish", yes: true });
+    expect(resolveArg(["publish", "x"]).kind).toBe("error");
+  });
+
+  it("`help` deliberately ignores trailing tokens (future `ymmv help <command>` stays open)", () => {
+    expect(resolveArg(["help", "extra"]).kind).toBe("help");
+  });
+
+  it("a capitalized verb hints the lowercase command", () => {
+    for (const [typed, verb] of [
+      ["Login", "login"],
+      ["Set", "set"],
+      ["Publish", "publish"],
+      ["Version", "version"],
+    ] as const) {
+      const cmd = resolveArg([typed]);
+      expect(cmd.kind).toBe("error");
+      if (cmd.kind === "error") expect(cmd.message).toContain(`Did you mean: ymmv ${verb}?`);
+    }
+  });
+
+  it("`Set editor vim` hints the verb, not a bland trailing-args error", () => {
+    const cmd = resolveArg(["Set", "editor", "vim"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toContain("Did you mean: ymmv set?");
+  });
+
+  it("non-verb reserved names get no command hint", () => {
+    const cmd = resolveArg(["API"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).not.toMatch(/Did you mean/);
+  });
+
+  it("`view <reserved>` gets no hint (the user asked to view, not to run a command)", () => {
+    const cmd = resolveArg(["view", "login"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") {
+      expect(cmd.message).toMatch(/reserved name/);
+      expect(cmd.message).not.toMatch(/Did you mean/);
+    }
+  });
+
   it("an unknown option → error", () => {
     expect(resolveArg(["--bogus"]).kind).toBe("error");
   });

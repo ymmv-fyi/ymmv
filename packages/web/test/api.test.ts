@@ -116,6 +116,10 @@ describe("POST validation", () => {
   it("422 reserved handle: 404 (a valid GitHub login shadowed by the static /404 route)", async () => {
     expect((await publish(TOKEN, profile("404"))).status).toBe(422);
   });
+  it("422 reserved handle: version/publish (CLI verb words)", async () => {
+    expect((await publish(TOKEN, profile("version"))).status).toBe(422);
+    expect((await publish(TOKEN, profile("publish"))).status).toBe(422);
+  });
   it("422 non-curated key", async () => {
     expect(
       (await publish(TOKEN, profile("alice", [{ key: "hairstyle", value: "mohawk" }]))).status,
@@ -558,6 +562,8 @@ describe("GET status matrix", () => {
   it("404 reserved handles", async () => {
     expect((await GET(getCtx("api"))).status).toBe(404);
     expect((await GET(getCtx("login"))).status).toBe(404);
+    expect((await GET(getCtx("version"))).status).toBe(404);
+    expect((await GET(getCtx("publish"))).status).toBe(404);
   });
   it("404 when a user row exists but was never published (updated_at NULL)", async () => {
     await env.DB.prepare(

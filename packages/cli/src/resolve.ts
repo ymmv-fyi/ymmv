@@ -1,4 +1,5 @@
 import {
+  CLI_VERBS,
   CURATED_KEYS,
   type CuratedKey,
   isCuratedKey,
@@ -6,13 +7,16 @@ import {
   isValidHandle,
 } from "@ymmv/shared";
 
-// Argument resolution. The bare `ymmv <handle>` form stays primary, the seven verb words
-// (login/logout/set/unset/delete/view/help) dispatch as verbs, and `ymmv view <handle>` is the
-// explicit alias for viewing (every verb word is also a reserved handle, so a verb-colliding
-// profile cannot exist — both view paths reject reserved names locally rather than making a
-// round-trip that misreports "no profile yet"). Pure + total: every argv maps to exactly one
-// Command (including `error`), so dispatch in index.ts is a flat switch and the whole table is
-// unit-testable without any IO.
+// Argument resolution. The bare `ymmv <handle>` form stays primary, the verb words
+// (login/logout/set/unset/delete/view/help/publish/version) dispatch as verbs, and
+// `ymmv view <handle>` is the explicit alias for viewing (every verb word is also a reserved
+// handle, so a verb-colliding profile cannot exist — both view paths reject reserved names
+// locally rather than making a round-trip that misreports "no profile yet"). Verbs reject
+// unexpected trailing tokens instead of dropping them — `ymmv -y delete` must never read as a
+// consented publish, and `ymmv delete oldname -y` must never read as a consented delete
+// (help is the one deliberate exception, see below). Pure + total: every argv maps to exactly
+// one Command (including `error`), so dispatch in index.ts is a flat switch and the whole table
+// is unit-testable without any IO.
 
 /** What `ymmv set` targets — a curated key/value or a free-form extra. */
 export type SetTarget =
@@ -51,8 +55,17 @@ function invalidKeyError(head: string, hint: string): Command {
   };
 }
 
-function hasYes(args: string[]): boolean {
-  return args.includes("-y") || args.includes("--yes");
+/** Verbs that take nothing: any trailing token is a usage error, never silently dropped. */
+function noArgs(verb: "login" | "logout", rest: string[]): Command {
+  return rest.length === 0 ? { kind: verb } : { kind: "error", message: `usage: ymmv ${verb}` };
+}
+
+/** Verbs whose only extra token may be -y/--yes — consent stays scoped to this one command,
+ *  so `delete oldname -y` and `delete -y -y` are errors, never a consented delete. */
+function yesOnly(usage: string, rest: string[], make: (yes: boolean) => Command): Command {
+  if (rest.length === 0) return make(false);
+  if (rest.length === 1 && (rest[0] === "-y" || rest[0] === "--yes")) return make(true);
+  return { kind: "error", message: usage };
 }
 
 function parseSet(rest: string[]): Command {
@@ -106,32 +119,58 @@ function parseUnset(rest: string[]): Command {
 
 export function resolveArg(argv: string[]): Command {
   const first = argv[0];
+  const rest = argv.slice(1);
 
-  // Global help/version flags.
+  // Global help/version. Help deliberately ignores trailing tokens: printing help is harmless
+  // by construction, and a future git-style `ymmv help <command>` must stay non-breaking.
+  // Version is strict like every other verb.
   if (first === "-h" || first === "--help" || first === "help") return { kind: "help" };
-  if (first === "-V" || first === "-v" || first === "--version") return { kind: "version" };
+  if (first === "-V" || first === "-v" || first === "--version" || first === "version") {
+    return rest.length === 0
+      ? { kind: "version" }
+      : { kind: "error", message: "usage: ymmv version" };
+  }
 
-  // Bare `ymmv` (optionally `-y`) → publish, the default magic.
+  // Bare `ymmv` (optionally `-y`) → publish, the default magic. A flag-first tail is refused:
+  // the -y consent was given for whatever follows (`ymmv -y delete`), not for a publish.
   if (first === undefined) return { kind: "publish", yes: false };
-  if (first === "-y" || first === "--yes") return { kind: "publish", yes: true };
+  if (first === "-y" || first === "--yes") {
+    if (rest.length > 0) {
+      return {
+        kind: "error",
+        message: `Put ${first} after the command: ymmv delete -y. A bare ymmv -y publishes without prompts.`,
+      };
+    }
+    return { kind: "publish", yes: true };
+  }
 
   // Reserved verbs.
-  if (first === "login") return { kind: "login" };
-  if (first === "logout") return { kind: "logout" };
-  if (first === "delete") return { kind: "delete", yes: hasYes(argv.slice(1)) };
-  if (first === "set") return parseSet(argv.slice(1));
-  if (first === "unset") return parseUnset(argv.slice(1));
+  if (first === "login" || first === "logout") return noArgs(first, rest);
+  if (first === "publish") {
+    return yesOnly("usage: ymmv publish [-y]", rest, (yes) => ({ kind: "publish", yes }));
+  }
+  if (first === "delete") {
+    return yesOnly(
+      "usage: ymmv delete [-y] (deletes your own profile; takes no handle)",
+      rest,
+      (yes) => ({ kind: "delete", yes }),
+    );
+  }
+  if (first === "set") return parseSet(rest);
+  if (first === "unset") return parseUnset(rest);
   if (first === "view") {
-    const handle = argv[1];
+    const handle = rest[0];
     if (!handle) return { kind: "error", message: "usage: ymmv view <handle>" };
     if (!isValidHandle(handle)) {
       return { kind: "error", message: `"${handle}" is not a valid GitHub handle.` };
     }
     if (isReserved(handle)) return reservedError(handle);
+    if (rest.length > 1) return { kind: "error", message: "usage: ymmv view <handle>" };
     return { kind: "view", handle };
   }
 
-  // Anything else: an unknown flag is an error; otherwise it's a bare handle to view.
+  // Anything else: an unknown flag is an error; otherwise it's a bare handle to view. Reserved
+  // is checked before the trailing guard so `ymmv Set editor vim` hints the verb, not the tail.
   if (first.startsWith("-")) {
     return { kind: "error", message: `Unknown option "${first}". Run \`ymmv help\`.` };
   }
@@ -141,17 +180,27 @@ export function resolveArg(argv: string[]): Command {
       message: `"${first}" is not a valid GitHub handle. Run \`ymmv help\`.`,
     };
   }
-  if (isReserved(first)) return reservedError(first);
+  if (isReserved(first)) return reservedError(first, true);
+  if (rest.length > 0) {
+    return { kind: "error", message: `Unexpected arguments after "${first}". Run \`ymmv help\`.` };
+  }
   return { kind: "view", handle: first };
 }
 
 /** Shape-check first, reserved second: only handle-shaped input reaches this hint. The reserved
  *  list is baked into each released CLI (a fast local answer instead of a round-trip that
  *  misreports "no profile yet"); the API stays the trust boundary. NOTE: removing a name from
- *  RESERVED_SET is a breaking change for shipped CLIs — they would keep refusing it locally. */
-function reservedError(handle: string): Command {
+ *  RESERVED_SET is a breaking change for shipped CLIs — they would keep refusing it locally.
+ *  On the bare path (`hintVerbs`), a capitalized verb (`ymmv Set`) almost certainly meant the
+ *  command, so the error points at it; the view path stays hint-free (the user asked to view). */
+function reservedError(handle: string, hintVerbs = false): Command {
+  const verb = handle.toLowerCase();
+  const hint =
+    hintVerbs && (CLI_VERBS as readonly string[]).includes(verb)
+      ? ` Did you mean: ymmv ${verb}?`
+      : "";
   return {
     kind: "error",
-    message: `"${handle}" is a reserved name; it can't have a profile.`,
+    message: `"${handle}" is a reserved name; it can't have a profile.${hint}`,
   };
 }

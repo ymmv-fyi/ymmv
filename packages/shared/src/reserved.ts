@@ -16,8 +16,20 @@
 /** Root path segments the web app reserves (everything else at root is a handle). */
 export const RESERVED_ROUTES = ["404", "api", "login", "logout"] as const;
 
-/** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous. */
-export const CLI_VERBS = ["login", "logout", "set", "unset", "delete", "view", "help"] as const;
+/** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous.
+ *  `publish` and `version` are here even though flags/bare `ymmv` cover them: both are
+ *  predictable muscle-memory words, and unreserved they'd be squattable profile views. */
+export const CLI_VERBS = [
+  "login",
+  "logout",
+  "set",
+  "unset",
+  "delete",
+  "view",
+  "help",
+  "publish",
+  "version",
+] as const;
 
 /** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated).
  *  NOTE: the CLI bakes this list into each released binary as a local pre-check (resolve.ts), so
