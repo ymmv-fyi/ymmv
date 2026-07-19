@@ -24,8 +24,9 @@ instant. Works on macOS, Linux, Windows, and WSL.
 ## What you get
 
 - **A clean, shareable page** at `ymmv.fyi/<handle>`.
-- **Auto-detected.** It reads your OS, shell, prompt, terminal, editor, window manager,
-  version manager, and AI tool from the environment, then pre-fills; you just confirm.
+- **Auto-detected.** It reads your OS, shell, prompt, terminal, editor, multiplexer,
+  version manager, window manager, browser, and AI tool from the environment, then
+  pre-fills; you just confirm.
 - **Instant updates.** Re-run any time; your page refreshes in seconds.
 - **Nothing publishes until you confirm.** Detection only pre-fills, and `ymmv delete`
   removes everything.

@@ -312,11 +312,26 @@ function detectAiTool(env: Env): string | undefined {
   return undefined;
 }
 
+/** The curated keys detectStack probes; the rest (font, theme, dotfiles) are prompted. Tripwired
+ *  both ways: detect.test.ts pins detectStack's output keys to this list under a fully-populated
+ *  env, and help.test.ts pins the README's "Auto-detected" list to it — so growing detection
+ *  without updating both this constant and the README fails CI. */
+export const DETECTED_KEYS = [
+  "os",
+  "shell",
+  "prompt",
+  "terminal",
+  "editor",
+  "multiplexer",
+  "version-manager",
+  "window-manager",
+  "browser",
+  "ai-tool",
+] as const satisfies readonly CuratedKey[];
+
 /**
  * Best-effort curated-key values from the environment. Returns only the keys it could detect with
- * confidence (os/shell/prompt/terminal/editor/multiplexer/version-manager/window-manager/browser/
- * ai-tool); the rest (font, theme, dotfiles) are prompted. Wrapped so a surprise from any probe
- * can never block publish.
+ * confidence (DETECTED_KEYS above). Wrapped so a surprise from any probe can never block publish.
  */
 export function detectStack(
   env: Env,

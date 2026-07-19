@@ -1,6 +1,30 @@
 import { TOOLS } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { detectStack } from "../src/detect.js";
+import { DETECTED_KEYS, detectStack } from "../src/detect.js";
+
+// DETECTED_KEYS is the exported source of truth other tripwires chain to (README list in
+// help.test.ts). Pin it against reality: an env where every probe fires must yield EXACTLY those
+// keys, so adding an eleventh probe (or dropping one) without updating the constant fails here,
+// which in turn forces the README label map and prose to follow.
+describe("DETECTED_KEYS matches what detectStack actually probes", () => {
+  it("a fully-populated env detects exactly DETECTED_KEYS", () => {
+    const s = detectStack(
+      {
+        SHELL: "/bin/zsh",
+        STARSHIP_SHELL: "zsh",
+        TERM_PROGRAM: "iTerm.app",
+        EDITOR: "nvim",
+        TMUX: "/tmp/s",
+        NVM_DIR: "/home/x/.nvm",
+        HYPRLAND_INSTANCE_SIGNATURE: "sig",
+        BROWSER: "firefox",
+        CLAUDECODE: "1",
+      },
+      "linux",
+    );
+    expect([...s.keys()].sort()).toEqual([...DETECTED_KEYS].sort());
+  });
+});
 
 // The lightweight env detector (env + Node built-ins only, no `systeminformation`). Best-effort
 // and never throwing: it fills what it can recognize and stays silent on the rest.
