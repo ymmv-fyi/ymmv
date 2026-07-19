@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
-import { BASE } from "./config.js";
+import { BASE, baseProblem } from "./config.js";
 import { login } from "./device-flow.js";
 import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
-import { type Codes, colorEnabled, message, palette } from "./render.js";
+import { type Codes, colorEnabled, message, palette, sanitizeValue } from "./render.js";
 import { resolveArg } from "./resolve.js";
 import { deleteToken, loadToken, peekBase } from "./token-store.js";
 
@@ -45,7 +45,7 @@ async function logout(): Promise<void> {
     console.log(
       message(
         otherBase && otherBase !== BASE
-          ? `Not logged in to ${BASE} (a token for ${otherBase} exists; set YMMV_API to that to log out of it).`
+          ? `Not logged in to ${BASE} (a token for ${sanitizeValue(otherBase)} exists; set YMMV_API to that to log out of it).`
           : "Not logged in.",
       ),
     );
@@ -93,6 +93,19 @@ async function interactive(run: (io: InteractiveIO) => Promise<void>, yes: boole
 
 export async function main(argv: string[]): Promise<void> {
   const cmd = resolveArg(argv);
+  // Config gate before dispatch (help/version included): a broken YMMV_API should fail with its
+  // real diagnosis at the first opportunity, not lie dormant until a network verb wraps the
+  // URL-parse throw in "Check your connection". EXCEPT logout: it only needs BASE to hit the
+  // revoke URL that worked when the token was minted, and gating it would permanently strand
+  // tokens stored under bases the gate now rejects (older CLIs accepted them).
+  if (cmd.kind !== "logout") {
+    const problem = baseProblem();
+    if (problem) {
+      console.error(message(problem));
+      process.exitCode = 1;
+      return;
+    }
+  }
   switch (cmd.kind) {
     case "publish":
       await interactive(publish, cmd.yes);
