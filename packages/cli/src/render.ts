@@ -91,8 +91,11 @@ export function sanitizeValue(value: string): string {
  */
 export function useColor(env: Env, isTTY: boolean): boolean {
   if (env.NO_COLOR !== undefined) return false;
-  // FORCE_COLOR convention (supports-color): "0" force-DISABLES, any other value force-enables.
-  if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== "0";
+  // FORCE_COLOR convention (supports-color): "0" and "false" force-DISABLE, any other value
+  // (including empty) force-enables.
+  if (env.FORCE_COLOR !== undefined) {
+    return env.FORCE_COLOR !== "0" && env.FORCE_COLOR !== "false";
+  }
   if (env.TERM === "dumb") return false;
   return isTTY;
 }
@@ -197,17 +200,22 @@ export function renderProfile(
   );
   const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color) : v);
 
+  // Every section (rows, extras, updated) pushes its OWN leading blank — the breadcrumb never
+  // pre-pays one. A profile with zero curated rows would otherwise stack the breadcrumb's blank
+  // on the next section's, breaking the one-blank-line-between-units convention.
   const lines: string[] = [
     "",
     `  ${c.faint}${opts.site}/${c.reset}${c.bold}${sanitizeValue(profile.handle)}${c.reset}`,
-    "",
   ];
-  for (const r of rows) {
-    lines.push(
-      r.value === null
-        ? `  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`
-        : `  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}`,
-    );
+  if (rows.length) {
+    lines.push("");
+    for (const r of rows) {
+      lines.push(
+        r.value === null
+          ? `  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`
+          : `  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}`,
+      );
+    }
   }
   if (extras.length) {
     lines.push("");

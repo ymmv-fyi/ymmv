@@ -48,6 +48,14 @@ describe("useColor", () => {
   it("FORCE_COLOR=0 force-disables color even on a TTY (supports-color convention)", () => {
     expect(useColor({ FORCE_COLOR: "0" }, true)).toBe(false);
   });
+
+  it("FORCE_COLOR=false force-disables too (supports-color treats it like 0)", () => {
+    expect(useColor({ FORCE_COLOR: "false" }, true)).toBe(false);
+  });
+
+  it("FORCE_COLOR= (empty) still force-ENABLES (supports-color convention)", () => {
+    expect(useColor({ FORCE_COLOR: "" }, false)).toBe(true);
+  });
   it("TERM=dumb disables color on a TTY, but an explicit FORCE_COLOR still wins", () => {
     expect(useColor({ TERM: "dumb" }, true)).toBe(false);
     expect(useColor({ TERM: "dumb", FORCE_COLOR: "1" }, false)).toBe(true);
@@ -219,7 +227,7 @@ describe("renderProfile", () => {
     expect(out).not.toContain(AMBER);
   });
 
-  it("renders an empty profile (no entries/extras) without crashing", () => {
+  it("renders an empty profile with exactly ONE blank line between units (never two)", () => {
     const empty: Profile = {
       schema_version: 1,
       handle: "x",
@@ -227,7 +235,32 @@ describe("renderProfile", () => {
       extras: [],
       updated_at: "t",
     };
-    expect(renderProfile(empty, { color: false, site: SITE })).toContain("x");
+    const out = renderProfile(empty, { color: false, site: SITE });
+    expect(out).toContain("x");
+    // Exact pin: breadcrumb, one blank, updated — the zero-curated-rows card must not stack the
+    // breadcrumb's old trailing blank on the next section's leading one.
+    expect(out).toBe("\n  ymmv.fyi/x\n\n  updated t");
+    expect(out).not.toContain("\n\n\n");
+  });
+
+  it("zero curated entries + extras: single blank between breadcrumb, extras, and updated", () => {
+    const p: Profile = {
+      schema_version: 1,
+      handle: "x",
+      entries: [],
+      extras: [{ label: "Keyboard", value: "HHKB" }],
+      updated_at: "t",
+    };
+    const out = renderProfile(p, { color: false, site: SITE });
+    expect(out).toBe("\n  ymmv.fyi/x\n\n  Keyboard  HHKB\n\n  updated t");
+    expect(out).not.toContain("\n\n\n");
+  });
+
+  it("a populated profile keeps the exact historical line structure (refactor guard)", () => {
+    const out = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+    expect(out).toBe(
+      "\n  ymmv.fyi/carol\n\n  Editor    Zed\n  Dotfiles  https://git.io/etc\n\n  Keyboard  HHKB\n\n  updated 3h ago",
+    );
   });
 
   const FULLISH: Profile = {
