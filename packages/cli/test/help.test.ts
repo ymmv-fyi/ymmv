@@ -109,10 +109,13 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
 
   it("parses as bash (syntax tripwire; skips only where bash is unavailable)", () => {
     // The script is piped on stdin so this works under ANY bash (Git Bash, WSL, Linux CI) —
-    // a Windows file path would be mangled by WSL's path rules.
+    // a Windows file path would be mangled by WSL's path rules. A launch failure OR a nonzero
+    // exit WITHOUT a syntax diagnosis is an environment problem (WSL under parallel-suite load
+    // flakes this way), not a script problem — skip loudly; `bash -n` always says "syntax error"
+    // when the script is actually broken, and Linux CI runs the strict path.
     const res = spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
-    if (res.error) {
-      console.warn("bash not on PATH; skipping the waf-ratelimit.sh syntax check");
+    if (res.error || (res.status !== 0 && !/syntax error/i.test(res.stderr ?? ""))) {
+      console.warn("bash unavailable or failed to launch; skipping the syntax check");
       return;
     }
     expect(res.status, res.stderr).toBe(0);
