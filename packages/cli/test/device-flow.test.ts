@@ -1,11 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 vi.mock("../src/auth-http.js");
 vi.mock("../src/token-store.js");
 
-import { mintYmmvToken } from "../src/auth-http.js";
-import { type DeviceCode, login, pollForToken } from "../src/device-flow.js";
-import { saveToken } from "../src/token-store.js";
+import { mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
+import { BASE } from "../src/config.js";
+import { type DeviceCode, login, pollForToken, requestDeviceCode } from "../src/device-flow.js";
+import { peekCredential, saveToken } from "../src/token-store.js";
 
 const DC: DeviceCode = {
   device_code: "dc",
@@ -242,6 +243,60 @@ describe("pollForToken state machine", () => {
     ).rejects.toThrow(/unexpected device-code response/i);
   });
 
+  it("requestDeviceCode: an out-of-band interval is rejected (every hot-poll shape)", async () => {
+    // A truthy non-number survives `|| 5`-style fallbacks and turns sleep(interval*1000) into
+    // sleep(NaN) = 0ms; zero/negative reach setTimeout as immediate timers; sub-second fractions
+    // poll near-continuously; huge values overflow Node's 2^31-1 ms timer ceiling, which CLAMPS
+    // to 1ms. All the same mangled-middlebox class the surrounding shape check exists for.
+    const bad = ["abc", 0, -5, 0.001, Number.NaN, Number.POSITIVE_INFINITY, 1e10] as unknown[];
+    for (const interval of bad) {
+      await expect(requestDeviceCode({ fetch: fetchSeq({ ...DC, interval }) })).rejects.toThrow(
+        /unexpected device-code response/i,
+      );
+    }
+  });
+
+  it("requestDeviceCode: a non-finite or absurd expires_in is rejected (same rigor as interval)", async () => {
+    // NaN makes the deadline NaN (instant false "expired"); Infinity/1e300 make it unreachable,
+    // so a middlebox feeding parseable authorization_pending bodies would hold the login FOREVER
+    // (the deadline is the poll loop's only exit for well-formed bodies).
+    const bad = [Number.NaN, Number.POSITIVE_INFINITY, 1e300, 0, -900] as unknown[];
+    for (const expires_in of bad) {
+      await expect(requestDeviceCode({ fetch: fetchSeq({ ...DC, expires_in }) })).rejects.toThrow(
+        /unexpected device-code response/i,
+      );
+    }
+  });
+
+  it("pollForToken is self-defending: a foreign caller's zero interval polls at the 5s default", async () => {
+    // requestDeviceCode rejects 0, but pollForToken is exported — its safety must not depend on
+    // who constructed the DeviceCode.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await pollForToken(
+      { ...DC, interval: 0 },
+      { fetch: fetchSeq({ access_token: "gho_x" }), sleep, now: at0 },
+    );
+    expect(sleep).toHaveBeenCalledWith(5000);
+  });
+
+  it("requestDeviceCode: an ABSENT interval is accepted and the poll defaults to 5s", async () => {
+    const { interval: _drop, ...noInterval } = DC;
+    const dc = await requestDeviceCode({ fetch: fetchSeq(noInterval) });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await pollForToken(dc, { fetch: fetchSeq({ access_token: "gho_x" }), sleep, now: at0 });
+    expect(sleep).toHaveBeenCalledWith(5000);
+  });
+
+  it("slow_down with a mangled non-numeric interval still backs off +5s (never sleep(NaN))", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await pollForToken(DC, {
+      fetch: fetchSeq({ error: "slow_down", interval: "abc" }, { access_token: "gho_x" }),
+      sleep,
+      now: at0,
+    });
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([5000, 10000]);
+  });
+
   it("throws a friendly error on access_denied", async () => {
     await expect(
       pollForToken(DC, { fetch: fetchSeq({ error: "access_denied" }), sleep: noSleep, now: at0 }),
@@ -413,5 +468,122 @@ describe("login() orchestration", () => {
       );
     });
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // Re-login and the token it replaces. auth-http is mocked, so these assert the ORCHESTRATION
+  // contract (which token, in what order, blocking what) against the mocked revokeYmmvToken —
+  // the transport (POST /auth/logout + bearer) is pinned in auth-http.test.ts. The lenient
+  // peekCredential read (corrupt handle still revocable) is pinned in token-store.test.ts.
+  describe("previous-token handling", () => {
+    let logs: string[];
+    let errs: string[];
+    let logSpy: MockInstance;
+    let errSpy: MockInstance;
+    beforeEach(() => {
+      vi.mocked(peekCredential).mockReset();
+      vi.mocked(revokeYmmvToken).mockReset();
+      vi.mocked(saveToken).mockReset();
+      vi.mocked(mintYmmvToken).mockReset();
+      vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_new", handle: "carol" });
+      logs = [];
+      errs = [];
+      logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        logs.push(a.join(" "));
+      });
+      errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        errs.push(a.join(" "));
+      });
+    });
+    afterEach(() => {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    });
+
+    const run = () =>
+      withTTY(true, async () => {
+        await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+      });
+
+    it("same-base: revokes the replaced token AFTER the save, silently on success", async () => {
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await run();
+      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_old");
+      const saved = vi.mocked(saveToken).mock.invocationCallOrder[0] as number;
+      const revoked = vi.mocked(revokeYmmvToken).mock.invocationCallOrder[0] as number;
+      expect(revoked).toBeGreaterThan(saved); // a failed save must keep the OLD login working
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+      expect(errs).toEqual([]); // success is silent: no warn, no note
+    });
+
+    it("a failed revoke never blocks the login: token saved, faint note, no throw", async () => {
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("logout failed: 503"));
+      await run();
+      expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_new", handle: "carol" });
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+      expect(errs.join("\n")).toContain("(couldn't revoke the previous session's token)");
+    });
+
+    it("cross-base: warns (sanitized, prose recovery, no runnable command) and does NOT revoke", async () => {
+      const esc = String.fromCharCode(0x1b);
+      vi.mocked(peekCredential).mockResolvedValue({
+        base: `https://other.example${esc}[31m`,
+        token: "ymmv_other",
+      });
+      await run();
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      const err = errs.join("\n");
+      expect(err).toContain("You're logged in to https://other.example");
+      expect(err).toContain("set YMMV_API to that server");
+      expect(err).toContain("ymmv logout");
+      // Never an inline runnable `YMMV_API=<value> ...` command: POSIX-only syntax, and it would
+      // paste untrusted file content into the user's shell.
+      expect(err).not.toContain("YMMV_API=");
+      expect(err).not.toContain(esc); // untrusted file content is sanitized before echo
+      expect(logs.at(-1)).toBe("\n  Logged in as carol."); // warn-only: the flow proceeds
+    });
+
+    it("revokes what the file holds at SAVE time, not the pre-flow snapshot (racing logins)", async () => {
+      // The device flow takes minutes; a concurrent login may have replaced the stored token
+      // mid-poll. Revoking the stale pre-flow token would permanently orphan the fresh one.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_preflow" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_written_mid_poll" });
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await run();
+      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_written_mid_poll");
+    });
+
+    it("no stored token: exactly one mint, zero revoke calls", async () => {
+      vi.mocked(peekCredential).mockResolvedValue(null);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+    });
+
+    it("same-base with an identical echoed token: no revoke (would kill the fresh login)", async () => {
+      // Defensive guard pin: if a server ever echoed the stored token back, revoking "the old
+      // one" would revoke the login just saved.
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_new" });
+      await run();
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+    });
+
+    it("a failed save revokes the NEW token, not the old one (old file survives)", async () => {
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(saveToken).mockRejectedValue(new Error("EDQUOT"));
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await withTTY(true, async () => {
+        await expect(
+          login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 }),
+        ).rejects.toThrow("EDQUOT");
+      });
+      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_new");
+    });
   });
 });

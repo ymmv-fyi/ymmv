@@ -1,8 +1,9 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
+import { BASE } from "./config.js";
 import { causeText, isTimeoutError, REQUEST_TIMEOUT_MS, safeFetch, wireText } from "./http.js";
 import { colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
-import { saveToken } from "./token-store.js";
+import { peekCredential, saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
 // the Worker, which verifies the token's audience (introspection) and mints the ymmv token (the CLI
@@ -19,7 +20,18 @@ export interface DeviceCode {
   user_code: string;
   verification_uri: string;
   expires_in: number;
-  interval: number;
+  interval?: number;
+}
+
+// RFC 8628's default poll interval; also GitHub's mandated slow_down increment (they share the
+// value by protocol coincidence — keep the two uses honest if either ever diverges).
+const DEFAULT_POLL_INTERVAL_S = 5;
+
+/** A usable wire poll interval: finite, at least 1s, at most the device-code lifetime. Everything
+ *  else reaches setTimeout as a hot-poll: NaN/strings as a 0ms timer, sub-second fractions as
+ *  near-continuous polling, and anything past ~2^31-1 ms via Node's overflow clamp to 1ms. */
+function usableInterval(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 900;
 }
 
 // Injectable for deterministic tests of the poll state machine (no real timers/clock/network).
@@ -57,7 +69,14 @@ export async function requestDeviceCode(deps: PollDeps = {}): Promise<DeviceCode
     typeof data.device_code !== "string" ||
     typeof data.user_code !== "string" ||
     typeof data.verification_uri !== "string" ||
-    typeof data.expires_in !== "number"
+    // expires_in gets the same rigor as interval: NaN makes the deadline NaN (instant false
+    // "expired"), Infinity/1e300 make it unreachable (a middlebox feeding parseable
+    // authorization_pending bodies would hold the login forever - the deadline is the only exit).
+    typeof data.expires_in !== "number" ||
+    !Number.isFinite(data.expires_in) ||
+    data.expires_in <= 0 ||
+    data.expires_in > 86_400 ||
+    (data.interval !== undefined && !usableInterval(data.interval))
   ) {
     throw new Error("GitHub sent an unexpected device-code response. Run `ymmv login` again.");
   }
@@ -73,7 +92,9 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   const sleep = deps.sleep ?? realSleep;
   const now = deps.now ?? Date.now;
 
-  let interval = dc.interval || 5;
+  // Self-defending even though requestDeviceCode is the only in-repo producer: pollForToken is
+  // exported, and a foreign caller's 0/garbage interval must not become a hot loop.
+  let interval = usableInterval(dc.interval) ? dc.interval : DEFAULT_POLL_INTERVAL_S;
   const deadline = now() + dc.expires_in * 1000;
   // GitHub returns EVERY device-flow protocol outcome (authorization_pending / slow_down /
   // access_denied / expired_token) as HTTP 200 + JSON, so a non-ok status or a non-JSON body is a
@@ -139,7 +160,12 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
       case "authorization_pending":
         break;
       case "slow_down":
-        interval = Math.max(tok.interval ?? 0, interval + 5);
+        // The wire interval is typed number but arrives untrusted: a mangled string would turn
+        // Math.max into NaN, and a huge value overflows setTimeout into a 1ms clamp — either way
+        // a 0ms hot-poll with no recovery. Unusable values are ignored; the mandated +5s applies.
+        interval = usableInterval(tok.interval)
+          ? Math.max(tok.interval, interval + DEFAULT_POLL_INTERVAL_S)
+          : interval + DEFAULT_POLL_INTERVAL_S;
         break;
       case "access_denied":
         throw new Error("Authorization denied. Run `ymmv login` to try again.");
@@ -152,8 +178,22 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   throw new Error("Device code expired. Run `ymmv login` again.");
 }
 
-/** Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
- *  `deps` is for tests (inject sleep/now/fetch); production calls login() with real timers. */
+/**
+ * Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
+ * `deps` is for tests (inject sleep/now/fetch); production calls login() with real timers.
+ *
+ * A previously stored token is handled around the overwrite (server mint is multi-token, so an
+ * unrevoked predecessor stays live with no local reference left to revoke it by):
+ *
+ *   peek ── other base? ─► warn (stderr): the file will be replaced, log out there first
+ *   device flow ─► mint ─► RE-peek (the flow took minutes; a concurrent login may have
+ *   written a fresh token) ─► saveToken ─┬─ ok ───► revoke REPLACED, best effort (fail: faint note)
+ *                                        └─ fail ─► revoke NEW; old file survives (atomic rename)
+ *
+ * Revoke runs AFTER the save so a failed save never leaves the user credential-less, and a failed
+ * revoke never blocks the login. peekCredential (not loadToken) on purpose: a corrupt handle in
+ * the file reads as logged-out everywhere else, but the token inside may still be live.
+ */
 export async function login(deps: PollDeps = {}): Promise<void> {
   // The device flow needs a human to read a code and visit a URL, so it cannot complete without a
   // terminal. Refuse fast in a piped/CI/non-TTY context instead of printing a code nobody reads and
@@ -164,9 +204,23 @@ export async function login(deps: PollDeps = {}): Promise<void> {
         "(a piped or CI shell can't complete the GitHub device flow).",
     );
   }
-  const dc = await requestDeviceCode(deps);
+  const prior = await peekCredential();
   const color = colorEnabled();
   const c = palette(color);
+  if (prior && prior.base !== BASE) {
+    // Warn-only (revoking against a foreign base is out of scope): the user can Ctrl+C here,
+    // log out of the other base, and come back. The stored base is untrusted file content —
+    // sanitize like every other echo. Diagnostic, so stderr: stdout keeps only the flow itself.
+    // Prose, never a runnable command: an inline `YMMV_API=... ymmv logout` is POSIX-only syntax
+    // (dead on PowerShell/cmd) and would paste untrusted file content into the user's shell.
+    console.error(
+      message(
+        `You're logged in to ${sanitizeValue(prior.base)}. Logging in here replaces that ` +
+          "stored token. To revoke it first, set YMMV_API to that server and run `ymmv logout`.",
+      ),
+    );
+  }
+  const dc = await requestDeviceCode(deps);
   // user_code/verification_uri come off the wire — sanitize/link like every other print surface.
   // Linkify ONLY a github.com https URI: a middlebox-minted 200 must not turn this line into a
   // first-party-looking clickable target (file://, lookalike host); anything else prints inert.
@@ -181,12 +235,28 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   );
   const accessToken = await pollForToken(dc, deps);
   const { token, handle } = await mintYmmvToken(accessToken);
+  // The device flow takes minutes: a concurrent login may have replaced the stored token since
+  // the pre-flow peek. Re-read so the revoke targets what the file ACTUALLY holds at overwrite
+  // time (the pre-flow `prior` still owns the cross-base warn); the leftover race is the
+  // save-to-revoke gap, tracked in TODOS.md (atomic login token rotate).
+  const replaced = await peekCredential();
   try {
     await saveToken({ token, handle });
   } catch (e) {
     // Don't strand a minted token we couldn't persist — the user would have no way to revoke it.
     await revokeYmmvToken(token).catch(() => {});
     throw e;
+  }
+  if (replaced && replaced.base === BASE && replaced.token !== token) {
+    // The new token is safely on disk; retire the one it replaced. Best effort — a failed revoke
+    // must never block a login that already succeeded, but say so (the old token stays live and
+    // this CLI no longer holds a reference to it). The !== guard is defensive: if a server ever
+    // echoed the stored token back, revoking "the old one" would kill the login just saved.
+    try {
+      await revokeYmmvToken(replaced.token);
+    } catch {
+      console.error(message(`${c.faint}(couldn't revoke the previous session's token)${c.reset}`));
+    }
   }
   console.log(
     message(
