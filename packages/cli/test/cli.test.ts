@@ -43,6 +43,56 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
+// The config gate runs before ANY dispatch. baseProblem() reads the env at CALL time (BASE itself
+// bakes at import, which setup-env pins to the default), so stubbing here exercises the gate;
+// the validator's shape rules live in config.test.ts as pure-function cases.
+describe("YMMV_API startup validation", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a scheme-less YMMV_API fails fast naming the variable, not the network", async () => {
+    // Previously this surfaced as fetch throwing inside safeFetch: "Can't reach localhost:4321.
+    // Check your connection" — a config mistake dressed as a connectivity failure.
+    vi.stubEnv("YMMV_API", "localhost:4321");
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await main(["someuser"]);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("YMMV_API");
+    expect(errs.join("\n")).toMatch(/http/);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(loadToken).not.toHaveBeenCalled();
+  });
+
+  it("gates every verb, help included (config errors never lie dormant)", async () => {
+    vi.stubEnv("YMMV_API", "https://x.dev/api");
+    await main(["help"]);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("YMMV_API");
+    expect(logs.join("\n")).not.toContain("Usage:");
+  });
+
+  it("a valid override (trailing slash included) dispatches normally", async () => {
+    vi.stubEnv("YMMV_API", "https://x.dev/");
+    await main(["help"]);
+    expect(process.exitCode).toBeUndefined();
+    expect(logs.join("\n")).toContain("Usage:");
+  });
+
+  it("logout is EXEMPT from the gate (a token under a legacy base must stay revocable)", async () => {
+    // Older CLIs accepted bases the gate now rejects; gating logout would permanently strand
+    // those tokens (hand-deleting token.json orphans them server-side).
+    vi.stubEnv("YMMV_API", "localhost:4321");
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(peekBase).mockResolvedValue(null);
+    await main(["logout"]);
+    expect(process.exitCode).toBeUndefined();
+    expect(errs.join("\n")).not.toContain("YMMV_API");
+    expect(logs.join("\n")).toContain("Not logged in");
+  });
+});
+
 describe("ymmv logout", () => {
   it("revokes server-side, then deletes the local file", async () => {
     vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
@@ -114,6 +164,16 @@ describe("ymmv logout", () => {
         "set YMMV_API to that to log out of it).",
     );
     expect(deleteToken).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes the other base before echoing it (token.json is untrusted print input)", async () => {
+    const esc = String.fromCharCode(0x1b);
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(peekBase).mockResolvedValue(`https://evil.example${esc}[31m`);
+    await main(["logout"]);
+    const out = logs.join("\n");
+    expect(out).toContain("https://evil.example");
+    expect(out).not.toContain(esc);
   });
 
   it("notes when the server had no active session for the revoked token", async () => {
