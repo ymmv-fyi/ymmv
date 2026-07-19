@@ -6,6 +6,8 @@ import {
   type Entry,
   isCuratedKey,
   KEY_LABELS,
+  MAX_EXTRAS,
+  MAX_VALUE,
   type Profile,
   SCHEMA_VERSION,
 } from "@ymmv/shared";
@@ -13,11 +15,13 @@ import {
   deleteProfile,
   ensureLogin,
   fetchProfileJson,
+  PublishRefusal,
   type PublishResult,
   publishProfile,
 } from "./api.js";
 import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
+import { displayError, isTimeoutError, NetworkError } from "./http.js";
 import {
   applySet,
   applyUnset,
@@ -113,9 +117,31 @@ async function promptEntries(
   console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
-    const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
-    const value = answer === "-" ? "" : answer;
-    if (value) chosen.set(key, value);
+    // Re-ask on an over-cap paste instead of letting the server 422 the whole publish after all
+    // 13 answers are in. Defaults can never exceed the cap (existing values are server-capped,
+    // detection emits short tool names), so accepting Enter-for-default stays safe.
+    for (;;) {
+      const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
+      const value = answer === "-" ? "" : answer;
+      if (value.length > MAX_VALUE) {
+        // If the over-cap value IS the stored default (possible after a server-side cap raise
+        // with a stale CLI, or a generous YMMV_API origin), Enter-to-keep would loop forever —
+        // name the default as the problem and the two ways out.
+        const isDefault = value === (defaults.get(key) ?? "").trim();
+        console.log(
+          message(
+            `${c.faint}${
+              isDefault
+                ? `the saved value is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
+                : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`
+            }${c.reset}`,
+          ),
+        );
+        continue;
+      }
+      if (value) chosen.set(key, value);
+      break;
+    }
   }
   return chosen;
 }
@@ -131,7 +157,9 @@ async function promptEntries(
  *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
  *          └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
  *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
- *               ├─ y ──► POST ► Published
+ *               ├─ y ──► POST ─┬─ ok ────────────► Published
+ *               │              ├─ transient err ─► "…Your answers are kept." ─► LOOP
+ *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published."  exit 0
  *               ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
@@ -213,6 +241,22 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
   // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
   if (!io.interactive || !io.prompter || io.yes) {
+    // Detection is the one input that skips both the argv and prompt pre-flights (env-derived
+    // values land in the defaults verbatim), and this branch has no re-ask to recover with —
+    // refuse locally instead of shipping a doomed POST. Scoped to the curated map: carried
+    // entries are deliberately exempt (a newer server's caps may exceed this build's), and the
+    // interactive paths recover through the re-prompt/edit loop instead.
+    const over = [...values].find(([, v]) => v.length > MAX_VALUE);
+    if (over) {
+      console.error(
+        message(
+          `The detected ${KEY_LABELS[over[0]]} value is ${over[1].length} characters; ` +
+            `the cap is ${MAX_VALUE}. Set a shorter one: ymmv set ${over[0]} <value>.`,
+        ),
+      );
+      process.exitCode = 1;
+      return;
+    }
     const entries = assemble();
     showCard(entries);
     printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
@@ -233,8 +277,32 @@ export async function publish(io: InteractiveIO): Promise<void> {
         "Y/n/e=edit",
       );
       if (ans === "y") {
-        printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
-        return;
+        try {
+          printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
+          return;
+        } catch (e) {
+          // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the 13 answers
+          // the user just typed — print why and re-enter the loop (card + Y/n/e). Deterministic
+          // failures pass through: PromptAborted (^C during the re-login device flow) keeps its
+          // exit-130 contract, and PublishRefusal means retrying the SAME attempt can never
+          // succeed (identity drifted; a fresh run must rebuild the merge), so exit honestly.
+          if (e instanceof PromptAborted || e instanceof PublishRefusal) throw e;
+          // Honest about what's known: a server-ANSWERED failure (4xx/5xx body) proves nothing
+          // was written, but a lost response (NetworkError/timeout) can arrive AFTER the server
+          // committed — never claim "nothing was published" for those. (The retry also replays
+          // the pre-loop read; see the RMW entry in TODOS.md.)
+          const ambiguous = e instanceof NetworkError || isTimeoutError(e);
+          console.error(
+            message(
+              `${displayError(e)}\n${
+                ambiguous
+                  ? "The publish may not have completed. Your answers are kept."
+                  : "Nothing was published. Your answers are kept."
+              }`,
+            ),
+          );
+          continue;
+        }
       }
       if (ans === "n") {
         console.log(message("Aborted. Nothing published."));
@@ -293,6 +361,20 @@ export async function runSet(target: SetTarget): Promise<void> {
   const existing = await fetchProfileJson(handle);
   assertHandleUnchanged(existing, handle);
   const { entries, extras } = applySet(existing, target);
+  // Count pre-flight needs the merged profile, so it lives here, not in parseSet. Only a genuine
+  // 33rd extra trips it — applySet replaces an existing label in place, so editing at the cap
+  // keeps length === MAX_EXTRAS and publishes. (Stored profiles can't exceed the cap: the server
+  // has enforced it since the initial commit.)
+  if (target.kind === "extra" && extras.length > MAX_EXTRAS) {
+    console.error(
+      message(
+        `Your profile already has ${MAX_EXTRAS} extras; that's the cap. ` +
+          `Remove one first: ymmv unset --extra "Label".`,
+      ),
+    );
+    process.exitCode = 1;
+    return;
+  }
   const res = await publishProfile(newProfile(handle, entries, extras));
   const line =
     target.kind === "curated"

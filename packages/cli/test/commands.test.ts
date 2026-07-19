@@ -12,6 +12,7 @@ vi.mock("../src/detect.js");
 
 import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
+import { login } from "../src/device-flow.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
 import { deleteToken, loadToken } from "../src/token-store.js";
 
@@ -422,6 +423,161 @@ describe("publish", () => {
     await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/ymmv login/);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
+
+  it("a failed publish keeps the prompt answers: card + choice re-run, second y succeeds", async () => {
+    // The finding's trigger: 13 answers typed, confirm, POST fails → the whole session used to be
+    // discarded (exit 1). Now the loop re-enters with the answers intact and no re-walk.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET existing → none (first publish, guided walk)
+      .mockResolvedValueOnce(
+        jsonRes({ error: "value_too_long", message: "Values are capped at 256 characters." }, 422),
+      ) // first POST → server rejection
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // second POST → success
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Neovim" : ""));
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask, choice });
+    await publish({ interactive: true, yes: false, prompter });
+    // Answers survived: both POSTs carry the typed value, and the 13-prompt walk ran ONCE.
+    const post1 = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const post2 = JSON.parse((fetchFn.mock.calls[2]?.[1] as RequestInit).body as string) as Profile;
+    expect(post1.entries).toEqual([{ key: "editor", value: "Neovim" }]);
+    expect(post2.entries).toEqual([{ key: "editor", value: "Neovim" }]);
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length);
+    expect(choice).toHaveBeenCalledTimes(2); // the loop re-offered, not re-walked
+    expect(logs.filter(isCard)).toHaveLength(2); // a fresh card before each confirm
+    expect(errs).toContain(
+      "\n  Values are capped at 256 characters.\n  Nothing was published. Your answers are kept.",
+    );
+    expect(logs.join("\n")).toMatch(/Published me/);
+    expect(process.exitCode).toBeUndefined(); // the retry succeeded — a clean exit 0
+  });
+
+  it("n after a failed publish aborts cleanly (exit 0, no further POST)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET
+      .mockResolvedValueOnce(fail(500)); // POST → 5xx
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      ask: vi.fn(async () => ""),
+      choice: vi.fn().mockResolvedValueOnce("y").mockResolvedValueOnce("n"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(fetchFn).toHaveBeenCalledTimes(2); // GET + the one failed POST
+    expect(logs).toContain("\n  Aborted. Nothing published.");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("Ctrl+C after a failed publish still exits 130 through the outer handler", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET
+      .mockResolvedValueOnce(fail(500)); // POST → 5xx
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      ask: vi.fn(async () => ""),
+      choice: vi.fn().mockResolvedValueOnce("y").mockRejectedValueOnce(new PromptAborted()),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
+    expect(process.exitCode).toBe(130);
+  });
+
+  it("a PublishRefusal exits instead of re-offering a retry that can never succeed", async () => {
+    // Identity drifted mid-command (a concurrent `ymmv login`): retrying the SAME merge would
+    // fail identically, so the loop must rethrow to the top-level handler, not loop politely.
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce({ base: "B", token: "t", handle: "me" }) // the command's own login
+      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" }); // publishProfile's re-check
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only — no POST
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await expect(publish({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /login changed/,
+    );
+    expect(choice).toHaveBeenCalledTimes(1); // no second offer
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("a lost response mid-loop prints the may-not-have-completed copy, never a false negative", async () => {
+    // A NetworkError can arrive AFTER the server committed — "Nothing was published" would be a
+    // lie the CLI can't back up. Server-answered failures keep the definite copy (tested above).
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET existing
+      .mockRejectedValueOnce(new TypeError("fetch failed")); // POST → safeFetch wraps: NetworkError
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      ask: vi.fn(async () => ""),
+      choice: vi.fn().mockResolvedValueOnce("y").mockResolvedValueOnce("n"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(errs.join("\n")).toMatch(/The publish may not have completed\. Your answers are kept\./);
+    expect(errs.join("\n")).not.toMatch(/Nothing was published/);
+  });
+
+  it("^C during the mid-publish re-login device flow exits 130, not the retry loop", async () => {
+    // The loop's PromptAborted rethrow must cover an abort ESCAPING publishProfile (the ^C lands
+    // in login() during the 401 self-heal), not just one at the confirm choice.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(login).mockRejectedValue(new PromptAborted());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET existing
+      .mockResolvedValueOnce(new Response("{}", { status: 401 })); // POST → self-heal → login ^C
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(process.exitCode).toBe(130);
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
+    expect(choice).toHaveBeenCalledTimes(1); // no re-offer after the abort
+  });
+
+  it("an interactive answer exactly at the cap is accepted without a re-ask", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const atCap = "x".repeat(256);
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? atCap : ""));
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // no re-ask at the boundary
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([{ key: "editor", value: atCap }]);
+  });
+
+  it("an over-cap interactive answer re-prompts in place instead of failing after the walk", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET existing → none
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      return editorAsks === 1 ? "x".repeat(300) : "Neovim";
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/that value is 300 characters; the cap is 256/);
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, no full re-walk
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]); // no 422 round-trip
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("set", () => {
@@ -482,6 +638,65 @@ describe("set", () => {
       /ymmv login/,
     );
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("a genuine 33rd extra is refused locally with the cap named — no POST, exit 1", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me", [], atCap))); // GET only
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "extra", label: "New", value: "v" });
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(errs).toContain(
+      "\n  Your profile already has 32 extras; that's the cap. " +
+        'Remove one first: ymmv unset --extra "Label".',
+    );
+  });
+
+  it("replacing an existing label AT the cap still publishes (an edit is not a 33rd extra)", async () => {
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], atCap))) // GET
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "extra", label: "L5", value: "updated" });
+    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    expect(body.extras).toHaveLength(32);
+    expect(body.extras).toContainEqual({ label: "L5", value: "updated" });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("-y refuses locally when a DETECTED value exceeds the cap (no doomed POST, no re-ask path)", async () => {
+    // Detection is env-derived and skips both the argv and prompt pre-flights; the -y branch has
+    // no edit loop to recover with, so an over-cap detected value must fail before the network.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(detectStack).mockReturnValue(new Map([["terminal", "x".repeat(300)]]));
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(
+      /The detected Terminal value is 300 characters; the cap is 256\. Set a shorter one: ymmv set terminal <value>\./,
+    );
+  });
+
+  it("a curated set publishes even when extras sit at the cap (the guard is extras-only)", async () => {
+    // A future widening of the guard (dropping the kind check) would block every set for
+    // at-cap profiles — this pins the scope.
+    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], atCap))) // GET
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "editor", value: "vim" });
+    expect(fetchFn).toHaveBeenCalledTimes(2); // the POST went out
+    expect(process.exitCode).toBeUndefined();
   });
 });
 
