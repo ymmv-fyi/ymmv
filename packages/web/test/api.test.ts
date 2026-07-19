@@ -223,6 +223,59 @@ describe("POST validation", () => {
   });
 });
 
+describe("POST 422 messages", () => {
+  // Every 422 must carry a human `message` alongside the machine `error` slug — the CLI surfaces
+  // {message} verbatim, so a message-less 422 degrades to a raw JSON dump in the terminal. One
+  // row per err() call site in profile.ts; a new 422 site without a message should fail here.
+  //
+  // Own identity: checkWriteRateLimit runs BEFORE validation and keys on github_id, so this
+  // sweep's requests spend rate-limit budget even though none reaches D1. A dedicated id keeps
+  // the sweep from starving GID1's budget for the suites below. No bind needed — every payload
+  // 422s at validation, ahead of the bound-handle guard.
+  const SWEEP_TOKEN = "test-token-sweep";
+  beforeEach(async () => {
+    await seedToken(SWEEP_TOKEN, 3003);
+  });
+  const many = (n: number) => Array.from({ length: n }, (_, i) => ({ label: `l${i}`, value: "v" }));
+  it.each<[string, unknown]>([
+    ["invalid_handle", profile("bad handle!")],
+    ["invalid_entries", { ...profile("alice"), entries: "nope" }],
+    [
+      "too_many_entries",
+      profile(
+        "alice",
+        Array.from({ length: 51 }, () => ({ key: "editor", value: "v" })),
+      ),
+    ],
+    ["invalid_key", profile("alice", [{ key: "hairstyle", value: "mohawk" }])],
+    ["invalid_value", profile("alice", [{ key: "editor", value: 42 as unknown as string }])],
+    ["invalid_value", profile("alice", [{ key: "editor", value: "​" }])],
+    ["value_too_long", profile("alice", [{ key: "editor", value: "x".repeat(257) }])],
+    ["invalid_extras", { ...profile("alice"), extras: "nope" }],
+    ["too_many_extras", profile("alice", [], many(33))],
+    ["invalid_extra", profile("alice", [], [{ label: "x" } as { label: string; value: string }])],
+    ["invalid_extra", profile("alice", [], [{ label: "​", value: "v" }])],
+    ["extra_too_long", profile("alice", [], [{ label: "x".repeat(65), value: "v" }])],
+  ])("422 %s carries a human message", async (slug, payload) => {
+    const res = await publish(SWEEP_TOKEN, payload);
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: string; message?: string };
+    expect(body.error).toBe(slug);
+    expect(typeof body.message).toBe("string");
+    expect((body.message as string).length).toBeGreaterThan(0);
+  });
+  it("names the value cap", async () => {
+    const res = await publish(TOKEN, profile("alice", [{ key: "editor", value: "x".repeat(257) }]));
+    const body = (await res.json()) as { message: string };
+    expect(body.message).toMatch(/capped at 256 characters/);
+  });
+  it("names the extras cap", async () => {
+    const res = await publish(TOKEN, profile("alice", [], many(33)));
+    const body = (await res.json()) as { message: string };
+    expect(body.message).toMatch(/at most 32 extras/);
+  });
+});
+
 describe("publish + read round-trip", () => {
   it("round-trips entries (ordered by CURATED_KEYS) + extras", async () => {
     await publish(
@@ -493,14 +546,35 @@ describe("handle takeover blocked (login is the authoritative binder)", () => {
     expect((await readProfile("camelcase")).handle).toBe("CamelCase");
   });
 
-  it("a D1 failure in the publish batch maps to 500 internal_error", async () => {
+  it("a D1 failure in the publish batch maps to 500 internal_error with a human message", async () => {
     await seedToken("boom-tok", 8001);
     await bindHandle(8001, "boomer");
     const spy = vi.spyOn(env.DB, "batch").mockRejectedValueOnce(new Error("D1_ERROR: boom"));
     const res = await publish("boom-tok", profile("boomer", [{ key: "editor", value: "Vim" }]));
     spy.mockRestore();
     expect(res.status).toBe(500);
-    expect(((await res.json()) as { error: string }).error).toBe("internal_error");
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("internal_error");
+    // Same contract as the 422 sweep: the CLI surfaces {message} verbatim, so a message-less 500
+    // would print as a raw JSON dump mid-publish while the identical slug during login gets copy.
+    expect(body.message).toMatch(/error saving your profile/);
+  });
+
+  it("a D1 failure in the delete batch maps to 500 internal_error with a human message", async () => {
+    await seedToken("boom-del", 8002);
+    await bindHandle(8002, "boomdel");
+    const spy = vi.spyOn(env.DB, "batch").mockRejectedValueOnce(new Error("D1_ERROR: boom"));
+    const res = await DELETE({
+      request: new Request("https://ymmv.test/api/v1/profile", {
+        method: "DELETE",
+        headers: { authorization: "Bearer boom-del" },
+      }),
+    } as unknown as APIContext);
+    spy.mockRestore();
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("internal_error");
+    expect(body.message).toMatch(/error deleting your profile/);
   });
 
   it("a same-handle re-bind leaves NO history row (history records renames only)", async () => {
