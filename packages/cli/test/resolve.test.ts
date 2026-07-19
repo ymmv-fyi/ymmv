@@ -68,6 +68,13 @@ describe("resolveArg", () => {
     });
   });
 
+  it('`set -e "Label=Value"` works like --extra (the documented shorthand)', () => {
+    expect(resolveArg(["set", "-e", "Launcher=Raycast"])).toEqual({
+      kind: "set",
+      target: { kind: "extra", label: "Launcher", value: "Raycast" },
+    });
+  });
+
   it("`set --extra` without `=` → error", () => {
     expect(resolveArg(["set", "--extra", "Launcher"]).kind).toBe("error");
   });
@@ -193,6 +200,12 @@ describe("resolveArg", () => {
     expect(resolveArg(["version", "extra"]).kind).toBe("error");
   });
 
+  it("the version flag forms also reject trailing tokens", () => {
+    expect(resolveArg(["--version", "extra"]).kind).toBe("error");
+    expect(resolveArg(["-v", "extra"]).kind).toBe("error");
+    expect(resolveArg(["-V", "extra"]).kind).toBe("error");
+  });
+
   it("`publish` word is the explicit default command; -y is its only extra token", () => {
     expect(resolveArg(["publish"])).toEqual({ kind: "publish", yes: false });
     expect(resolveArg(["publish", "-y"])).toEqual({ kind: "publish", yes: true });
@@ -244,6 +257,20 @@ describe("resolveArg", () => {
 
   it("an invalid handle (underscore) → error", () => {
     expect(resolveArg(["not_valid"]).kind).toBe("error");
+  });
+
+  it("invalid-handle errors strip escape bytes before echoing argv", () => {
+    // Both echo paths: bare-handle and `view <handle>`. ESC would let crafted argv retitle
+    // the terminal or recolor the line; sanitizeValue must strip it before the message prints.
+    for (const argv of [["]0;pwned_x"], ["view", "[31m_bad[0m"]]) {
+      const cmd = resolveArg(argv);
+      expect(cmd.kind).toBe("error");
+      if (cmd.kind === "error") {
+        expect(cmd.message).toMatch(/not a valid GitHub handle/);
+        expect(cmd.message).not.toContain("");
+        expect(cmd.message).not.toContain("");
+      }
+    }
   });
 
   it("a reserved name → local error naming the reason, never a round-trip", () => {
