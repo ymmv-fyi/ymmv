@@ -17,8 +17,8 @@
 import type { Entry, Extra, Profile } from "./types.js";
 import { SCHEMA_VERSION } from "./types.js";
 
-// Defensive READ-side ceilings — deliberately NOT the product WRITE caps (MAX_ENTRIES=50, MAX_VALUE=256,
-// … live in the web write handler `api/v1/profile.ts` and reject on POST). These are generous and
+// Defensive READ-side ceilings — deliberately NOT the product WRITE caps (MAX_ENTRIES, MAX_VALUE, …
+// are exported from `caps.ts` and enforced by the web write handler on POST). These are generous and
 // decoupled on purpose: a future write-cap increase must never make the CLI reject a legit first-party
 // profile. Their only job is to stop a hostile/buggy origin from feeding the CLI pathological unbounded
 // input that the terminal ANSI/bidi sanitizer would then scan. EVERY string on the Profile is bounded —
@@ -52,7 +52,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseProfile(raw: unknown): Profile {
   if (!isRecord(raw)) throw new ProfileParseError("profile is not an object");
   if (raw.schema_version !== SCHEMA_VERSION) {
-    throw new ProfileParseError(`unsupported schema_version: ${String(raw.schema_version)}`);
+    // The dominant stale-CLI path after a server-side SCHEMA_VERSION bump: the read endpoint stamps
+    // the new version on every profile, so an old CLI fails HERE (read-modify-write reads first),
+    // never reaching the publish 400 that carries the server's upgrade copy. Say it ourselves.
+    // The echoed value is wire-derived and this check runs BEFORE the MAX_PARSE_* ceilings, so cap
+    // it here — a hostile origin must not flood the terminal through the error message.
+    const got = String(raw.schema_version);
+    throw new ProfileParseError(
+      `unsupported schema_version: ${got.length > 64 ? `${got.slice(0, 64)}…` : got}. ` +
+        "Upgrade the ymmv CLI (npm i -g ymmv-cli).",
+    );
   }
   if (typeof raw.handle !== "string") throw new ProfileParseError("handle is not a string");
   if (raw.handle.length > MAX_PARSE_LABEL) {

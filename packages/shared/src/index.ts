@@ -1,3 +1,4 @@
+export * from "./caps.js";
 export * from "./diff.js";
 export * from "./github.js";
 export * from "./keys.js";
