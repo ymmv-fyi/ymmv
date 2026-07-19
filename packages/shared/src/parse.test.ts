@@ -43,6 +43,29 @@ describe("parseProfile", () => {
     expect(() => parseProfile({ ...valid, schema_version: 2 })).toThrow(ProfileParseError);
   });
 
+  it("schema mismatch carries the upgrade instruction", () => {
+    // The dominant stale-CLI experience after a server-side bump is this read-path throw, not the
+    // publish 400 — so the upgrade copy must live in the message itself.
+    expect(() => parseProfile({ ...valid, schema_version: 2 })).toThrow(
+      /unsupported schema_version: 2\. Upgrade the ymmv CLI \(npm i -g ymmv-cli\)\./,
+    );
+  });
+
+  it("caps a hostile wire schema_version in the error message (no terminal flooding)", () => {
+    // This check runs BEFORE the MAX_PARSE_* ceilings, so the message must bound the echo itself.
+    const err = (() => {
+      try {
+        parseProfile({ ...valid, schema_version: "x".repeat(10_000) });
+      } catch (e) {
+        return e as Error;
+      }
+      return new Error("did not throw");
+    })();
+    expect(err).toBeInstanceOf(ProfileParseError);
+    expect(err.message.length).toBeLessThan(200);
+    expect(err.message).toMatch(/Upgrade the ymmv CLI/);
+  });
+
   it("throws when handle is missing / not a string", () => {
     expect(() => parseProfile({ ...valid, handle: undefined })).toThrow(ProfileParseError);
   });
