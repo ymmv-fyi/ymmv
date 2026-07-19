@@ -49,6 +49,9 @@ via npm Trusted Publishing, with provenance.
 - `ymmv login` / `ymmv logout` sign in / out
 - `ymmv version` prints the CLI version
 
+Values are capped at 256 characters and extra labels at 64; a profile holds up
+to 32 extras.
+
 Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
 
 Color output respects `NO_COLOR`; set `YMMV_API` to point the CLI at a different Worker

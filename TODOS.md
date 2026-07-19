@@ -55,6 +55,10 @@ the first removed). One server-side fix covers both: an `If-Match`/`updated_at` 
 the POST (plus an authed own-profile read or cache-rule exclusion for the staleness case) — not a
 client `no-cache` header Cloudflare would ignore. See the invariant comment on `fetchProfileJson`
 (`packages/cli/src/api.ts`). Surfaced by the `ymmv unset` eng review (2026-07-01, cross-model).
+The interactive publish retry loop (2026-07-19) widens this window: a failed POST re-offers `y`
+against the pre-loop read, so a concurrent write during the user's wait at the confirm step is
+replayed over. The loop's copy stays honest about ambiguity (lost responses say "may not have
+completed"), but the real fix remains the same server-side precondition.
 
 ### Compare auth-retry identity by account id, not handle
 **Priority:** P3
@@ -66,6 +70,16 @@ flow from the victim's own terminal session. Real fix is cross-package: mint res
 (`/api/v1/auth/token`) gains a stable `github_id`, `MintResult` in `@ymmv/shared` carries it, the
 CLI compares id instead of handle. Wire-format addition — additive, but touches Worker + shared +
 CLI together.
+
+### CLI visible-content pre-check for zero-width-only values
+**Priority:** P4
+`promptEntries`/`parseSet` length-check input locally, but a value made only of invisible
+characters (U+200B etc.) survives `.trim()` and round-trips to the server just to be refused
+with `invalid_value` — the last pre-flightable 422. The invisible-char class already exists as
+`INVISIBLE_RE` in `packages/cli/src/http.ts` and server-side as `hasVisibleContent`
+(`api/v1/profile.ts`); cleanest after a shared visibility helper lives in `@ymmv/shared` so all
+three surfaces stop drifting. UX-only (the interactive loop now survives the 422). Surfaced by
+the publish-resilience eng review outside voice (2026-07-18).
 
 ## Tooling
 
