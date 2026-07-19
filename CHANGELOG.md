@@ -10,10 +10,11 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   collide with a profile.
 
 ### Fixed
-- **Commands reject unexpected trailing arguments.** `ymmv -y delete` errors with an ordering
-  hint instead of publishing, `ymmv delete <handle> -y` errors instead of deleting the caller's
-  profile unprompted, and login/logout/view/bare-handle forms error instead of silently
-  ignoring extra arguments. `ymmv help` still accepts anything after it.
+- **Stray arguments error instead of being silently ignored.** `ymmv -y delete` errors with an
+  ordering hint instead of publishing, `ymmv delete <handle> -y` errors instead of deleting the
+  caller's profile unprompted, and login/logout/version/view/bare-handle forms error instead of
+  dropping extra arguments. `ymmv help` still accepts anything after it, and `set`/`unset`
+  still join multi-word values.
 - **Capitalized verbs point at the command.** `ymmv Set` now suggests `ymmv set` instead of
   only reporting a reserved name.
 

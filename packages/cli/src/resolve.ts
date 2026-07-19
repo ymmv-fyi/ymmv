@@ -6,6 +6,7 @@ import {
   isReserved,
   isValidHandle,
 } from "@ymmv/shared";
+import { sanitizeValue } from "./render.js";
 
 // Argument resolution. The bare `ymmv <handle>` form stays primary, the verb words
 // (login/logout/set/unset/delete/view/help/publish/version) dispatch as verbs, and
@@ -44,6 +45,7 @@ const UNSET_EXTRA = 'ymmv unset --extra "Label"';
 const SET_USAGE = `usage: ymmv set <key> <value>  |  ${SET_EXTRA}`;
 const EXTRA_USAGE = `usage: ${SET_EXTRA}`;
 const UNSET_USAGE = `usage: ymmv unset <key>  |  ${UNSET_EXTRA}`;
+const VIEW_USAGE = "usage: ymmv view <handle>";
 
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint. */
 function invalidKeyError(head: string, hint: string): Command {
@@ -160,12 +162,13 @@ export function resolveArg(argv: string[]): Command {
   if (first === "unset") return parseUnset(rest);
   if (first === "view") {
     const handle = rest[0];
-    if (!handle) return { kind: "error", message: "usage: ymmv view <handle>" };
+    if (!handle) return { kind: "error", message: VIEW_USAGE };
     if (!isValidHandle(handle)) {
-      return { kind: "error", message: `"${handle}" is not a valid GitHub handle.` };
+      // Invalid input is the one path that echoes UNVALIDATED argv — strip escapes first.
+      return { kind: "error", message: `"${sanitizeValue(handle)}" is not a valid GitHub handle.` };
     }
     if (isReserved(handle)) return reservedError(handle);
-    if (rest.length > 1) return { kind: "error", message: "usage: ymmv view <handle>" };
+    if (rest.length > 1) return { kind: "error", message: VIEW_USAGE };
     return { kind: "view", handle };
   }
 
@@ -175,9 +178,10 @@ export function resolveArg(argv: string[]): Command {
     return { kind: "error", message: `Unknown option "${first}". Run \`ymmv help\`.` };
   }
   if (!isValidHandle(first)) {
+    // Same unvalidated-argv echo as the view branch: sanitize before printing.
     return {
       kind: "error",
-      message: `"${first}" is not a valid GitHub handle. Run \`ymmv help\`.`,
+      message: `"${sanitizeValue(first)}" is not a valid GitHub handle. Run \`ymmv help\`.`,
     };
   }
   if (isReserved(first)) return reservedError(first, true);
