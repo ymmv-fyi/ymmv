@@ -67,25 +67,46 @@ export function wireText(text: unknown): string {
 // complete Unicode set. Emptiness-test only; the returned message keeps its original chars.
 const INVISIBLE_RE = /\p{Default_Ignorable_Code_Point}/gu;
 
-/** The server's JSON `{message}` — wireText'd — or undefined when the body is non-JSON (e.g. the
- *  edge WAF block page), has no message, or carries one that sanitizes to nothing visible (pure
- *  ANSI/whitespace/zero-width would otherwise defeat every caller's `?? fallback` and print a
- *  blank error line). Callers keep their own fallback copy, so the error path never depends on a
- *  well-formed body — EXCEPT a body-read timeout, which is rethrown: a stalled body is a network
- *  timeout, not a malformed message, and must not be mislabeled with the caller's fallback copy.
- *  Consumes the body. */
-export async function serverMessage(res: Response): Promise<string | undefined> {
+/** Read an error response's body as text. The ONE home of the read contract: a body-read timeout
+ *  is rethrown (a stalled body is a network timeout, not a malformed message, and must not be
+ *  mislabeled with a caller's fallback copy); any other read failure degrades to "" so the error
+ *  path never itself throws. Consumes the body — a drained Response must never be re-read, so
+ *  pass this text to `wireErrorBody`, never the Response back to `serverMessage`. */
+export async function wireBody(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as { message?: unknown };
-    if (typeof body?.message === "string") {
-      const clean = wireText(body.message).trim();
-      if (clean.replace(INVISIBLE_RE, "").trim()) return clean;
-    }
+    return await res.text();
   } catch (err) {
     if (isTimeoutError(err)) throw err;
-    // any other parse failure: non-JSON body — the caller's fallback stands
+    return "";
   }
-  return undefined;
+}
+
+/** Parse an already-read error body into the wire error envelope: `slug` (the machine `error`
+ *  code — compared by callers, printed only through wireText) and `message` (the server's human
+ *  copy — wireText'd, or undefined when the body is non-JSON (e.g. the edge WAF block page), has
+ *  no message, or carries one that sanitizes to nothing visible: pure ANSI/whitespace/zero-width
+ *  would otherwise defeat every caller's `?? fallback` and print a blank error line). */
+export function wireErrorBody(raw: string): { slug?: string; message?: string } {
+  try {
+    const body = JSON.parse(raw) as { error?: unknown; message?: unknown };
+    const out: { slug?: string; message?: string } = {};
+    if (typeof body?.error === "string") out.slug = body.error;
+    if (typeof body?.message === "string") {
+      const clean = wireText(body.message).trim();
+      if (clean.replace(INVISIBLE_RE, "").trim()) out.message = clean;
+    }
+    return out;
+  } catch {
+    // non-JSON body — the caller's fallback stands
+    return {};
+  }
+}
+
+/** The server's JSON `{message}` — see wireErrorBody for the visibility rules and wireBody for
+ *  the body-read contract (timeouts rethrow). Callers keep their own fallback copy, so the error
+ *  path never depends on a well-formed body. Consumes the body. */
+export async function serverMessage(res: Response): Promise<string | undefined> {
+  return wireErrorBody(await wireBody(res)).message;
 }
 
 /** Append "(retry in Ns)" from the retry-after header. Only the delta-seconds form fits — RFC 9110
@@ -113,6 +134,19 @@ export function displayError(err: unknown): string {
     .join("\n");
 }
 
+/** Thrown by safeFetch when the request never produced an HTTP response (connectivity), as
+ *  opposed to a server-reached failure. The type is the discriminator — callers that word their
+ *  copy differently for "couldn't reach" vs "the server answered badly" (logout) branch on
+ *  `instanceof NetworkError || isTimeoutError`, never on message text. The message stays the
+ *  exact "Can't reach …" line and `cause` is preserved: displayError's timeout nesting and
+ *  every existing string match depend on both. */
+export class NetworkError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "NetworkError";
+  }
+}
+
 /**
  * fetch, but ANY thrown failure (undici TypeError, TLS, proxy, bad URL — deliberately not just
  * TypeError) becomes an actionable "can't reach" error carrying the underlying cause. HTTP
@@ -134,7 +168,7 @@ export async function safeFetch(
       signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
-    throw new Error(`Can't reach ${reach}. Check your connection (${causeText(err)})`, {
+    throw new NetworkError(`Can't reach ${reach}. Check your connection (${causeText(err)})`, {
       cause: err,
     });
   }

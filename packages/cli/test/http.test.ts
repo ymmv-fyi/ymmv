@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   causeText,
   displayError,
+  NetworkError,
   REQUEST_TIMEOUT_MS,
   safeFetch,
   serverMessage,
+  wireBody,
+  wireErrorBody,
   wireText,
   withRetryHint,
 } from "../src/http.js";
@@ -82,6 +85,17 @@ describe("safeFetch", () => {
       safeFetch("https://ymmv.fyi", undefined, "https://ymmv.fyi", fetchFn),
     ).rejects.toThrow(
       /Can't reach https:\/\/ymmv\.fyi\. Check your connection \(request timed out\)/,
+    );
+  });
+
+  it("rejects with a typed NetworkError — the class, not message text, is the discriminator", async () => {
+    // logout's connectivity-vs-server-failure branch depends on the type; the message must still
+    // be the exact "Can't reach" line so every string match above keeps holding.
+    const fetchFn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const p = safeFetch("https://x", undefined, "https://x", fetchFn);
+    await expect(p).rejects.toBeInstanceOf(NetworkError);
+    await expect(safeFetch("https://x", undefined, "https://x", fetchFn)).rejects.toThrow(
+      /Can't reach https:\/\/x\./,
     );
   });
 });
@@ -175,10 +189,46 @@ describe("serverMessage", () => {
     // Headers can arrive within the budget while the body stalls past it; res.json() then rejects
     // with the signal's TimeoutError. Mislabeling that as "no message" would print the caller's
     // fallback copy (e.g. handle-taken) for what is actually a network timeout.
-    const stalled = { json: () => Promise.reject(timeoutErr()) } as unknown as Response;
+    const stalled = { text: () => Promise.reject(timeoutErr()) } as unknown as Response;
     await expect(serverMessage(stalled)).rejects.toSatisfy(
       (e: unknown) => e instanceof Error && e.name === "TimeoutError",
     );
+  });
+});
+
+describe("wireBody", () => {
+  it("returns the body text once, and rethrows only a body-read timeout", async () => {
+    expect(await wireBody(new Response("raw text"))).toBe("raw text");
+    const stalled = { text: () => Promise.reject(timeoutErr()) } as unknown as Response;
+    await expect(wireBody(stalled)).rejects.toSatisfy(
+      (e: unknown) => e instanceof Error && e.name === "TimeoutError",
+    );
+  });
+
+  it("degrades any non-timeout read failure to an empty string — the error path never throws", async () => {
+    const broken = { text: () => Promise.reject(new Error("aborted")) } as unknown as Response;
+    expect(await wireBody(broken)).toBe("");
+  });
+});
+
+describe("wireErrorBody", () => {
+  it("extracts the slug and the sanitized, capped message", () => {
+    const esc = String.fromCharCode(0x1b);
+    const raw = JSON.stringify({ error: "value_too_long", message: `too ${esc}[31mlong` });
+    expect(wireErrorBody(raw)).toEqual({ slug: "value_too_long", message: "too long" });
+    const long = wireErrorBody(JSON.stringify({ message: "x".repeat(500) }));
+    expect(long.message).toHaveLength(201); // 200 + ellipsis
+  });
+
+  it("returns {} for a non-JSON body and drops non-string fields", () => {
+    expect(wireErrorBody("<html>blocked</html>")).toEqual({});
+    expect(wireErrorBody("")).toEqual({});
+    expect(wireErrorBody(JSON.stringify({ error: 42, message: 123 }))).toEqual({});
+  });
+
+  it("drops a message that sanitizes to nothing visible, keeping the slug", () => {
+    const raw = JSON.stringify({ error: "rate_limited", message: "​⁠" });
+    expect(wireErrorBody(raw)).toEqual({ slug: "rate_limited" });
   });
 });
 
