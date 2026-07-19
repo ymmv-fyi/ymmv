@@ -33,8 +33,11 @@ export const CLI_VERBS = [
 
 /** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated).
  *  NOTE: the CLI bakes this list into each released binary as a local pre-check (resolve.ts), so
- *  ADDING a name is safe (old CLIs just make the round-trip) but REMOVING one is a breaking
- *  change — shipped CLIs would keep refusing it locally without ever asking the server. */
+ *  ADDING a name is safe for data (old CLIs just make the round-trip) but REMOVING one is a
+ *  breaking change — shipped CLIs would keep refusing it locally without ever asking the server.
+ *  Skew caveat when adding: until users upgrade, old binaries round-trip the new name and
+ *  misreport `no ymmv profile for "<name>" yet` (the server 404s reserved names) — weigh that
+ *  permanent old-binary misreport when reserving a word people type as a command. */
 export const RESERVED: readonly string[] = [...new Set<string>([...RESERVED_ROUTES, ...CLI_VERBS])];
 
 const RESERVED_SET: ReadonlySet<string> = new Set(RESERVED);
