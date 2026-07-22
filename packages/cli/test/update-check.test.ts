@@ -407,14 +407,25 @@ describe("startUpdateCheck grace/abort", () => {
     vi.useFakeTimers();
     try {
       let captured: AbortSignal | undefined;
+      // The check's first await is a REAL fs read (readCache) that fake timers cannot advance —
+      // on a slow runner the fake 500ms grace can fire before the fetch was ever invoked,
+      // leaving `captured` undefined (flaked on CI verify(22) at bb823c0). Gate the timer
+      // advance on the fetch actually starting: fs completion is a real libuv event, so this
+      // await resolves regardless of the fake clock.
+      let fetchStarted: () => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
       const check = startUpdateCheck(
         deps({
           fetch: vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
             captured = init?.signal ?? undefined;
+            fetchStarted();
             return new Promise<Response>(() => {}); // hangs forever
           }) as unknown as typeof globalThis.fetch,
         }),
       );
+      await started; // fetch is now in flight, holding the pending promise
       const finished = check.finish();
       await vi.advanceTimersByTimeAsync(600); // past the 500ms grace
       expect(await finished).toBeNull();
