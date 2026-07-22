@@ -61,6 +61,19 @@ describe("built bin entry", () => {
     expect(res.stdout).toMatch(/^ymmv-cli /);
   });
 
+  // CRITICAL regression pin: `ymmv version`'s piped STDOUT is a machine interface — exactly the
+  // version line plus cli.ts's one closing blank, byte-for-byte, regardless of update-check
+  // state. The `latest:` hint lives on stderr behind a TTY gate precisely so this shape can
+  // never vary with invisible cache freshness. (Spawned pipes are non-TTY, so the hint is
+  // structurally absent here; the suite-wide YMMV_NO_UPDATE_CHECK in setup-env is belt and
+  // braces on top.)
+  it("piped `version` stdout is byte-identical to the pre-update-check contract", () => {
+    const res = spawnSync(process.execPath, [binPath, "version"], { encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/^ymmv-cli \S+\n\n$/); // one line + exactly one closing blank
+    expect(res.stderr).toBe(""); // no latest hint leaks into a piped run
+  });
+
   it("flag-first `-y delete` exits 1 with the ordering hint, publishing nothing", () => {
     // Errors in resolveArg before any command runs, so no network is ever touched.
     const res = spawnSync(process.execPath, [binPath, "-y", "delete"], { encoding: "utf8" });

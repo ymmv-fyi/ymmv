@@ -343,9 +343,19 @@ describe("nudge / notFound", () => {
   it("notFound names the handle and links the site (plain URL when color is off)", () => {
     const out = notFound("ghost", false, "https://ymmv.fyi");
     expect(out).toMatch(/no ymmv profile for "ghost"/);
-    expect(out).toContain("publish one at https://ymmv.fyi with: npx ymmv-cli");
+    expect(out).toContain("publish one at https://ymmv.fyi with: npx ymmv-cli@latest");
     expect(out).not.toContain(ESC);
     expect(notFound("ghost", true, "https://ymmv.fyi")).toContain(`${AMBER}ymmv.fyi`);
+  });
+
+  it("link label replaces the display text with color, is sanitized, and is color-mode only", () => {
+    // Hostile label: the ANSI content is stripped before it can terminate the OSC wrapper.
+    const out = link("https://ymmv.fyi", true, "xterm-256color", `evil${ESC}[2Jlabel`);
+    expect(out).toContain("evillabel");
+    expect(out).not.toContain(`${ESC}[2J`);
+    expect(out).toContain(`${ESC}]8;;https://ymmv.fyi${ESC}\\`); // OSC-8 wraps the real URL
+    // Color off: the plain URL still wins — piped output never trades the address for prose.
+    expect(link("https://ymmv.fyi", false, "xterm-256color", "label")).toBe("https://ymmv.fyi");
   });
 });
 

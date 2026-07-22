@@ -11,7 +11,7 @@ import {
 import { sanitizeValue } from "./render.js";
 
 // Argument resolution. The bare `ymmv <handle>` form stays primary, the verb words
-// (login/logout/set/unset/delete/view/help/publish/version) dispatch as verbs, and
+// (login/logout/set/unset/delete/view/help/publish/version/update) dispatch as verbs, and
 // `ymmv view <handle>` is the explicit alias for viewing (every verb word is also a reserved
 // handle, so a verb-colliding profile cannot exist — both view paths reject reserved names
 // locally rather than making a round-trip that misreports "no profile yet"). Verbs reject
@@ -37,6 +37,7 @@ export type Command =
   | { kind: "set"; target: SetTarget }
   | { kind: "unset"; target: UnsetTarget }
   | { kind: "delete"; yes: boolean }
+  | { kind: "update" }
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "error"; message: string };
@@ -61,7 +62,7 @@ function invalidKeyError(head: string, hint: string): Command {
 }
 
 /** Verbs that take nothing: any trailing token is a usage error, never silently dropped. */
-function noArgs(verb: "login" | "logout", rest: string[]): Command {
+function noArgs(verb: "login" | "logout" | "update", rest: string[]): Command {
   return rest.length === 0 ? { kind: verb } : { kind: "error", message: `usage: ymmv ${verb}` };
 }
 
@@ -172,7 +173,7 @@ export function resolveArg(argv: string[]): Command {
   }
 
   // Reserved verbs.
-  if (first === "login" || first === "logout") return noArgs(first, rest);
+  if (first === "login" || first === "logout" || first === "update") return noArgs(first, rest);
   if (first === "publish") {
     return yesOnly("usage: ymmv publish [-y]", rest, (yes) => ({ kind: "publish", yes }));
   }

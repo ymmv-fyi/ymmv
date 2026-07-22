@@ -135,12 +135,15 @@ const NO_OSC8_TERMS = new Set(["linux", "dumb"]);
  * A URL for the terminal: amber + OSC-8 hyperlink + shortened display when color is on; the full
  * plain URL when color is off (piped/NO_COLOR output stays machine-readable). Safe on untrusted
  * values: sanitizeValue strips ESC/BEL/C0/C1 first, so the value can neither terminate the OSC
- * early nor smuggle its own sequence.
+ * early nor smuggle its own sequence. An optional `label` replaces the displayed URL as the
+ * link's visible text — a COLOR-MODE enhancement only: with color off the plain URL still wins,
+ * so piped output never trades the address for prose. The label passes through sanitizeValue
+ * like the URL (same injection surface).
  */
-export function link(url: string, color: boolean, term = process.env.TERM): string {
+export function link(url: string, color: boolean, term = process.env.TERM, label?: string): string {
   const clean = sanitizeValue(url).trim();
   if (!color) return clean;
-  const text = `${CODES.amber}${displayUrl(clean)}${CODES.reset}`;
+  const text = `${CODES.amber}${label ? sanitizeValue(label) : displayUrl(clean)}${CODES.reset}`;
   if (term !== undefined && NO_OSC8_TERMS.has(term)) return text;
   return `${OSC}8;;${clean}${ST}${text}${OSC}8;;${ST}`;
 }
@@ -313,6 +316,6 @@ export function nudge(color: boolean): string {
 export function notFound(handle: string, color: boolean, base: string): string {
   return (
     `\n  no ymmv profile for "${sanitizeValue(handle)}" yet.\n` +
-    `  publish one at ${link(base, color)} with: npx ymmv-cli`
+    `  publish one at ${link(base, color)} with: npx ymmv-cli@latest`
   );
 }

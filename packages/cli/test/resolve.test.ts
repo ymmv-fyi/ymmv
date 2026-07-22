@@ -27,9 +27,16 @@ describe("resolveArg", () => {
   it("reserved verbs dispatch as verbs", () => {
     expect(resolveArg(["login"]).kind).toBe("login");
     expect(resolveArg(["logout"]).kind).toBe("logout");
+    expect(resolveArg(["update"]).kind).toBe("update");
     expect(resolveArg(["help"]).kind).toBe("help");
     expect(resolveArg(["--help"]).kind).toBe("help");
     expect(resolveArg(["--version"]).kind).toBe("version");
+  });
+
+  it("`update` rejects trailing tokens with usage (never silently dropped)", () => {
+    const cmd = resolveArg(["update", "now"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toBe("usage: ymmv update");
   });
 
   it("`delete` carries the -y flag", () => {

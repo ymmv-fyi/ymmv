@@ -18,6 +18,7 @@ Usage:
   ymmv unset --extra "L"    remove a free-form extra
   ymmv delete [-y]          delete your profile (permanent; -y skips the confirm)
   ymmv login | logout       GitHub device-flow auth
+  ymmv update               update ymmv-cli to the latest release
   ymmv help | version
 
 Curated keys: editor, os, shell, prompt, terminal, browser, window-manager,
