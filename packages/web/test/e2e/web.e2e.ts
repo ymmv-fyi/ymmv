@@ -12,7 +12,7 @@ test.describe("profile render", () => {
     const spec = page.locator("table.spec").first();
     await expect(spec).toContainText("Editor");
     await expect(spec).toContainText("VS Code");
-    await expect(page.locator(".foot")).toContainText("npx ymmv-cli antfu");
+    await expect(page.locator(".foot")).toContainText("npx ymmv-cli@latest antfu");
   });
 
   test("the diff form navigates to the diff and remembers the entered handle", async ({ page }) => {
@@ -42,7 +42,7 @@ test.describe("profile render", () => {
     await page.goto("/antfu");
     await page.click(".foot .install");
     const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toBe("npx ymmv-cli antfu");
+    expect(copied).toBe("npx ymmv-cli@latest antfu");
   });
 
   test("a 1-key edge profile still renders a spec table (no awkward empty block)", async ({
@@ -371,7 +371,9 @@ test.describe("install command (progressive copy button)", () => {
     await page.keyboard.press("Enter");
     // wait for the visible success state first — the async writeText races a one-shot readText
     await expect(install).toHaveAttribute("data-copied", "");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli antfu");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      "npx ymmv-cli@latest antfu",
+    );
   });
 
   test("Space copies and does not scroll the page", async ({ page, context }) => {
@@ -393,7 +395,9 @@ test.describe("install command (progressive copy button)", () => {
     await page.keyboard.press("Space");
     // the copy result proves the keydown handler ran before the scroll assertion
     await expect(install).toHaveAttribute("data-copied", "");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli antfu");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      "npx ymmv-cli@latest antfu",
+    );
     // Chromium schedules the space-bar scroll on a later frame — read after two rAFs so a
     // missing preventDefault cannot false-pass on a too-early read
     const after = await page.evaluate(
@@ -439,7 +443,7 @@ test.describe("install command without JS", () => {
     await page.goto("/antfu");
     const install = page.locator(".foot .install");
     await expect(install).toBeVisible();
-    await expect(install).toContainText("npx ymmv-cli antfu");
+    await expect(install).toContainText("npx ymmv-cli@latest antfu");
     // a SPAN, not a native <button> — a button revert would pass the null-attribute checks
     // below while being exactly the focusable dead control this guards against
     expect(await install.evaluate((el) => el.tagName)).toBe("SPAN");
