@@ -2,6 +2,30 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **The CLI mentions when a newer release exists.** After a command finishes in an interactive
+  terminal, a one-line notice on stderr names the newer version, links the release notes, and
+  shows the upgrade command (an exact `npx ymmv-cli@<version>` for npx-style runs, since npx
+  can keep serving a stale cached copy even for `@latest`). The check asks the npm registry
+  about once a day (a failed check retries after six hours), adds at most half a second after
+  a command, is silent on every failure, and
+  is off in pipes, under `CI`, in dev builds, and with `YMMV_NO_UPDATE_CHECK` or the standard
+  `NO_UPDATE_NOTIFIER` set.
+- **`ymmv update` updates the CLI.** It runs the matching upgrade for npm, pnpm, and bun global
+  installs, prints the invocation to re-run for npx-style runs, and prints all three commands
+  when the install method is unclear rather than guessing. `update` joins the reserved handles
+  like every other command word.
+- **`ymmv version` notes a newer release.** A recent check adds a `latest:` line pointing at
+  `ymmv update`, on stderr in interactive terminals only; the stdout version line is unchanged
+  for scripts.
+
+### Changed
+- **Install instructions pin `npx ymmv-cli@latest`.** Every copyable invocation (READMEs, the
+  site's install commands, profile pages) now carries `@latest`, since a bare `npx ymmv-cli`
+  can keep running an old cached copy indefinitely.
+
 ## [0.8.0] - 2026-07-19
 
 ### Added
