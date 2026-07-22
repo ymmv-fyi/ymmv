@@ -18,7 +18,9 @@ export const RESERVED_ROUTES = ["404", "api", "login", "logout"] as const;
 
 /** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous.
  *  `publish` and `version` are here even though flags/bare `ymmv` cover them: both are
- *  predictable muscle-memory words, and unreserved they'd be squattable profile views. */
+ *  predictable muscle-memory words, and unreserved they'd be squattable profile views.
+ *  `update` (the self-upgrade command) rode the same reasoning in: an unreserved `update`
+ *  profile would be silently shadowed by the command forever. */
 export const CLI_VERBS = [
   "login",
   "logout",
@@ -29,6 +31,7 @@ export const CLI_VERBS = [
   "help",
   "publish",
   "version",
+  "update",
 ] as const;
 
 /** Every name that cannot be claimed as a handle (routes ∪ verbs, de-duplicated).
