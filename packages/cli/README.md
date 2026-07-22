@@ -13,7 +13,7 @@ npx ymmv-cli@latest            # detect your stack, confirm, go live at ymmv.fyi
 npx ymmv-cli@latest bardisty   # view someone's stack in the terminal
 ```
 
-(`@latest` keeps npx from reusing an old cached copy; without a version spec, npx can pin you
+(`@latest` makes npx look for the newest release; without a version spec, npx can pin you
 to whatever it downloaded first.)
 
 Viewing someone while you're logged in diffs their stack against yours:
@@ -53,8 +53,9 @@ via npm Trusted Publishing, with provenance.
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
 - `ymmv login` / `ymmv logout` sign in / out
-- `ymmv update` updates the CLI to the latest release (runs the right package manager for a
-  global install; via npx it prints the invocation to use instead)
+- `ymmv update` updates the CLI to the latest release (runs the matching upgrade for npm, pnpm,
+  and bun global installs; via npx it prints the invocation to use instead; anything else gets
+  the commands to run by hand)
 - `ymmv version` prints the CLI version (and notes a newer release when one is known)
 
 Values are capped at 256 characters and extra labels at 64; a profile holds up
