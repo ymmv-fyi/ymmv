@@ -8,7 +8,9 @@
 interface Props {
   command?: string;
 }
-const { command = "npx ymmv-cli" } = Astro.props;
+// `@latest` and not the bare name: npx caches the bare spec and reuses it indefinitely, so a
+// returning visitor would keep running whatever version their npx cache pinned months ago.
+const { command = "npx ymmv-cli@latest" } = Astro.props;
 ---
 
 <span

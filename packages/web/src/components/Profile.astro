@@ -108,15 +108,15 @@ const GroupTag = example ? "p" : "h2";
 
 {
   example ? (
-    <div class="foot">$ <b>npx ymmv-cli {handle}</b></div>
+    <div class="foot">$ <b>npx ymmv-cli@latest {handle}</b></div>
   ) : (
-    <div class="foot"><InstallCommand command={`npx ymmv-cli ${handle}`} /></div>
+    <div class="foot"><InstallCommand command={`npx ymmv-cli@latest ${handle}`} /></div>
   )
 }
 {!example && (
   <>
     <p class="cta">
-      make yours → <b>npx ymmv-cli</b>
+      make yours → <b>npx ymmv-cli@latest</b>
     </p>
     {/* action → the profile page, whose ?you= handler 302s to the diff: a native (script-failed)
         submit works from anywhere this form renders, including the /vs/ nudge page */}

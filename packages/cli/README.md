@@ -9,9 +9,12 @@ clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:
 ![Running npx ymmv-cli to detect, confirm, and publish a dev stack to a live ymmv.fyi page](https://raw.githubusercontent.com/ymmv-fyi/ymmv/main/docs/demo.gif)
 
 ```sh
-npx ymmv-cli            # detect your stack, confirm, go live at ymmv.fyi/<you>
-npx ymmv-cli bardisty   # view someone's stack in the terminal
+npx ymmv-cli@latest            # detect your stack, confirm, go live at ymmv.fyi/<you>
+npx ymmv-cli@latest bardisty   # view someone's stack in the terminal
 ```
+
+(`@latest` keeps npx from reusing an old cached copy; without a version spec, npx can pin you
+to whatever it downloaded first.)
 
 Viewing someone while you're logged in diffs their stack against yours:
 
@@ -33,6 +36,9 @@ Install once for the short `ymmv` command:
 npm i -g ymmv-cli
 ```
 
+When a newer release exists, the CLI mentions it after a command (interactive terminals only)
+and `ymmv update` upgrades a global install in place.
+
 First run includes a one-time GitHub sign-in. Works on macOS, Linux, Windows,
 and WSL. Nothing is published until you confirm (detection only pre-fills), and
 `ymmv delete` removes everything. Releases are published from GitHub Actions
@@ -47,7 +53,9 @@ via npm Trusted Publishing, with provenance.
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
 - `ymmv login` / `ymmv logout` sign in / out
-- `ymmv version` prints the CLI version
+- `ymmv update` updates the CLI to the latest release (runs the right package manager for a
+  global install; via npx it prints the invocation to use instead)
+- `ymmv version` prints the CLI version (and notes a newer release when one is known)
 
 Values are capped at 256 characters and extra labels at 64; a profile holds up
 to 32 extras.
@@ -68,6 +76,9 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
 - `YMMV_HANDLE` names the GitHub username `YMMV_TOKEN` belongs to. Required for `ymmv -y` and
   `ymmv set`/`unset` under an env token (there is no server lookup for it); ignored without
   `YMMV_TOKEN`.
+- `YMMV_NO_UPDATE_CHECK` disables the startup check for newer releases (the ecosystem-standard
+  `NO_UPDATE_NOTIFIER` works too). The check is also off automatically under `CI`, in pipes,
+  and in dev builds; it never blocks or fails a command.
 
 ## Publishing from CI
 
@@ -78,7 +89,7 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
    `~/.config/ymmv/token.json` (Linux), `~/Library/Preferences/ymmv/token.json` (macOS),
    `%APPDATA%\ymmv\Config\token.json` (Windows).
 3. Set it as a CI secret named `YMMV_TOKEN`, and set `YMMV_HANDLE` to your GitHub username.
-4. Run `npx ymmv-cli -y` in the job.
+4. Run `npx ymmv-cli@latest -y` in the job.
 
 Two things to know:
 

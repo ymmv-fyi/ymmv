@@ -40,7 +40,7 @@ const title = result.kind === "live" ? `${result.profile.handle} — ymmv.fyi` :
 const description =
   result.kind === "live"
     ? `${result.profile.handle}'s developer tool stack on ymmv.fyi.`
-    : `No ymmv profile for ${raw} yet — publish yours with npx ymmv-cli.`;
+    : `No ymmv profile for ${raw} yet — publish yours with npx ymmv-cli@latest.`;
 ---
 
 <Layout title={title} description={description}>

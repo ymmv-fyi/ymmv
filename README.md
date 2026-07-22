@@ -14,8 +14,8 @@ clean page at `ymmv.fyi/<handle>` in about 10 seconds. See a live one:
 ## Try it
 
 ```sh
-npx ymmv-cli           # detect your stack, confirm, go live at ymmv.fyi/<you>
-npx ymmv-cli bardisty  # view someone's stack in the terminal
+npx ymmv-cli@latest           # detect your stack, confirm, go live at ymmv.fyi/<you>
+npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 ```
 
 First run includes a one-time GitHub sign-in. Every update after that is
@@ -52,7 +52,8 @@ instant. Works on macOS, Linux, Windows, and WSL.
 
 ## Commands
 
-Run with `npx ymmv-cli` (no install), or `npm i -g ymmv-cli` once for the short `ymmv`:
+Run with `npx ymmv-cli@latest` (no install), or `npm i -g ymmv-cli` once for the short `ymmv`
+(`ymmv update` keeps a global install current):
 
 - `ymmv` detects, confirms, and publishes (re-run any time to update; `ymmv publish` is the same command)
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
@@ -61,6 +62,7 @@ Run with `npx ymmv-cli` (no install), or `npm i -g ymmv-cli` once for the short 
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
 - `ymmv login` / `ymmv logout` sign in / out
+- `ymmv update` updates the CLI to the latest release
 - `ymmv version` prints the CLI version
 
 ## Developing
