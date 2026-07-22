@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.9.0] - 2026-07-22
 
 ### Added
 - **The CLI mentions when a newer release exists.** After a command finishes in an interactive
@@ -326,6 +326,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.9.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.7.0
 [0.6.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.6.2
