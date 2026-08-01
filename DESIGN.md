@@ -57,8 +57,9 @@ Ratios are WCAG contrast against `--bg` (verified 2026-07-07, also checked again
 ### The amber scarcity rule (load-bearing)
 
 Amber marks ONLY links and diff differences. Never spend it on emphasis, CTAs, prompts, or
-decoration — with one deliberate exception: the fork motif itself (hero field branch, the fork
-glyph on the diff heading, favicon/OG mark), because the fork IS the diff. A difference is
+decoration — with two deliberate exceptions: the fork motif itself (hero field branch, the fork
+glyph on the diff heading, favicon/OG mark), because the fork IS the diff; and the one amber
+nudge (`.nudge`, see Components & States), because it mirrors the CLI's `nudge()`. A difference is
 symmetric: both differing values go amber plus the row dot; same rows recede to `--faint`.
 
 CLI parity: the CLI renders the same semantics with ANSI bright yellow (`packages/cli/src/render.ts`)
@@ -153,5 +154,5 @@ which belongs to CLI output, and to the landing transcript that mirrors it byte-
 Sentences open with a capital; fragments stay lowercase. Counts read "N differ" and "N shared"
 as words set apart by whitespace, never punctuation soup. The serif voice gets complete
 sentences only. Page titles are URL-shaped — the title IS the address (`ymmv.fyi/<handle>`,
-`ymmv.fyi/<handle>/vs/<you>`), the same identity line the breadcrumb and the CLI print; the
-landing alone carries a subtitle (`ymmv.fyi: your stack, in the terminal`).
+`ymmv.fyi/<handle>/vs/<you>`), the same identity line the profile breadcrumb and the CLI print;
+the landing alone carries a subtitle (`ymmv.fyi: your stack, in the terminal`).
