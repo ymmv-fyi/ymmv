@@ -1,0 +1,12 @@
+---
+// The plated-figure wrapper shared by Profile.astro and Diff.astro. Live pages plate the
+// document in a .sheet card; the landing example gets the same frame from its outer .sample
+// wrapper instead — never both, or the figure double-borders. Interactive foots stay OUTSIDE
+// the plate: raised controls on a raised surface would lose their lift.
+interface Props {
+  example: boolean;
+}
+const { example } = Astro.props;
+---
+
+{example ? <slot /> : <div class="sheet"><slot /></div>}

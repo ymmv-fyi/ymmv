@@ -8,14 +8,19 @@
 // Row labels are real <th scope="row"> for screen-reader header association.
 import { KEY_LABELS, type Profile } from "@ymmv/shared";
 import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
+import Sheet from "./Sheet.astro";
 import { safeHref } from "../lib/safe-href.ts";
 
 interface Props {
   profile: Profile;
   example?: boolean;
+  /* more: landing preview only — the count of rows elided from the sample, rendered as an honest
+     "+ N more" marker under the stack table. Never set on a real profile page. */
+  more?: number;
 }
-const { profile, example = false } = Astro.props;
+const { profile, example = false, more = 0 } = Astro.props;
 const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
@@ -26,6 +31,8 @@ const HandleTag = example ? "p" : "h1";
 const GroupTag = example ? "p" : "h2";
 ---
 
+{/* Sheet plates the document on live pages only; the interactive foot stays outside the plate */}
+<Sheet example={example}>
 <div class="url">{example ? "ymmv.fyi" : <a href="/">ymmv.fyi</a>}/<b>{handle}</b></div>
 <HandleTag class="handle">{handle}</HandleTag>
 {revDate && (
@@ -64,6 +71,7 @@ const GroupTag = example ? "p" : "h2";
           })}
         </tbody>
       </table>
+      {example && more > 0 && <p class="spec-more">+ {more} more</p>}
     </>
   )
 }
@@ -105,6 +113,7 @@ const GroupTag = example ? "p" : "h2";
 }
 
 {!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
+</Sheet>
 
 {
   example ? (
@@ -116,7 +125,7 @@ const GroupTag = example ? "p" : "h2";
 {!example && (
   <>
     <p class="cta">
-      make yours → <b>npx ymmv-cli@latest</b>
+      make yours <Arrow /> <b>npx ymmv-cli@latest</b>
     </p>
     {/* action → the profile page, whose ?you= handler 302s to the diff: a native (script-failed)
         submit works from anywhere this form renders, including the /vs/ nudge page */}
@@ -137,9 +146,7 @@ const GroupTag = example ? "p" : "h2";
           aria-label={`your handle — diff ${handle} against you`}
         />
       </label>
-      <button class="go" type="submit" aria-label="view the diff"
-        ><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 9h12M10 4.5 14.5 9 10 13.5" /></svg></button
-      >
+      <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
     </form>
     <noscript>
       {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
@@ -149,7 +156,7 @@ const GroupTag = example ? "p" : "h2";
         }
       </style>
       <p class="cta">
-        diff → <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
+        diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
       </p>
     </noscript>
   </>

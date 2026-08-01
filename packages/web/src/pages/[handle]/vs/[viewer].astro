@@ -1,6 +1,7 @@
 ---
-import { diff, type DiffResult } from "@ymmv/shared";
+import { diff, type DiffResult, isValidHandle } from "@ymmv/shared";
 import { env } from "cloudflare:workers";
+import Arrow from "../../../components/Arrow.astro";
 import Diff from "../../../components/Diff.astro";
 import Layout from "../../../components/Layout.astro";
 import NotFound from "../../../components/NotFound.astro";
@@ -53,19 +54,35 @@ const diffResult: DiffResult | null =
   theirs.kind === "live" && mine.kind === "live" ? diff(mine.profile, theirs.profile) : null;
 const mineHandle = mine.kind === "live" ? mine.profile.handle : mineRaw;
 
+// URL-as-title (matches the profile page): the diff and nudge states title as the /vs/ address
+// being viewed; a 404'd [handle] falls back to that handle's root address (what NotFound is
+// about). Only handle-SHAPED segments may wear the URL dress — the viewer segment is otherwise
+// unvalidated and a garbage segment in a URL-shaped title borrows the domain's credibility
+// (bidi controls, deceptive words), so invalid shapes fall back to shorter honest titles.
+const mineSafe = mine.kind === "live" ? mine.profile.handle : isValidHandle(mineRaw) ? mineRaw : null;
+const theirsSafe = isValidHandle(theirsRaw) ? theirsRaw : null;
 const title = theirsProfile
-  ? diffResult
-    ? `${theirsProfile.handle} vs ${mineHandle} — ymmv.fyi`
-    : `${theirsProfile.handle} — ymmv.fyi`
-  : `${theirsRaw} — ymmv.fyi`;
+  ? mineSafe
+    ? `ymmv.fyi/${theirsProfile.handle}/vs/${mineSafe}`
+    : `ymmv.fyi/${theirsProfile.handle}`
+  : theirsSafe
+    ? `ymmv.fyi/${theirsSafe}`
+    : "ymmv.fyi";
 // a diff-specific share description; the other states keep Layout's default
 const description =
   theirsProfile && diffResult
     ? `How ${theirsProfile.handle}'s developer tool stack differs from ${mineHandle}'s. Your mileage may vary.`
     : undefined;
+// Only a real two-sided diff is canonical for its RESOLVED /vs/ address. The 200-status nudge is
+// a transient state: no canonical (junk viewer segments must not mint indexable URLs) + noindex.
+const canonicalPath =
+  theirsProfile && mine.kind === "live"
+    ? `/${encodeURIComponent(theirsProfile.handle)}/vs/${encodeURIComponent(mine.profile.handle)}`
+    : undefined;
+const noindex = Boolean(theirsProfile && !diffResult);
 ---
 
-<Layout title={title} description={description}>
+<Layout title={title} description={description} canonicalPath={canonicalPath} noindex={noindex}>
   {
     !theirsProfile ? (
       <NotFound handle={theirsRaw} />
@@ -74,7 +91,8 @@ const description =
     ) : (
       <>
         <Profile profile={theirsProfile} />
-        <p class="nudge">no ymmv profile for <bdi>{mineRaw}</bdi> yet — publish yours to diff →</p>
+        {/* copy rule: no em dashes in user-facing prose — sentence break, capital opener */}
+        <p class="nudge">No ymmv profile for <bdi>{mineRaw}</bdi> yet. Publish yours to diff <Arrow /></p>
       </>
     )
   }

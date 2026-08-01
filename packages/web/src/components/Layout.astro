@@ -8,9 +8,24 @@ import "../styles/ymmv.css";
 interface Props {
   title: string;
   description?: string;
+  /* wide: the landing's display grid (--content-wide). Reading pages (profile/diff) stay at the
+     680px document column. */
+  wide?: boolean;
+  /* canonicalPath: the RESOLVED path this page is canonical for ("/", "/<handle>", …). Pages
+     must pass it explicitly — deriving it from Astro.url.pathname let every alias spelling
+     (/OctoCat, trailing slash, percent-encoding) self-canonicalize, and a crafted //host path
+     resolves cross-origin against Astro.site. No prop → no canonical (correct for 404/nudge). */
+  canonicalPath?: string;
+  /* noindex: 200-status transient states (the /vs/ nudge) that must never be indexed. */
+  noindex?: boolean;
 }
-const { title, description = "Terminal-native developer tool-stack profiles. Your mileage may vary." } =
-  Astro.props;
+const {
+  title,
+  description = "Terminal-native developer tool-stack profiles. Your mileage may vary.",
+  wide = false,
+  canonicalPath,
+  noindex = false,
+} = Astro.props;
 ---
 
 <!doctype html>
@@ -49,6 +64,12 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     </script>
     <title>{title}</title>
     <meta name="description" content={description} />
+    {/* Absolute via Astro.site (like og:image) — Astro.url.origin would bake localhost/www
+        variants per request. Query strings (e.g. /<handle>?you=) never belong in the canonical. */}
+    {canonicalPath !== undefined && (
+      <link rel="canonical" href={new URL(canonicalPath, Astro.site)} />
+    )}
+    {noindex && <meta name="robots" content="noindex" />}
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -68,8 +89,10 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="ymmv.fyi. Your mileage may vary." />
     <meta name="twitter:card" content="summary_large_image" />
+    {/* page-specific head extras (e.g. the landing's JSON-LD) */}
+    <slot name="head" />
   </head>
-  <body>
+  <body class:list={[wide && "wide"]}>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark or light theme">
       ◐ theme
     </button>
@@ -161,6 +184,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
     <script is:inline>
       (function () {
         if (!navigator.clipboard) return;
+        var RESET_MS = 1500; // one value for both the copied-state and failure-status resets
         var nodes = document.querySelectorAll("[data-copy]");
         nodes.forEach(function (el) {
           // Promote the plain span to an ARIA button now that copying actually works, so a
@@ -182,7 +206,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
                 timer = setTimeout(function () {
                   delete el.dataset.copied;
                   if (status) status.textContent = "";
-                }, 1200);
+                }, RESET_MS);
               })
               .catch(function () {
                 // Clipboard blocked by policy (NotAllowedError): announce the failure instead of
@@ -192,7 +216,7 @@ const { title, description = "Terminal-native developer tool-stack profiles. You
                 clearTimeout(timer);
                 timer = setTimeout(function () {
                   if (status) status.textContent = "";
-                }, 1200);
+                }, RESET_MS);
               });
           }
           el.addEventListener("click", copy);
