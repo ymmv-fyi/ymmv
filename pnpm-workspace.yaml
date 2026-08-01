@@ -3,10 +3,16 @@ packages:
 
 # Pin transitive dev deps up out of their vulnerable ranges (Dependabot). Scoped so only
 # the affected versions are bumped: yaml stack-overflow (GHSA-48c2-rrv3-qjmp) reaches us via
-# yaml-language-server; esbuild dev-server file read (GHSA-g7r4-m6w7-qqqr) via tsup.
+# yaml-language-server; esbuild dev-server file read (GHSA-g7r4-m6w7-qqqr) via tsup;
+# fast-uri (GHSA-4c8g-83qw-93j6, GHSA-v2hh-gcrm-f6hx) via ajv, capped <4 to stay inside
+# ajv's ^3 range; sharp (GHSA-f88m-g3jw-g9cj) via astro + miniflare (miniflare pins 0.34.5
+# exactly, so only an override can move it); svgo (GHSA-2p49-hgcm-8545) via astro.
 overrides:
   "yaml@>=2.0.0 <2.8.3": ">=2.8.3"
   "esbuild@>=0.27.3 <0.28.1": ">=0.28.1"
+  "fast-uri@>=3.0.0 <3.1.4": ">=3.1.4 <4"
+  "sharp@<0.35.0": ">=0.35.0"
+  "svgo@>=4.0.0 <4.0.2": ">=4.0.2"
 
 # Allow these dependencies to run their install/build scripts (pnpm 10+ gates them
 # by default). workerd backs @cloudflare/vitest-pool-workers; esbuild backs Vite/Vitest;
