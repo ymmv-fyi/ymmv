@@ -25,12 +25,6 @@ unlike a `[handle]` not-found, which gets `readCacheControl("notfound")`. Cosmet
 edge-caches Worker responses; fix alongside "Uncached read path for RMW mutations". Surfaced by the
 reserved-handle eng review outside voice (2026-07-09).
 
-### og:image share card
-**Priority:** P3
-No `og:image` anywhere — profile/diff links preview as text-only cards. Needs either a static
-brand card in `/public` or generation infra (satori/resvg on Workers). Deferred from the
-design-polish plan (2026-07-01).
-
 ## CLI
 
 ### Harden displayUrl display-shortening on both surfaces (web + CLI)
@@ -102,3 +96,11 @@ the publish-resilience eng review outside voice (2026-07-18).
 (only a config comment). Also: an orphaned workerd process can hold `.wrangler/state` locked
 (EPERM on cleanup) with the port free. Consider a seed canary asserted in global-setup, or
 keying reuse on a hash of dist+seed.sql.
+
+## Completed
+
+### og:image share card
+**Done 2026-07-07** (design-system redesign, `7982d44`). A static brand card ships at
+`packages/web/public/og.png` (wordmark + fork motif, 1200x630) and `Layout.astro` emits an
+absolute `og:image` plus width/height/alt meta on every page. Per-profile generated cards
+(satori/resvg on Workers) would be a separate, new item if ever wanted.
