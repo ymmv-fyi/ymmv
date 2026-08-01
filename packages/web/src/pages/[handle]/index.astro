@@ -1,4 +1,5 @@
 ---
+import { isValidHandle } from "@ymmv/shared";
 import { env } from "cloudflare:workers";
 import Layout from "../../components/Layout.astro";
 import NotFound from "../../components/NotFound.astro";
@@ -36,13 +37,29 @@ if (result.kind === "notfound") {
   Astro.response.status = 404;
 }
 
-const title = result.kind === "live" ? `${result.profile.handle} — ymmv.fyi` : `${raw} — ymmv.fyi`;
+// URL-as-title: the title IS the page's address — the same identity line the breadcrumb and the
+// CLI print. Distinctive in tabs and link cards; the handle sits 9 characters in. Only a
+// handle-SHAPED segment may wear the URL dress: arbitrary garbage in a URL-shaped title (bidi
+// controls, deceptive words) borrows the domain's credibility, so it falls back to the bare brand.
+const safeRaw = isValidHandle(raw) ? raw : null;
+const title =
+  result.kind === "live"
+    ? `ymmv.fyi/${result.profile.handle}`
+    : safeRaw
+      ? `ymmv.fyi/${safeRaw}`
+      : "ymmv.fyi";
 const description =
   result.kind === "live"
     ? `${result.profile.handle}'s developer tool stack on ymmv.fyi.`
-    : `No ymmv profile for ${raw} yet — publish yours with npx ymmv-cli@latest.`;
+    : safeRaw
+      ? `No ymmv profile for ${safeRaw} yet. Publish yours with npx ymmv-cli@latest.`
+      : undefined;
+// canonical: only a LIVE profile is canonical for anything, and only under its RESOLVED handle —
+// alias spellings (case, encoding) must consolidate to it, and 404s carry no canonical at all.
+const canonicalPath =
+  result.kind === "live" ? `/${encodeURIComponent(result.profile.handle)}` : undefined;
 ---
 
-<Layout title={title} description={description}>
+<Layout title={title} description={description} canonicalPath={canonicalPath}>
   {result.kind === "live" ? <Profile profile={result.profile} /> : <NotFound handle={raw} />}
 </Layout>

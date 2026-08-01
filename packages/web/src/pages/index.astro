@@ -1,13 +1,14 @@
 ---
 import { diff, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import Arrow from "../components/Arrow.astro";
 import Diff from "../components/Diff.astro";
 import InstallCommand from "../components/InstallCommand.astro";
 import Layout from "../components/Layout.astro";
 import ProfileExample from "../components/Profile.astro";
 
-// Landing: the pitch + the one-line install + a representative example of what a profile — and a
-// diff — look like. Both examples are static (clearly labelled) so the landing always renders,
-// independent of the DB.
+// Landing: the pitch + the one-line install, then the product shown as three numbered artifacts —
+// 01 the CLI transcript, 02 the profile page, 03 the diff. Both profile/diff examples are static
+// (clearly labelled) so the landing always renders, independent of the DB.
 const octocatProfile: Profile = {
   schema_version: SCHEMA_VERSION,
   handle: "octocat",
@@ -30,6 +31,18 @@ const octocatProfile: Profile = {
   extras: [{ label: "Keyboard", value: "HHKB Pro 2" }],
   updated_at: "2026-06-28T00:00:00.000Z",
 };
+
+// The 02 sample is a PREVIEW, not the profile page reproduced: enough rows to show the shape
+// (including the one amber dotfiles link), an honest "+ N more" for the rest. The diff below shows
+// in full — it is the product. DESIGN.md "Landing layout".
+const PREVIEW_KEYS = new Set(["editor", "os", "shell", "terminal", "font", "dotfiles", "ai-tool"]);
+const octocatPreview: Profile = {
+  ...octocatProfile,
+  entries: octocatProfile.entries.filter((e) => PREVIEW_KEYS.has(e.key)),
+  extras: [],
+};
+const previewMore =
+  octocatProfile.entries.length - octocatPreview.entries.length + octocatProfile.extras.length;
 
 // A second static persona to diff octocat against — GitHub's other mascot, so the pairing reads as
 // illustrative, not a real user. Tuned to 7 differ / 6 shared: it keeps the mac-terminal core (os,
@@ -58,11 +71,28 @@ const hubotProfile: Profile = {
 };
 
 // diff(mine, theirs): mine=hubot, theirs=octocat → octocat renders in the LEFT value column (under
-// the profile example above it), hubot on the right. Computed at build time; the engine is DB-free.
+// the profile example above it), hubot on the right. Computed in the frontmatter at render time
+// (output:"server" renders this page per request); the engine is DB-free, so the landing always
+// renders. Making the landing prerendered is a possible follow-up, not assumed here.
 const exampleDiff = diff(hubotProfile, octocatProfile);
+
+// A real, live profile to bridge the fictional samples to the product (octocat/hubot are mascots).
+const LIVE_HANDLE = "bardisty";
+
+const jsonLd = JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "ymmv",
+  url: "https://ymmv.fyi",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  description:
+    "Terminal-native developer tool-stack profiles. Publish from the CLI, get a page at ymmv.fyi/you, diff against anyone.",
+});
 ---
 
-<Layout title="ymmv.fyi — your stack, in the terminal">
+<Layout title="ymmv.fyi: your stack, in the terminal" wide canonicalPath="/">
+  <script type="application/ld+json" is:inline slot="head" set:html={jsonLd} />
   <section class="hero">
     {
       /* The divergence field: parallel roads, an amber fork — the diff, drawn. The SVG is the
@@ -96,44 +126,57 @@ const exampleDiff = diff(hubotProfile, octocatProfile);
       </svg>
       <canvas></canvas>
     </div>
-    <h1 class="wordmark">ymmv<span class="dim">.fyi</span></h1>
-    <p class="vary">Your mileage may vary.</p>
-    <p class="tagline">
-      <span class="lead">The tools you actually use</span>, at <code
-        >ymmv.fyi/you</code
-      >.<br />
-      <b>Publish from the CLI.</b> Diff against anyone.
-    </p>
-    <InstallCommand />
+    <div class="hero-copy">
+      <h1 class="wordmark">ymmv<span class="dim">.fyi</span></h1>
+      <p class="vary">Your mileage may vary.</p>
+      <p class="tagline">
+        <span class="lead">The tools you actually use</span>, at <code
+          >ymmv.fyi/you</code
+        >.<br />
+        Publish from the CLI. Diff against anyone.
+      </p>
+      <InstallCommand />
+      <p class="live-link">
+        or see a live one <Arrow /> <a href={`/${LIVE_HANDLE}`}>ymmv.fyi/{LIVE_HANDLE}</a>
+      </p>
+    </div>
   </section>
 
-  <h2 class="example-label">How it works</h2>
-  <ol class="how">
-    <li>
-      <span class="idx">01</span>
-      <code>$ npx ymmv-cli@latest</code>
-      <p class="n">It detects your stack. You confirm.</p>
-    </li>
-    <li>
-      <span class="idx">02</span>
-      <code>ymmv.fyi/you</code>
-      <p class="n">Your stack becomes a page.</p>
-    </li>
-    <li>
-      <span class="idx">03</span>
-      <code>ymmv.fyi/you/vs/them</code>
-      <p class="n">Diff any two stacks.</p>
-    </li>
-  </ol>
+  <section class="artifact artifact-term">
+    <h2 class="example-label"><span class="idx">01</span> run it</h2>
+    {
+      /* A static transcript of the real publish flow (detect -> confirm -> published URL). Copy
+        mirrors the CLI's actual output (packages/cli/src/render.ts + commands.ts — CLI parity);
+        amber marks exactly what the CLI renders amber: the published link. Lines after the first
+        sit flush-left in source because <pre> keeps authored whitespace. */
+    }
+    <div class="sample">
+      <pre class="term"><span class="t-p">$ </span>npx ymmv-cli@latest
 
-  <h2 class="example-label">A profile looks like this</h2>
-  <div class="sample">
-    <ProfileExample profile={octocatProfile} example />
-  </div>
+<span class="t-dim">  Editor    </span>Neovim
+<span class="t-dim">  Shell     </span>fish
+<span class="t-dim">  Terminal  </span>Ghostty
+<span class="t-dim">  …</span>
 
-  <h2 class="example-label">A diff looks like this</h2>
-  <div class="sample">
-    <Diff result={exampleDiff} theirs="octocat" mine="hubot" example />
+<span class="t-dim">  Publish to ymmv.fyi/octocat? [Y/n/e=edit]</span> y
+
+  Published octocat → <span class="t-link">ymmv.fyi/octocat</span></pre>
+    </div>
+  </section>
+
+  <div class="artifacts">
+    <section class="artifact artifact-profile">
+      <h2 class="example-label"><span class="idx">02</span> your stack becomes a page</h2>
+      <div class="sample">
+        <ProfileExample profile={octocatPreview} example more={previewMore} />
+      </div>
+    </section>
+    <section class="artifact artifact-diff">
+      <h2 class="example-label"><span class="idx">03</span> diff against anyone</h2>
+      <div class="sample">
+        <Diff result={exampleDiff} theirs="octocat" mine="hubot" example />
+      </div>
+    </section>
   </div>
 
   <footer class="site-foot">

@@ -1,0 +1,22 @@
+---
+// The arrow glyph — web UI copy draws its arrows (same stroke family as the fork) instead of
+// typing the "→" character. The literal → belongs to CLI output, and to the landing transcript
+// that mirrors it byte-for-byte. Decorative: aria-hidden; the words around it carry the meaning.
+// size 13 rides inline copy; size 18 is the diff-cta submit-button glyph.
+interface Props {
+  size?: number;
+}
+const { size = 13 } = Astro.props;
+---
+
+<svg
+  class="arrow"
+  width={size}
+  height={size}
+  viewBox="0 0 18 18"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.7"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"><path d="M2.5 9h12M10 4.5 14.5 9 10 13.5"></path></svg>

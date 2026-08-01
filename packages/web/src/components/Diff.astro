@@ -15,6 +15,8 @@
 // byte-for-byte unchanged.
 import type { DiffResult } from "@ymmv/shared";
 import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import Arrow from "./Arrow.astro";
+import Sheet from "./Sheet.astro";
 import { safeHref } from "../lib/safe-href.ts";
 
 interface Props {
@@ -28,6 +30,9 @@ const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length >
 const HeadingTag = example ? "p" : "h1";
 ---
 
+{/* Sheet plates the whole diff document on live pages — the swap link is a text link, so it
+    stays inside the plate */}
+<Sheet example={example}>
 <HeadingTag class="url diff-h">
   <svg class="fork" width="16" height="16" viewBox="0 0 14 14" fill="none" aria-hidden="true">
     <path d="M1 9.5h12M4.5 9.5 8 4.5h5" stroke="currentColor" stroke-width="1.2" />
@@ -98,7 +103,7 @@ const HeadingTag = example ? "p" : "h1";
   <span><b>{result.shared}</b> shared</span>
   {
     !example && (
-      <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap →</a>
+      <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap <Arrow /></a>
     )
   }
 </div>
@@ -163,3 +168,4 @@ const HeadingTag = example ? "p" : "h1";
     </>
   )
 }
+</Sheet>

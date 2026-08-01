@@ -7,7 +7,9 @@ test.describe("profile render", () => {
   test("renders the handle, spec sheet and footer", async ({ page }) => {
     const res = await page.goto("/antfu");
     expect(res?.status()).toBe(200);
-    await expect(page).toHaveTitle(/antfu/);
+    // URL-as-title, pinned exactly (a partial revert to the old "antfu - ymmv.fyi" shape would
+    // still match a loose /antfu/ regex)
+    await expect(page).toHaveTitle("ymmv.fyi/antfu");
     await expect(page.locator("h1.handle")).toContainText("antfu");
     const spec = page.locator("table.spec").first();
     await expect(spec).toContainText("Editor");
@@ -52,6 +54,48 @@ test.describe("profile render", () => {
     await page.goto("/xsstest");
     await expect(page.locator("table.spec").first()).toBeVisible();
   });
+
+  test("plates the live document in exactly one sheet, with the preview marker suppressed", async ({
+    page,
+  }) => {
+    // The example/live duality (Sheet.astro): a live page losing its plate, or gaining a second
+    // one, renders wrong silently — no other locator touches .sheet.
+    await page.goto("/antfu");
+    await expect(page.locator(".sheet")).toHaveCount(1);
+    await expect(page.locator(".spec-more")).toHaveCount(0); // example-only marker
+    // the interactive foot sits OUTSIDE the plate
+    await expect(page.locator(".sheet .install")).toHaveCount(0);
+  });
+
+  test("the canonical names the profile path even when a query string rides along", async ({
+    page,
+  }) => {
+    // an invalid ?you= falls through to the profile render (see the diff-form tests) — the
+    // canonical must not echo the query
+    await page.goto("/antfu?you=..");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://ymmv.fyi/antfu",
+    );
+  });
+
+  test("alias spellings consolidate to the resolved canonical; junk mints none", async ({
+    page,
+  }) => {
+    // case-insensitive resolution must not let /ANTFU declare itself canonical
+    await page.goto("/ANTFU");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://ymmv.fyi/antfu",
+    );
+    await expect(page).toHaveTitle("ymmv.fyi/antfu");
+    // a 404 carries no canonical at all (pathname-derived canonicals were an SEO-spam vector)
+    await page.goto("/ghosthandle");
+    await expect(page.locator('link[rel="canonical"]')).toHaveCount(0);
+    // and a garbage segment never wears the URL dress in the title (handle-shape guard)
+    await page.goto("/a..b");
+    await expect(page).toHaveTitle("ymmv.fyi");
+  });
 });
 
 test.describe("landing", () => {
@@ -62,6 +106,69 @@ test.describe("landing", () => {
     const stack = page.locator("table.spec").first();
     await expect(stack).toContainText("Dotfiles");
     await expect(stack).toContainText("github.com/octocat/dotfiles");
+  });
+
+  test("the profile sample is an honest preview: truncated rows + a '+ N more' marker", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const stack = page.locator("table.spec").first();
+    // truncation is real (Multiplexer is elided from the preview...)
+    await expect(stack).not.toContainText("Multiplexer");
+    await expect(page.locator(".spec-more")).toContainText("+ 7 more");
+    // ...but the diff below still compares the FULL profiles
+    await expect(page.locator("table.diff")).toContainText("Multiplexer");
+  });
+
+  test("01 shows the CLI transcript (detect, confirm, published link)", async ({ page }) => {
+    await page.goto("/");
+    const term = page.locator(".term");
+    await expect(term).toBeVisible();
+    await expect(term).toContainText("npx ymmv-cli@latest");
+    await expect(term).toContainText("Publish to ymmv.fyi/octocat? [Y/n/e=edit]");
+    await expect(term).toContainText("Published octocat");
+    // amber marks exactly what the CLI renders amber: the published link
+    await expect(term.locator(".t-link")).toHaveText("ymmv.fyi/octocat");
+  });
+
+  test("the hero links one real, live profile", async ({ page }) => {
+    await page.goto("/");
+    const live = page.locator(".live-link a");
+    await expect(live).toHaveAttribute("href", "/bardisty");
+    await expect(live).toContainText("ymmv.fyi/bardisty");
+    // and the target actually resolves — a renamed/unpublished handle would ship a dead hero link
+    const res = await page.goto("/bardisty");
+    expect(res?.status()).toBe(200);
+    await expect(page.locator("h1.handle")).toContainText("bardisty");
+  });
+
+  test("the landing never plates its previews twice, and never scrolls sideways on a phone", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    // previews are framed by .sample only — a .sheet here means the example gate broke
+    await expect(page.locator(".sheet")).toHaveCount(0);
+    // the hand-tuned narrow-viewport fits (12px transcript, 35% diff label column) have no other
+    // tripwire — any copy or font change that reintroduces overflow fails here
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+
+  test("carries a canonical URL and JSON-LD", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://ymmv.fyi/",
+    );
+    const ld = page.locator('script[type="application/ld+json"]');
+    await expect(ld).toHaveCount(1);
+    expect(JSON.parse((await ld.textContent()) ?? "")).toMatchObject({
+      "@type": "SoftwareApplication",
+      name: "ymmv",
+    });
   });
 
   test("renders an example diff (octocat vs hubot) with counts, handles, and a missing row", async ({
@@ -476,6 +583,8 @@ test.describe("the 3-column diff", () => {
 
   test("links both handles, offers a swap, and lists extras uncompared", async ({ page }) => {
     await page.goto("/antfu/vs/bardisty");
+    await expect(page).toHaveTitle("ymmv.fyi/antfu/vs/bardisty"); // URL-as-title, pinned exactly
+    await expect(page.locator(".sheet")).toHaveCount(1); // the diff document is plated too
     await expect(page.locator("h1.url a").first()).toHaveAttribute("href", "/antfu");
     await expect(page.locator("h1.url a").nth(1)).toHaveAttribute("href", "/bardisty");
     await expect(page.locator(".foot a")).toHaveAttribute("href", "/bardisty/vs/antfu");
@@ -507,10 +616,14 @@ test.describe("the 3-column diff", () => {
 
   test("nudges to publish when the viewer has no profile", async ({ page }) => {
     const res = await page.goto("/antfu/vs/ghostviewer");
-    await expect(page.locator(".nudge")).toContainText("publish yours to diff");
+    await expect(page.locator(".nudge")).toContainText("Publish yours to diff");
     await expect(page.locator("h1.handle")).toContainText("antfu"); // still shows the viewed profile
     // the nudge must stay short-cached like a 404 — the viewer may publish seconds later
     expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
+    // a transient 200 state: never canonical, never indexed (junk viewer segments must not
+    // mint indexable ymmv.fyi URLs with attacker-shaped titles)
+    await expect(page.locator('link[rel="canonical"]')).toHaveCount(0);
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex");
   });
 
   test("diff extras HTML-escape user labels/values and never link javascript:", async ({

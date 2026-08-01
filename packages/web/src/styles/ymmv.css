@@ -17,6 +17,11 @@
   --sp-xl: 24px;
 
   --content: 680px;
+  /* landing only (body.wide): the landing is a display surface, not a document — it earns a wider
+     grid; 680 stays canonical for the reading pages (profile/diff). See DESIGN.md "Landing layout".
+     INVARIANT: this value must equal the three @media (min-width: 1080px) gates below (media
+     queries can't read custom properties) — change one, change all four. */
+  --content-wide: 1080px;
   --label-col: 34%;
   --page-pad-x: 28px;
 
@@ -33,6 +38,17 @@
 @media (max-width: 430px) {
   :root {
     --label-col: 40%;
+  }
+}
+
+/* The landing's wide grid: overriding --content on body re-derives everything that positions off
+   the column (page max-width, the theme toggle's right-edge calc) in one move. Gated to the same
+   breakpoint as the 02/03 artifact pair — below it the sections stack, and a stacked spec card
+   stretched across ~1000px reads as a gap-riddled ledger, so mid-band keeps the 680px document
+   column. */
+@media (min-width: 1080px) {
+  body.wide {
+    --content: var(--content-wide);
   }
 }
 
@@ -106,6 +122,11 @@ body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Never let the browser fabricate a weight or style: --font-serif ships italic-only 400, and
+     IBM Plex Mono ships 400/500/600 — a rule asking for anything else (e.g. a default bold <b>)
+     must surface as a visible regression, not a smeared synthetic. */
+  font-synthesis: none;
   text-rendering: optimizeLegibility;
   /* Theme switch is intentionally instant — no cross-fade. Body's bg/text are the only
      theme-driven properties that could transition; everything else (hairlines, surfaces,
@@ -134,7 +155,9 @@ html[data-theme="light"]::after {
   opacity: 0.14;
 }
 @media (forced-colors: active), print {
-  body::after {
+  /* html::after, not body::after — the grain lives on html (see above); the old body target
+     silently matched nothing and the grain kept painting in forced-colors and print */
+  html::after {
     display: none;
   }
 }
@@ -221,6 +244,9 @@ a {
   font-size: 13px;
   color: var(--faint);
   margin-bottom: 30px;
+  /* a 39-char handle outruns a narrow phone column (and the sheet card trims another 24px) —
+     wrap rather than let body's overflow-x: clip silently cut the breadcrumb */
+  overflow-wrap: anywhere;
 }
 .url b {
   color: var(--muted);
@@ -265,6 +291,11 @@ a {
   flex: none;
 }
 
+/* the inline arrow glyph (Arrow.astro) — rides the copy's baseline like the → it replaces */
+.arrow {
+  vertical-align: -0.125em;
+}
+
 /* diff heading: "how X differs from Y" promoted from breadcrumb register to a real heading;
    the amber fork glyph in front is the one accent spend (it IS the diff mark) */
 .diff-h {
@@ -272,6 +303,10 @@ a {
   font-weight: 400;
   color: var(--muted);
   margin-bottom: 26px;
+  /* two-line wraps on narrow screens split evenly instead of stranding one handle on line 2;
+     overflow-wrap so a 39-char handle breaks instead of being clipped by body's overflow-x */
+  text-wrap: balance;
+  overflow-wrap: anywhere;
 }
 .diff-h .fork {
   color: var(--accent);
@@ -282,15 +317,30 @@ a {
 }
 
 /* ---- spec sheet (key -> value) ---- */
-/* explicit weight so the heading-tag variants (h2 on real pages, p in the landing example) match */
-.group-h {
+/* One section-label dress across both surfaces (explicit weight so the heading-tag variants —
+   h2 on real pages, p in the landing example — match): caps register + trailing hairline rule
+   to the column edge. Only the margins differ per surface, set separately below. */
+.group-h,
+.example-label {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.group-h {
   margin: 40px 0 6px;
+}
+.group-h::after,
+.example-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
 }
 /* section marks open like a code comment — the machine voice annotating its own document.
    ::before stays out of textContent, so copy assertions and copy-paste are unaffected. */
@@ -367,6 +417,13 @@ a {
   margin-top: 28px;
   padding-top: 20px;
   border-top: 1px solid var(--hairline);
+}
+/* after the plated .sheet the card's own bottom edge already terminates the document — a second
+   full-width rule under it is exactly the divider clutter the plate exists to replace */
+.sheet + .foot {
+  margin-top: 24px;
+  padding-top: 0;
+  border-top: 0;
 }
 /* the foot command is a CLI invocation, not a link or a diff-difference — keep amber scarce
    (reserved for links + "you differ"); the command reads as emphasis in plain ink */
@@ -570,6 +627,14 @@ a {
   padding-left: 15px;
   text-indent: -15px;
 }
+/* narrow screens: the caps ledger labels give back a little tracking so fewer of them wrap
+   ("Window Manager", "Version Manager"). After the .k rules in source so the override wins. */
+@media (max-width: 430px) {
+  .spec .k,
+  .diff .k {
+    letter-spacing: 0.1em;
+  }
+}
 .diff .theirs,
 .diff .yours {
   font-family: var(--font-mono);
@@ -745,7 +810,7 @@ a {
   /* one source for the wordmark's fluid size — .vary tucks itself relative to this */
   --wm: clamp(52px, 11vw, 88px);
   position: relative;
-  padding: 36px 0 56px;
+  padding: 36px 0 32px;
   margin-bottom: 8px;
 }
 /* The divergence field sits behind the hero content, bleeding to the viewport edges. NOT
@@ -757,7 +822,12 @@ a {
   position: relative;
   z-index: 1;
 }
+/* One source for the field's soft radial falloff (the field breathes top-right of the hero and
+   never hard-edges): the token feeds the plain rule, the -webkit- fallback for pre-standard
+   Blink/WebKit (which ignore unprefixed mask-image entirely), and the intersect variant — so the
+   supports/no-supports paths can never render different fields. */
 .field {
+  --field-radial: radial-gradient(115% 95% at 72% 10%, #000 30%, transparent 78%);
   position: absolute;
   z-index: 0;
   top: -64px;
@@ -765,8 +835,35 @@ a {
   left: 50%;
   width: 100vw;
   transform: translateX(-50%);
-  /* soft radial falloff: the field breathes top-right of the hero and never hard-edges */
-  mask-image: radial-gradient(115% 95% at 72% 10%, #000 30%, transparent 78%);
+  -webkit-mask-image: var(--field-radial);
+  mask-image: var(--field-radial);
+}
+/* Fade the field's top band so lanes/forks never run under the fixed theme toggle. Gated on
+   mask-composite support: without intersect, two mask layers UNION and the linear layer would
+   reveal the whole field — worse than no fade. */
+@supports (mask-composite: intersect) {
+  .field {
+    mask-image: linear-gradient(180deg, transparent 8px, #000 96px), var(--field-radial);
+    mask-composite: intersect;
+  }
+}
+/* Wide grid: the copy holds the left column, so the field earns real presence in the right zone —
+   mask re-centered right and deeper, static motif slightly lifted from its narrow-screen whisper.
+   The radial is deliberately tight on its left flank: rules crossing under the tagline's baselines
+   read as accidental underlines, so the field must be near-zero behind the copy column.
+   Same 1080px gate as body.wide: below it the column is 680px and there is no right zone. */
+@media (min-width: 1080px) {
+  .field {
+    --field-radial: radial-gradient(95% 125% at 82% 35%, #000 32%, transparent 74%);
+  }
+  .field-static {
+    opacity: 0.55;
+  }
+  /* the copy column measure only matters once the grid widens past it — below the gate the
+     hero copy IS the 680px column */
+  .hero-copy {
+    max-width: 620px;
+  }
 }
 .field svg,
 .field canvas {
@@ -840,97 +937,93 @@ a {
 .tagline .lead {
   color: var(--text);
 }
-.tagline b {
-  color: var(--mid);
-  font-weight: 500;
-}
 .tagline code {
   font-family: var(--font-mono);
   font-size: 0.95em;
   font-weight: 500;
   color: var(--mid);
 }
-
-/* ---- how it works: a pipeline of three steps, []-[]-[] — hairline boxes joined by short
-   connectors (the road runs THROUGH the product: CLI -> page -> diff). Solid hairlines, not
-   dashed: dashes would be a new ornament species and the budget is closed. ---- */
-.how {
-  list-style: none;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  margin-top: 18px;
-}
-.how li {
-  position: relative;
-  border: 1px solid var(--hairline);
-  /* horizontal padding stays lean so step 03's ymmv.fyi/you/vs/them fits on one line at 1280 */
-  padding: 14px 13px 16px;
-}
-.how li + li::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: -26px;
-  width: 27px;
-  height: 1px;
-  background: var(--hairline);
-}
-.how .idx {
-  display: block;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 12px;
+/* the one bridge from the pitch to a real page — quiet text link, same treatment as .site-foot a */
+.live-link {
+  margin-top: 14px;
+  font-size: 13px;
   color: var(--faint);
-  margin-bottom: 10px;
 }
-.how code {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--text);
-  margin-bottom: 6px;
-  overflow-wrap: anywhere;
-}
-.how .n {
-  font-size: 13px;
-  line-height: 1.55;
+.live-link a {
   color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
+  transition: color 150ms ease;
 }
-@media (max-width: 560px) {
-  .how {
-    grid-template-columns: 1fr;
-    gap: 16px;
-  }
-  /* stacked: the connector turns vertical, threading down near the step indexes */
-  .how li + li::before {
-    top: -17px;
-    left: 20px;
-    width: 1px;
-    height: 18px;
-  }
+.live-link a:hover {
+  color: var(--accent);
 }
-.example-label {
+
+/* ---- 01: the CLI transcript — the terminal, shown, not described. Static illustration of the
+   real publish flow (detect -> confirm -> published URL); copy mirrors packages/cli/src output
+   (CLI parity, DESIGN.md). Amber marks exactly what the CLI renders amber: the published link. ---- */
+.term {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+  font-size: 13px;
+  /* denser than body prose — a terminal sets tighter lines, and the blank separator lines
+     already carry the vertical rhythm between output units */
+  line-height: 1.7;
+  color: var(--text);
+  /* real terminals wrap — pre-wrap over a scroll container: nothing clips on narrow screens and
+     there's no keyboard-unreachable scroll region. Detection rows are short and never wrap. */
+  white-space: pre-wrap;
+}
+.term .t-p {
   color: var(--faint);
+  user-select: none;
+}
+.term .t-dim {
+  color: var(--faint);
+}
+.term .t-link {
+  color: var(--accent);
+}
+/* ---- 02 + 03: the artifacts. Stacked in narrative order; on the wide grid they pair up
+   asymmetrically — the diff is the product, it gets the bigger plate, and a COMMITTED stagger
+   drops the 03 label level with the profile card's handle, giving the page a 01 → 02 → 03
+   reading diagonal. Magnitude is the point: a tried 56px offset read as misalignment; at ~120px
+   it reads as composition (and the band right of 02's header carries the label instead of
+   sitting empty). ---- */
+@media (min-width: 1080px) {
+  .artifacts {
+    display: grid;
+    grid-template-columns: 5fr 7fr;
+    column-gap: 40px;
+    align-items: start;
+  }
+  .artifact-diff {
+    padding-top: 120px;
+  }
+}
+/* dress shared with .group-h (see the spec-sheet section); only the landing margin lives here */
+.example-label {
   margin: 48px 0 18px;
+}
+/* Numbered labels get a short lead-in rule between the index and the title (// 01 -- RUN IT ----):
+   the index span is its own flex row so the lead-in rides inside it, leaving the h2's two pseudos
+   for the existing "// " mark and the trailing rule. Whitespace in the markup keeps textContent
+   reading "01 run it". */
+.example-label .idx {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.example-label::after {
+.example-label .idx::after {
   content: "";
-  flex: 1;
+  width: 24px;
   height: 1px;
   background: var(--hairline);
 }
-/* The landing sample is a PREVIEW, not the page's own profile — frame it in a subtle surface
-   card and demote the sample handle so it reads as an illustration, not the primary content. */
-.sample {
+/* One plated-figure card, two wearers: .sample frames the landing PREVIEWS; .sheet frames the
+   live profile document (Profile.astro wraps it when not in example mode). Same frame, ticks,
+   and padding — the landing card is an honest miniature of the real page. */
+.sample,
+.sheet {
   position: relative;
   border: 1px solid var(--border-raised);
   border-radius: var(--radius-card);
@@ -941,20 +1034,24 @@ a {
 /* registration ticks: two corner marks (top-left + bottom-right) over the hairline frame — the
    card reads as a plated figure in a spec sheet. Decorative pseudos only; no markup, no hit area. */
 .sample::before,
-.sample::after {
+.sample::after,
+.sheet::before,
+.sheet::after {
   content: "";
   position: absolute;
   width: 12px;
   height: 12px;
   pointer-events: none;
 }
-.sample::before {
+.sample::before,
+.sheet::before {
   top: -1px;
   left: -1px;
   border-top: 1px solid var(--muted);
   border-left: 1px solid var(--muted);
 }
-.sample::after {
+.sample::after,
+.sheet::after {
   bottom: -1px;
   right: -1px;
   border-bottom: 1px solid var(--muted);
@@ -963,27 +1060,65 @@ a {
 .sample .handle {
   font-size: clamp(34px, 6vw, 42px);
 }
-/* The preview cards frame the profile/diff in extra padding, so on phones their inner content is
-   tighter than the full-bleed pages. Trim the side padding and rebalance the in-card diff columns:
-   a slightly wider label so the one long single-word label ("Multiplexer") stays on its value's
-   line, but value columns kept wide enough that two full mono values (e.g. "macOS 15.2") don't
-   abut. Scoped to .sample so the live /vs/ page keeps its 30/35/35 split. */
+/* truncation marker under the sample spec table — the preview is honest about being a preview.
+   Same caps ledger register as the row labels; hairline above continues the table rhythm. */
+.spec-more {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-top: 1px solid var(--hairline);
+  padding-top: 11px;
+}
+/* Both cards (landing .sample, live .sheet) frame their tables in extra padding, so on phones the
+   in-card content is tighter than a full-bleed page would be. Trim the side padding and rebalance
+   the in-card diff columns: a slightly wider label so the one long single-word label
+   ("Multiplexer") stays on its value's line, but value columns kept wide enough that two full
+   mono values (e.g. "macOS 15.2") don't abut. */
 @media (max-width: 430px) {
-  .sample {
+  .sample,
+  .sheet {
     padding-left: 12px;
     padding-right: 12px;
   }
+  /* 35%: the widest one-line label ("Multiplexer" + its dot) measures ~100px at 390px viewports —
+     34% left it 3px short and broke the word mid-glyph. Values keep 32.5% each: "Catppuccin"
+     (~90px) still fits one line, so multi-word values wrap between words, not inside them. */
   .sample .diff thead td,
-  .sample .diff .k {
-    width: 34%;
+  .sample .diff .k,
+  .sheet .diff thead td,
+  .sheet .diff .k {
+    width: 35%;
   }
-  .sample .diff thead th {
-    width: 33%;
+  .sample .diff thead th,
+  .sheet .diff thead th {
+    width: 32.5%;
+  }
+  /* the transcript's longest line (the confirm prompt) overflows a 390px card by a few px at
+     13px — one size down keeps every line visible without the scroll */
+  .term {
+    font-size: 12px;
   }
   /* trailing gap so a value that fills the left column (e.g. "Claude Code") keeps clear of the
      right column — it wraps like the other two-word values instead of abutting */
-  .sample .diff .theirs {
+  .sample .diff .theirs,
+  .sheet .diff .theirs {
     padding-right: var(--sp-sm);
+  }
+}
+/* Per-artifact card overrides — after every base .sample rule so the cascade stays ascending. */
+/* the transcript card holds ~40ch of terminal output — cap it so it reads as a terminal window,
+   not a mostly-empty plate (the section label rule still spans the full column above it) */
+.artifact-term .sample {
+  max-width: 640px;
+}
+@media (min-width: 1080px) {
+  /* the preview's rows all carry one-word labels (two-word keys are elided), so the narrow card
+     gives the label column back to the values — the 27ch dotfiles URL keeps one line */
+  .artifact-profile .sample {
+    --label-col: 26%;
   }
 }
 .site-foot {
@@ -1039,6 +1174,8 @@ a {
 .site-foot .fl code {
   font: inherit;
   color: var(--muted);
+  /* ymmv.fyi/<handle>/vs/<you> outruns the note column on 320px phones — wrap, never overflow */
+  overflow-wrap: anywhere;
 }
 /* notes read as muted (≈AA), not faint (sub-AA on near-white); they're already separated from
    the command spatially (tab stop on wide, own line on narrow), so equal weight doesn't blend */
@@ -1078,6 +1215,7 @@ a {
 .url a:focus-visible,
 .spec .v a:focus-visible,
 .foot a:focus-visible,
+.live-link a:focus-visible,
 .site-foot a:focus-visible,
 .diff-cta .go:focus-visible {
   outline: 2px solid currentColor;

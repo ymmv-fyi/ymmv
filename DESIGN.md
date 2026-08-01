@@ -18,7 +18,7 @@ Three voices, all self-hosted via Astro's Fonts API (`astro.config.mjs`):
 
 | var | family | role |
 |---|---|---|
-| `--font-display` | Martian Mono (variable wght 400–800) | the loud machine voice: wordmark, handles, step indexes |
+| `--font-display` | Martian Mono (variable wght 400–800) | the loud machine voice: wordmark, handles |
 | `--font-mono` | IBM Plex Mono (400/500/600) | the quiet machine voice: body, data, UI, code |
 | `--font-serif` | Instrument Serif (400 italic ONLY) | the human voice: "Your mileage may vary." and at most one aside per page |
 
@@ -78,6 +78,32 @@ differs from Y" heading. Change one surface, mirror the other.
 - **Ratio bar** (`.diff-foot .ratio`): a minimap of the diff table — one segment per row, in row
   order, amber where the stacks split. Decorative (aria-hidden), no anchors, no text.
 
+## Landing layout
+
+The landing is a display surface, not a document: it earns the wide grid (`--content-wide`,
+1080px, via `body.wide`, engaging at ≥1080px viewports — the same gate as the artifact pair, so
+narrower screens keep the 680px column) while the reading pages (profile/diff) stay on the
+canonical 680px document column. Two-zone hero on wide screens: the pitch holds a readable left column
+(`.hero-copy`, max 620px); the right zone belongs to the divergence field, whose mask re-centers
+there (and always fades out under the fixed theme toggle).
+
+The narrative is three numbered artifacts, not prose-then-pictures — `// 01 run it` (the CLI
+transcript), `// 02 your stack becomes a page` (profile preview), `// 03 diff against anyone`
+(the diff). Each label carries a short hairline lead-in between index and title, then the
+trailing rule runs to the container edge. Each fact appears once, as the real thing. On the wide
+grid 02 and 03 pair up asymmetrically (profile narrow-left, diff wide-right) with a COMMITTED
+stagger: the 03 label drops ~120px, level with the profile card's handle, so the page reads on a
+01 → 02 → 03 diagonal. Magnitude is load-bearing — a 56px offset was tried and read as
+misalignment; go big or go aligned. Below 1080px they stack in narrative order.
+
+Sample truncation rule: a preview earns rows only until the shape is clear, then declares the rest
+with an honest `+ N more` marker (`.spec-more`). The diff shows in full — it is the product.
+
+**CLI transcript sample** (`.term`): a static illustration of the real publish flow. Its copy
+mirrors actual CLI output (`packages/cli/src/render.ts` + `commands.ts` — CLI parity: change the
+CLI's wording, update the transcript). Amber marks exactly what the CLI renders amber (the
+published link); scaffolding sits in `--faint`, typed input and values in ink.
+
 ## Ornament budget
 
 Grain (one small feTurbulence tile at 4%, fixed overlay, never above the theme toggle), hairline
@@ -88,19 +114,28 @@ the identity.
 ## Components & States
 
 - **Spec sheet** (`table.spec`): caps 11px labels at `--label-col`, 15px mono values on shared tab
-  stops, hairline rows. URL values render scheme-stripped with the full URL in `title`, gated
-  through `safeHref`.
+  stops, hairline rows. Group headers (`.group-h`) carry a trailing hairline rule to the column
+  edge — the same section-label dress as the landing's `.example-label`. URL values render
+  scheme-stripped with the full URL in `title`, gated through `safeHref`. The live profile
+  document is plated in a `.sheet` card (same frame + registration ticks as the landing's
+  `.sample`); the interactive foot (install pill, make-yours, diff-vs) sits OUTSIDE the plate —
+  raised controls on a raised surface would lose their lift.
 - **Diff** (`table.diff`): 30/35/35 fixed layout set on the thead; both differing values amber +
   label dot (presence, not just hue — WCAG 1.4.1) + sr-only "differs:/same:" prefixes; missing
-  side is an em-dash glyph; extras render dimmed below, uncompared and never amber.
+  side is an em-dash glyph; extras render dimmed below, uncompared and never amber. Like the
+  profile, the live diff document (heading, table, foot, extras) is plated in a `.sheet` card —
+  the swap link is a text link, so it stays inside the plate.
 - **Install command** (`.install`): click-to-copy prompt pill. Exactly two glyphs earn their
   place: the `$` (says "terminal") and the copy icon (says "clickable") — no decorative caret;
   three ornaments on one command is one too many. Never a dead control — the copy affordance
   appears only when the Clipboard API is wired.
 - **Diff-vs form** (`.diff-cta`): raised panel with the fork glyph; input is a hairline-underlined
   slot, accent underline on focus.
-- **Empty / 404 / nudge** (`.empty`, `.nudge`): the road forks into nothing — faint fork mark,
-  plain-ink message ("no ymmv profile for <handle>"), install CTA. No accent spend.
+- **Empty / 404** (`.empty`): the road forks into nothing — faint fork mark, plain-ink message
+  ("no ymmv profile for <handle>"), install CTA. No accent spend.
+- **Nudge** (`.nudge`): the ONE amber call-to-action, mirroring the CLI's `nudge()` ("the one
+  amber nudge", `packages/cli/src/render.ts`) — the deliberate exception to empty-state
+  accent-scarcity on both surfaces.
 - **Revision stamp** (`.rev`): profiles date themselves — "updated YYYY-MM-DD" under the handle.
 
 ## Motion
@@ -111,6 +146,12 @@ canvas (static SVG stays); keep opacity/color feedback.
 
 ## Copy
 
-No em dashes in user-facing prose (the missing-value `—` glyph is exempt). Sentences open with a
-capital; fragments stay lowercase. Counts read "N differ · N shared" in wording, never punctuation
-soup. The serif voice gets complete sentences only.
+No em dashes in user-facing prose (the missing-value `—` glyph is exempt). Never the `·`
+separator anywhere user-facing — whitespace does the separating. Web UI copy draws its arrows:
+the inline SVG glyph (`Arrow.astro`, same stroke family as the fork), never the `→` character —
+which belongs to CLI output, and to the landing transcript that mirrors it byte-for-byte.
+Sentences open with a capital; fragments stay lowercase. Counts read "N differ" and "N shared"
+as words set apart by whitespace, never punctuation soup. The serif voice gets complete
+sentences only. Page titles are URL-shaped — the title IS the address (`ymmv.fyi/<handle>`,
+`ymmv.fyi/<handle>/vs/<you>`), the same identity line the breadcrumb and the CLI print; the
+landing alone carries a subtitle (`ymmv.fyi: your stack, in the terminal`).
