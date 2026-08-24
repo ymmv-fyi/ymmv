@@ -22,7 +22,6 @@
      INVARIANT: this value must equal the three @media (min-width: 1080px) gates below (media
      queries can't read custom properties) — change one, change all four. */
   --content-wide: 1080px;
-  --label-col: 34%;
   --page-pad-x: 28px;
 
   /* corners: cards are near-sharp (technical document), controls slightly softer */
@@ -34,10 +33,11 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-/* wider label column on narrow screens so two-word labels ("Window Manager") keep one line */
+/* phones: 28px a side spends 56px of a 390px viewport (~14%) on margins — give it back to the
+   content. Everything positioned off the padding (page column, theme-toggle calc) re-derives. */
 @media (max-width: 430px) {
   :root {
-    --label-col: 40%;
+    --page-pad-x: 16px;
   }
 }
 
@@ -238,19 +238,43 @@ a {
   inset: -8px;
 }
 
-/* ---- profile header ---- */
-.url {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--faint);
-  margin-bottom: 30px;
-  /* a 39-char handle outruns a narrow phone column (and the sheet card trims another 24px) —
-     wrap rather than let body's overflow-x: clip silently cut the breadcrumb */
+/* ---- profile session (the page as a terminal transcript; DESIGN.md → Components & States) ---- */
+.session {
+  font-size: 14px;
+  line-height: 1.7;
+}
+/* a typed command line — `$` faint, command in ink; blank-line rhythm does the separating */
+.cmdline {
   overflow-wrap: anywhere;
 }
+.cmdline b {
+  font-weight: 600;
+}
+.cmdline .prompt,
+.diff-cta .prompt {
+  color: var(--faint);
+  user-select: none;
+}
+.cmt {
+  color: var(--faint);
+  margin-left: 3ch;
+}
+/* the output's opening line: the page's address. The handle is the h1, in the shell's register.
+   (.url is shared with the diff heading — .diff-h re-dresses it there, so session-only spacing
+   stays scoped to .session.) */
+.url {
+  font-family: var(--font-mono);
+  color: var(--faint);
+  /* a 39-char handle outruns a narrow phone column — wrap rather than let body's
+     overflow-x: clip silently cut the breadcrumb */
+  overflow-wrap: anywhere;
+}
+.session .url {
+  margin-top: 1.7em;
+}
 .url b {
-  color: var(--muted);
-  font-weight: 400;
+  color: var(--text);
+  font-weight: 600;
 }
 /* the domain is a quiet breadcrumb home — inherits the faint url color, no underline, no amber
    (amber stays reserved for links + diffs); brightens on hover to signal it's clickable */
@@ -274,14 +298,46 @@ a {
   gap: 4px;
   word-break: break-word;
 }
-/* revision stamp under the handle — the spec sheet dates itself */
+/* the readout: stack + extras on ONE grid, so every value shares a single tab stop (the CLI's
+   padEnd, in CSS). Labels faint, values ink; a blank spacer row separates the groups. */
+.readout {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  column-gap: 2ch;
+  margin-top: 1.7em;
+}
+.readout .rows,
+.readout .row {
+  display: contents;
+}
+.readout-gap {
+  grid-column: 1 / -1;
+  height: 1.7em;
+}
+.readout dt {
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.readout dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.readout dd a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
+  transition: border-bottom-color 150ms ease;
+}
+.readout dd a:hover {
+  border-bottom-color: var(--accent);
+}
+/* revision stamp after the output — the session dates itself, in the CLI's own words */
 .rev {
   font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
   color: var(--faint);
-  margin-top: 10px;
+  margin-top: 1.7em;
 }
 
 /* the fork mark — the brand glyph, inline. Sized by its em context via width/height attrs. */
@@ -299,10 +355,10 @@ a {
 /* diff heading: "how X differs from Y" promoted from breadcrumb register to a real heading;
    the amber fork glyph in front is the one accent spend (it IS the diff mark) */
 .diff-h {
-  font-size: 17px;
+  font-size: inherit;
   font-weight: 400;
   color: var(--muted);
-  margin-bottom: 26px;
+  margin: 1.7em 0 0;
   /* two-line wraps on narrow screens split evenly instead of stranding one handle on line 2;
      overflow-wrap so a 39-char handle breaks instead of being clipped by body's overflow-x */
   text-wrap: balance;
@@ -315,12 +371,15 @@ a {
   color: var(--text);
   font-weight: 600;
 }
+/* handle links stay quiet ink; hover spends amber (they are links — amber's own job) */
+.diff-h b a:hover {
+  color: var(--accent);
+}
 
 /* ---- spec sheet (key -> value) ---- */
-/* One section-label dress across both surfaces (explicit weight so the heading-tag variants —
-   h2 on real pages, p in the landing example — match): caps register + trailing hairline rule
-   to the column edge. Only the margins differ per surface, set separately below. */
-.group-h,
+/* The landing's section-label dress: caps register + trailing hairline rule to the column edge.
+   (Only the landing wears it now — both live documents are transcripts and carry no group
+   headers; the caps ledger survives as the landing's narrator voice.) */
 .example-label {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -332,10 +391,6 @@ a {
   align-items: center;
   gap: 12px;
 }
-.group-h {
-  margin: 40px 0 6px;
-}
-.group-h::after,
 .example-label::after {
   content: "";
   flex: 1;
@@ -344,65 +399,13 @@ a {
 }
 /* section marks open like a code comment — the machine voice annotating its own document.
    ::before stays out of textContent, so copy assertions and copy-paste are unaffected. */
-.group-h::before,
 .example-label::before,
 .foot-h::before {
   content: "// ";
   letter-spacing: 0;
 }
 
-.spec {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-.spec tr {
-  border-bottom: 1px solid var(--hairline);
-}
-.spec tr:last-child {
-  border-bottom: 0;
-}
-.spec td,
-.spec th {
-  padding: 11px 0;
-  vertical-align: baseline;
-}
-/* label is a row header (th scope="row"); reset th's default center/bold to the muted-label look */
-.spec .k {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  text-align: left;
-  color: var(--muted);
-  /* ledger label: caps register matches the thead/section marks; textContent keeps original
-     casing, so tests and copy-paste still see "Editor" */
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  width: var(--label-col);
-  padding-right: var(--sp-md);
-}
-/* Values: mono, left-aligned at a consistent tab stop (the value column edge), tabular figures.
-   Long values (e.g. a 47-char dotfiles URL) wrap to a second line at the tab stop — never truncate
-   an identity-bearing value. */
-.spec .v {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  overflow-wrap: anywhere;
-}
-.spec .v a {
-  color: var(--accent);
-  text-decoration: none;
-  border-bottom: 1px solid var(--accent-soft);
-  transition: border-bottom-color 150ms ease;
-}
-.spec .v a:hover {
-  border-bottom-color: var(--accent);
-}
-
 /* ---- footer line ---- */
-/* 40px matches the .group-h section gap so the rhythm above and below a spec table is even */
 .foot {
   margin-top: 40px;
   font-family: var(--font-mono);
@@ -418,12 +421,14 @@ a {
   padding-top: 20px;
   border-top: 1px solid var(--hairline);
 }
-/* after the plated .sheet the card's own bottom edge already terminates the document — a second
-   full-width rule under it is exactly the divider clutter the plate exists to replace */
-.sheet + .foot {
-  margin-top: 24px;
+/* the profile's foot is the transcript's closing prompt lines — blank-line rhythm, no border,
+   the session's own type size. .foot.term-foot outranks the :has(.install) footer dress above. */
+.foot.term-foot {
+  margin-top: 1.7em;
   padding-top: 0;
   border-top: 0;
+  font-size: inherit;
+  color: inherit;
 }
 /* the foot command is a CLI invocation, not a link or a diff-difference — keep amber scarce
    (reserved for links + "you differ"); the command reads as emphasis in plain ink */
@@ -442,38 +447,36 @@ a {
   color: var(--accent);
 }
 /* diff foot: counts read left (numbers in ink via .foot b, words faint), the one action sits
-   right. Whitespace does the separating — no glyph separators. 24px ≈ three mono spaces at 13px,
-   the same gap the CLI footer uses — horizontal only; a wrapped row keeps the foot's quiet 4px
-   rhythm instead of opening a 24px hole. */
+   right. Whitespace does the separating — no glyph separators; 3ch is the CLI footer's own gap.
+   Session register (inherits 14px), blank-line rhythm above. */
 .diff-foot {
   display: flex;
   align-items: baseline;
-  gap: 4px 24px;
+  gap: 4px 3ch;
   flex-wrap: wrap;
+  margin-top: 1.7em;
+  font-size: inherit;
 }
 .diff-foot a {
   margin-left: auto;
 }
-/* the ratio bar: a minimap of the table above — one segment per row, in row order, amber where
-   the stacks split. Own full-width row above the counts (order -1 beats the flex flow; flex-basis
-   100% keeps the swap link's auto-margin working on the counts row). */
-.diff-foot .ratio {
+/* the ratio minimap: one glyph per row, in row order, the CLI's no-color vocabulary — amber ~
+   where the stacks split, faint = where they share. Own full-width row above the counts
+   (order -1 beats the flex flow; flex-basis 100% keeps the swap link's auto-margin working). */
+.diff-foot .diff-map {
   order: -1;
   flex-basis: 100%;
-  display: flex;
-  gap: 3px;
-  height: 3px;
-  margin-bottom: 10px;
+  letter-spacing: 0.35em;
+  user-select: none;
 }
-.diff-foot .ratio i {
-  flex: 1;
-  border-radius: 1px;
+.diff-foot .diff-map i {
+  font-style: normal;
 }
-.diff-foot .ratio .d {
-  background: var(--accent);
+.diff-foot .diff-map .d {
+  color: var(--accent);
 }
-.diff-foot .ratio .s {
-  background: var(--border-raised);
+.diff-foot .diff-map .s {
+  color: var(--faint);
 }
 /* secondary "make your own" CTA under the profile foot — dimmer than the contextual command
    above it (faint label, muted command) so it reads as the quieter, second-rank action */
@@ -487,31 +490,29 @@ a {
   color: var(--muted);
   font-weight: 400;
 }
-/* inline "diff vs <you>" form — elevated to a raised panel (it is the page's second action, and
-   the diff is the product's whole point). The input stays a bare hairline-underlined slot; focus
-   is signalled by the caret + the accent underline (a hairline→accent step well over 3:1 in both
-   themes), so no ring on a text slot. */
+/* inline "diff vs <you>" form — the transcript's next prompt line, where you type your own
+   handle. The input stays a bare hairline-underlined slot; focus is signalled by the caret + the
+   accent underline (a hairline→accent step well over 3:1 in both themes), so no ring on a text
+   slot. */
 .diff-cta {
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 360px;
-  margin-top: 14px;
-  padding: 11px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border-raised);
-  border-radius: var(--radius-ctrl);
+  max-width: 420px;
 }
 .diff-cta label {
   display: flex;
-  align-items: center;
-  gap: 2px;
+  align-items: baseline;
+  /* flex items swallow the literal spaces between "$", "diff vs" and the slot — the 1ch gap is
+     the mono space the transcript line would have typed */
+  gap: 0 1ch;
   flex: 1;
+  min-width: 0;
   color: var(--muted);
 }
 .diff-cta .you {
   font: inherit;
-  /* ≥16px kills iOS Safari's focus auto-zoom; the step above the 13px cta line reads as
+  /* ≥16px kills iOS Safari's focus auto-zoom; the step above the session's 14px line reads as
      "this is the interactive slot" */
   font-size: 16px;
   color: var(--text);
@@ -523,7 +524,6 @@ a {
   flex: 1;
   width: 12ch;
   min-width: 0;
-  margin-left: 6px;
 }
 .diff-cta .you::placeholder {
   color: var(--faint);
@@ -567,59 +567,64 @@ a {
   }
 }
 
-/* ---- 3-column diff ---- */
+/* ---- 3-column diff (session register: real table bones, transcript dress) ---- */
 .diff {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  margin-top: 6px;
+  margin-top: 1.7em;
+  font-family: var(--font-mono);
 }
+/* column heads: the handles, lowercase faint — a transcript labels its columns in its own case */
 .diff thead td,
 .diff thead th {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: inherit;
+  font-weight: 400;
   text-align: left;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--faint);
-  padding-bottom: 12px;
+  padding-bottom: 0.4em;
 }
 /* Under table-layout:fixed, column widths come from the FIRST row — these thead cells — so the
-   30/35/35 split must live here (tbody .k/.theirs/.yours widths alone are ignored by fixed layout).
+   26/37/37 split must live here (tbody .k/.theirs/.yours widths alone are ignored by fixed layout).
    Long handles ellipsize instead of wrapping char-by-char; the full handle stays in the h1 + title. */
 .diff thead td {
-  width: 30%;
+  width: 26%;
 }
 .diff thead th {
-  width: 35%;
+  width: 37%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.diff tbody tr {
-  border-bottom: 1px solid var(--hairline);
+/* phones: a 26% label column breaks "Multiplexer" mid-word — give the labels enough for the
+   longest one-word label PLUS the dot's 15px first-line indent, and tighten the gutters.
+   36% of a 334px column − 1ch gutter − 15px dot ≈ 11.5ch: "Multiplexer" (11ch) keeps one line. */
+@media (max-width: 430px) {
+  .diff thead td {
+    width: 36%;
+  }
+  .diff thead th {
+    width: 32%;
+  }
+  table.diff td,
+  table.diff th {
+    padding-right: 1ch;
+  }
 }
-.diff tbody tr:last-child {
-  border-bottom: 0;
-}
-.diff td,
-.diff th {
-  padding: 11px 0;
+table.diff td,
+table.diff th {
+  padding: 0 2ch 0 0;
   vertical-align: baseline;
   overflow-wrap: anywhere;
 }
+table.diff td:last-child,
+table.diff th:last-child {
+  padding-right: 0;
+}
 .diff .k {
-  font-family: var(--font-mono);
-  font-weight: 500;
+  font-weight: 400;
   text-align: left;
   color: var(--muted);
-  /* same caps ledger register as .spec .k */
-  font-size: 11px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  width: 30%;
-  padding-right: var(--sp-sm);
   /* Hanging indent: when a two-word label ("Version Manager") wraps on a narrow screen, its second
      line aligns under the first word instead of falling back under the amber dot. text-indent
      cancels the padding on line 1, so the dot + first line don't move (no change on desktop or
@@ -627,23 +632,13 @@ a {
   padding-left: 15px;
   text-indent: -15px;
 }
-/* narrow screens: the caps ledger labels give back a little tracking so fewer of them wrap
-   ("Window Manager", "Version Manager"). After the .k rules in source so the override wins. */
-@media (max-width: 430px) {
-  .spec .k,
-  .diff .k {
-    letter-spacing: 0.1em;
-  }
-}
 .diff .theirs,
 .diff .yours {
-  font-family: var(--font-mono);
-  font-size: 15px;
   color: var(--text);
-  width: 35%;
+  font-variant-numeric: tabular-nums;
 }
 /* yours left-aligned at its tab stop (KICKOFF directive + DESIGN scan-edge decision, 2026-06-29) —
-   all three columns share one left edge, like the profile spec sheet. */
+   all three columns share one left edge, like the profile readout. */
 .diff .yours {
   text-align: left;
 }
@@ -675,15 +670,45 @@ a {
   visibility: hidden;
 }
 /* extras under the diff — informational only: free-form labels don't diff, so they render
-   dimmed, uncounted, and never amber */
+   dimmed, uncounted, and never amber. Session dress: handle column aligned with the readout's
+   26% label column, no rules, no caps. */
+.x-h {
+  font-family: var(--font-mono);
+  font-size: inherit;
+  font-weight: 400;
+  color: var(--faint);
+  margin: 1.7em 0 0;
+}
+.extras-dim {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-family: var(--font-mono);
+}
+table.extras-dim td,
+table.extras-dim th {
+  padding: 0 2ch 0 0;
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+}
+.extras-dim .k {
+  width: 26%;
+  font-weight: 400;
+  text-align: left;
+  color: var(--faint);
+}
 .extras-dim .v {
   color: var(--muted);
+  padding-right: 0;
 }
-/* align the extras' handle column with the diff table's 30% label column above it (the .spec
-   default is 34%, 40% on narrow screens — tuned for profile labels, not this page) */
-.extras-dim .k {
-  width: 30%;
-  overflow-wrap: anywhere;
+.extras-dim .v a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
+  transition: border-bottom-color 150ms ease;
+}
+.extras-dim .v a:hover {
+  border-bottom-color: var(--accent);
 }
 
 /* ---- empty / 404 / nudge states ---- */
@@ -798,6 +823,39 @@ a {
     color: var(--text);
   }
 }
+
+/* ---- profile-session overrides of shared components (after their base rules — see .session) ---- */
+/* the h1 rides inline in the breadcrumb — undo the display-handle dress (.handle base, kept for
+   the empty/404 state) piece by piece */
+.url .handle {
+  display: inline;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: 0;
+  color: var(--text);
+}
+/* the session's commands are the same copy control as everywhere else, undressed to a typed line */
+.session .install {
+  display: inline;
+  font-size: inherit;
+  line-height: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  border-radius: 2px;
+}
+.session .install[data-copy-ready]:focus-visible {
+  outline-offset: 4px;
+}
+/* a live-but-empty profile keeps the transcript's own type size and rhythm */
+.session .empty-msg {
+  font-size: inherit;
+  margin: 1.7em 0 0;
+}
+
 .nudge {
   margin-top: 28px;
   font-family: var(--font-mono);
@@ -1000,7 +1058,7 @@ a {
     padding-top: 120px;
   }
 }
-/* dress shared with .group-h (see the spec-sheet section); only the landing margin lives here */
+/* base dress defined in the section-label block above; only the landing margin lives here */
 .example-label {
   margin: 48px 0 18px;
 }
@@ -1019,93 +1077,67 @@ a {
   height: 1px;
   background: var(--hairline);
 }
-/* One plated-figure card, two wearers: .sample frames the landing PREVIEWS; .sheet frames the
-   live profile document (Profile.astro wraps it when not in example mode). Same frame, ticks,
-   and padding — the landing card is an honest miniature of the real page. */
-.sample,
-.sheet {
+/* The plated-figure card: .sample frames the landing PREVIEWS — its only wearer since both live
+   documents became transcripts (the profile 2026-08-24, the diff the same day). The frame keeps
+   the previews reading as figures in the landing's spec-sheet narrative. */
+.sample {
   position: relative;
   border: 1px solid var(--border-raised);
   border-radius: var(--radius-card);
   background: var(--surface);
-  /* less inset on narrow screens so the spec sheet keeps its width */
+  /* less inset on narrow screens so the readout keeps its width */
   padding: clamp(20px, 5vw, 28px) clamp(18px, 5vw, 24px);
 }
 /* registration ticks: two corner marks (top-left + bottom-right) over the hairline frame — the
    card reads as a plated figure in a spec sheet. Decorative pseudos only; no markup, no hit area. */
 .sample::before,
-.sample::after,
-.sheet::before,
-.sheet::after {
+.sample::after {
   content: "";
   position: absolute;
   width: 12px;
   height: 12px;
   pointer-events: none;
 }
-.sample::before,
-.sheet::before {
+.sample::before {
   top: -1px;
   left: -1px;
   border-top: 1px solid var(--muted);
   border-left: 1px solid var(--muted);
 }
-.sample::after,
-.sheet::after {
+.sample::after {
   bottom: -1px;
   right: -1px;
   border-bottom: 1px solid var(--muted);
   border-right: 1px solid var(--muted);
 }
-.sample .handle {
-  font-size: clamp(34px, 6vw, 42px);
-}
-/* truncation marker under the sample spec table — the preview is honest about being a preview.
-   Same caps ledger register as the row labels; hairline above continues the table rhythm. */
+/* truncation marker under the sample readout — the preview is honest about being a preview.
+   A faint transcript line, matching the session voice (no rules — transcripts have no hairlines). */
 .spec-more {
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
   color: var(--faint);
-  border-top: 1px solid var(--hairline);
-  padding-top: 11px;
+  margin-top: 4px;
 }
-/* Both cards (landing .sample, live .sheet) frame their tables in extra padding, so on phones the
-   in-card content is tighter than a full-bleed page would be. Trim the side padding and rebalance
-   the in-card diff columns: a slightly wider label so the one long single-word label
-   ("Multiplexer") stays on its value's line, but value columns kept wide enough that two full
-   mono values (e.g. "macOS 15.2") don't abut. */
+/* The sample card frames its content in extra padding, so on phones the in-card content is
+   tighter than a full-bleed page would be — trim the side padding, and rebalance the in-card
+   diff columns (a slightly wider label column so one-word labels keep one line). */
 @media (max-width: 430px) {
-  .sample,
-  .sheet {
+  .sample {
     padding-left: 12px;
     padding-right: 12px;
   }
-  /* 35%: the widest one-line label ("Multiplexer" + its dot) measures ~100px at 390px viewports —
-     34% left it 3px short and broke the word mid-glyph. Values keep 32.5% each: "Catppuccin"
-     (~90px) still fits one line, so multi-word values wrap between words, not inside them. */
-  .sample .diff thead td,
-  .sample .diff .k,
-  .sheet .diff thead td,
-  .sheet .diff .k {
-    width: 35%;
+  /* the card trims another 24px, so the label column needs a touch more than the full-bleed
+     page: 38% of ~310px − gutter − 15px dot ≈ 11.2ch keeps "Multiplexer" one line, and 31%
+     values (~10.4ch) keep "Catppuccin" one line so multi-word values wrap between words */
+  .sample .diff thead td {
+    width: 38%;
   }
-  .sample .diff thead th,
-  .sheet .diff thead th {
-    width: 32.5%;
+  .sample .diff thead th {
+    width: 31%;
   }
   /* the transcript's longest line (the confirm prompt) overflows a 390px card by a few px at
      13px — one size down keeps every line visible without the scroll */
   .term {
     font-size: 12px;
-  }
-  /* trailing gap so a value that fills the left column (e.g. "Claude Code") keeps clear of the
-     right column — it wraps like the other two-word values instead of abutting */
-  .sample .diff .theirs,
-  .sheet .diff .theirs {
-    padding-right: var(--sp-sm);
   }
 }
 /* Per-artifact card overrides — after every base .sample rule so the cascade stays ascending. */
@@ -1113,13 +1145,6 @@ a {
    not a mostly-empty plate (the section label rule still spans the full column above it) */
 .artifact-term .sample {
   max-width: 640px;
-}
-@media (min-width: 1080px) {
-  /* the preview's rows all carry one-word labels (two-word keys are elided), so the narrow card
-     gives the label column back to the values — the 27ch dotfiles URL keeps one line */
-  .artifact-profile .sample {
-    --label-col: 26%;
-  }
 }
 .site-foot {
   margin-top: 72px;
@@ -1138,7 +1163,7 @@ a {
 .site-foot a:hover {
   color: var(--accent);
 }
-/* Footer eyebrow — same register as the section labels (.group-h/.example-label). The border-top
+/* Footer eyebrow — same register as the section labels (.example-label). The border-top
    above is the divider, so it carries no trailing rule of its own. */
 .foot-h {
   font-size: 11px;
