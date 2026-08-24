@@ -1,58 +1,65 @@
 ---
-// The profile spec sheet — handle + key->value stack + extras + footer, per DESIGN.md.
+// The profile page as a terminal session ("Transcript", decided 2026-08-24 from the /proto/profile
+// prototype run — see DESIGN.md → Components & States): the command that produced the page sits on
+// top, the stack is its output on one shared tab stop, and the next prompt line is the diff. No
+// plate — the page IS the transcript. (The diff page followed on 2026-08-24 — "Session" — so no
+// live document wears a plate any more; .sample remains the landing previews' frame.)
 // All values are user-controlled: Astro auto-escapes every {value}; URL values are gated through
 // safeHref before becoming an href (escaping does not neutralize a javascript: scheme).
 //
 // `example`: when this is the landing-page sample (not the page's own profile), render the handle
-// and group headers as non-headings so they don't pollute the document outline / emit a 2nd <h1>.
-// Row labels are real <th scope="row"> for screen-reader header association.
+// as a non-heading so it doesn't pollute the document outline / emit a 2nd <h1>, keep the typed
+// command a plain line (no copy control inside the preview card), and omit the interactive foot.
 import { KEY_LABELS, type Profile } from "@ymmv/shared";
 import { displayUrl, urlTitle } from "../lib/display-value.ts";
 import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
-import Sheet from "./Sheet.astro";
 import { safeHref } from "../lib/safe-href.ts";
 
 interface Props {
   profile: Profile;
   example?: boolean;
   /* more: landing preview only — the count of rows elided from the sample, rendered as an honest
-     "+ N more" marker under the stack table. Never set on a real profile page. */
+     "+ N more" marker under the readout. Never set on a real profile page. */
   more?: number;
 }
 const { profile, example = false, more = 0 } = Astro.props;
 const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
-// spec-sheet revision stamp: date part only (the wire carries a full ISO timestamp)
+// session revision stamp: date part only (the wire carries a full ISO timestamp)
 const revDate = updated_at?.slice(0, 10);
-
-const HandleTag = example ? "p" : "h1";
-const GroupTag = example ? "p" : "h2";
 ---
 
-{/* Sheet plates the document on live pages only; the interactive foot stays outside the plate */}
-<Sheet example={example}>
-<div class="url">{example ? "ymmv.fyi" : <a href="/">ymmv.fyi</a>}/<b>{handle}</b></div>
-<HandleTag class="handle">{handle}</HandleTag>
-{revDate && (
-  <p class="rev">updated <time datetime={updated_at}>{revDate}</time></p>
-)}
+<div class="session">
+  {/* the command that produced this page — on live pages it is also the copy control */}
+  <p class="cmdline">
+    {example ? (
+      <><span class="prompt">$ </span><b>npx ymmv-cli@latest {handle}</b></>
+    ) : (
+      <InstallCommand command={`npx ymmv-cli@latest ${handle}`} />
+    )}
+  </p>
 
-{
-  hasStack && (
-    <>
-      <GroupTag class="group-h">Stack</GroupTag>
-      <table class="spec">
-        <tbody>
+  {/* the output opens with the page's address; the handle IS the h1, in the shell's own register */}
+  {example ? (
+    <p class="url">ymmv.fyi/<b>{handle}</b></p>
+  ) : (
+    <div class="url"><a href="/">ymmv.fyi</a>/<h1 class="handle">{handle}</h1></div>
+  )}
+
+  {/* one grid for stack + extras, so every value shares a single tab stop (like the CLI's padEnd);
+      a blank line separates the groups — no group headers, transcripts don't have them */}
+  {(hasStack || hasExtras) && (
+    <div class="readout">
+      {hasStack && (
+        <dl class="rows">
           {entries.map((e) => {
             const href = safeHref(e.value);
             return (
-              <tr>
-                <th scope="row" class="k">
-                  {KEY_LABELS[e.key]}
-                </th>
-                <td class="v">
+              <div class="row">
+                <dt>{KEY_LABELS[e.key]}</dt>
+                <dd>
                   {href ? (
                     <a
                       href={href}
@@ -65,31 +72,21 @@ const GroupTag = example ? "p" : "h2";
                   ) : (
                     e.value
                   )}
-                </td>
-              </tr>
+                </dd>
+              </div>
             );
           })}
-        </tbody>
-      </table>
-      {example && more > 0 && <p class="spec-more">+ {more} more</p>}
-    </>
-  )
-}
-
-{
-  hasExtras && (
-    <>
-      <GroupTag class="group-h">Extras</GroupTag>
-      <table class="spec">
-        <tbody>
+        </dl>
+      )}
+      {hasStack && hasExtras && <div class="readout-gap" aria-hidden="true"></div>}
+      {hasExtras && (
+        <dl class="rows">
           {extras.map((x) => {
             const href = safeHref(x.value);
             return (
-              <tr>
-                <th scope="row" class="k">
-                  {x.label}
-                </th>
-                <td class="v">
+              <div class="row">
+                <dt>{x.label}</dt>
+                <dd>
                   {href ? (
                     <a
                       href={href}
@@ -102,62 +99,56 @@ const GroupTag = example ? "p" : "h2";
                   ) : (
                     x.value
                   )}
-                </td>
-              </tr>
+                </dd>
+              </div>
             );
           })}
-        </tbody>
-      </table>
+        </dl>
+      )}
+    </div>
+  )}
+  {example && more > 0 && <p class="spec-more">+ {more} more</p>}
+
+  {!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
+
+  {revDate && (
+    <p class="rev">updated <time datetime={updated_at}>{revDate}</time></p>
+  )}
+
+  {!example && (
+    <>
+      <div class="foot term-foot">
+        <p class="cmdline"><InstallCommand /><span class="cmt"># make yours</span></p>
+        {/* action → the profile page, whose ?you= handler 302s to the diff: a native
+            (script-failed) submit works from anywhere this form renders, including /vs/ nudges */}
+        <form class="diff-cta" action={`/${handle}`} data-diff-vs={handle}>
+          <label>
+            <span class="prompt">$ </span>diff vs{" "}
+            <input
+              class="you"
+              name="you"
+              placeholder="<you>"
+              maxlength="39"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label={`your handle — diff ${handle} against you`}
+            />
+          </label>
+          <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
+        </form>
+      </div>
+      <noscript>
+        {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
+        <style is:inline>
+          .diff-cta {
+            display: none;
+          }
+        </style>
+        <p class="cta">
+          diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
+        </p>
+      </noscript>
     </>
-  )
-}
-
-{!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
-</Sheet>
-
-{
-  example ? (
-    <div class="foot">$ <b>npx ymmv-cli@latest {handle}</b></div>
-  ) : (
-    <div class="foot"><InstallCommand command={`npx ymmv-cli@latest ${handle}`} /></div>
-  )
-}
-{!example && (
-  <>
-    <p class="cta">
-      make yours <Arrow /> <b>npx ymmv-cli@latest</b>
-    </p>
-    {/* action → the profile page, whose ?you= handler 302s to the diff: a native (script-failed)
-        submit works from anywhere this form renders, including the /vs/ nudge page */}
-    <form class="cta diff-cta" action={`/${handle}`} data-diff-vs={handle}>
-      <label>
-        <svg class="fork" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path d="M1 9.5h12M4.5 9.5 8 4.5h5" stroke="currentColor" stroke-width="1.2" />
-        </svg>
-        diff vs{" "}
-        <input
-          class="you"
-          name="you"
-          placeholder="<you>"
-          maxlength="39"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-          aria-label={`your handle — diff ${handle} against you`}
-        />
-      </label>
-      <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
-    </form>
-    <noscript>
-      {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
-      <style is:inline>
-        .diff-cta {
-          display: none;
-        }
-      </style>
-      <p class="cta">
-        diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
-      </p>
-    </noscript>
-  </>
-)}
+  )}
+</div>

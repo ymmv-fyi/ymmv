@@ -4,17 +4,21 @@ import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 // light bg #F6F3EA = rgb(246,243,234), dark accent #FFAB2E = rgb(255,171,46).
 
 test.describe("profile render", () => {
-  test("renders the handle, spec sheet and footer", async ({ page }) => {
+  test("renders the command line, handle, readout and footer", async ({ page }) => {
     const res = await page.goto("/antfu");
     expect(res?.status()).toBe(200);
     // URL-as-title, pinned exactly (a partial revert to the old "antfu - ymmv.fyi" shape would
     // still match a loose /antfu/ regex)
     await expect(page).toHaveTitle("ymmv.fyi/antfu");
     await expect(page.locator("h1.handle")).toContainText("antfu");
-    const spec = page.locator("table.spec").first();
-    await expect(spec).toContainText("Editor");
-    await expect(spec).toContainText("VS Code");
-    await expect(page.locator(".foot")).toContainText("npx ymmv-cli@latest antfu");
+    // the session opens with the command that produced the page
+    await expect(page.locator(".session > .cmdline")).toContainText("npx ymmv-cli@latest antfu");
+    const readout = page.locator(".readout");
+    await expect(readout).toContainText("Editor");
+    await expect(readout).toContainText("VS Code");
+    // the foot is the make-yours prompt line, not the handle command (that one sits on top)
+    await expect(page.locator(".foot")).toContainText("npx ymmv-cli@latest");
+    await expect(page.locator(".foot")).toContainText("# make yours");
   });
 
   test("the diff form navigates to the diff and remembers the entered handle", async ({ page }) => {
@@ -39,32 +43,33 @@ test.describe("profile render", () => {
     await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
   });
 
-  test("the foot command click-copies to the clipboard", async ({ page, context }) => {
+  test("both session commands click-copy to the clipboard", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/antfu");
+    // the opening command copies the view invocation (handle included)…
+    await page.click(".session > .cmdline .install");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      "npx ymmv-cli@latest antfu",
+    );
+    // …the foot's make-yours line copies the bare publish command
     await page.click(".foot .install");
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
-    expect(copied).toBe("npx ymmv-cli@latest antfu");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli@latest");
   });
 
-  test("a 1-key edge profile still renders a spec table (no awkward empty block)", async ({
+  test("a 1-key edge profile still renders a readout (no awkward empty block)", async ({
     page,
   }) => {
-    // xsstest has one curated entry (dotfiles) + extras — the table must still render.
+    // xsstest has one curated entry (dotfiles) + extras — the readout must still render.
     await page.goto("/xsstest");
-    await expect(page.locator("table.spec").first()).toBeVisible();
+    await expect(page.locator(".readout")).toBeVisible();
   });
 
-  test("plates the live document in exactly one sheet, with the preview marker suppressed", async ({
-    page,
-  }) => {
-    // The example/live duality (Sheet.astro): a live page losing its plate, or gaining a second
-    // one, renders wrong silently — no other locator touches .sheet.
+  test("the live session is unplated, with the preview marker suppressed", async ({ page }) => {
+    // The transcript decision (2026-08-24): no .sheet on a profile page — the plate is the diff
+    // document's dress. A profile regaining a plate renders wrong silently.
     await page.goto("/antfu");
-    await expect(page.locator(".sheet")).toHaveCount(1);
+    await expect(page.locator(".sheet")).toHaveCount(0);
     await expect(page.locator(".spec-more")).toHaveCount(0); // example-only marker
-    // the interactive foot sits OUTSIDE the plate
-    await expect(page.locator(".sheet .install")).toHaveCount(0);
   });
 
   test("the canonical names the profile path even when a query string rides along", async ({
@@ -103,7 +108,7 @@ test.describe("landing", () => {
     page,
   }) => {
     await page.goto("/");
-    const stack = page.locator("table.spec").first();
+    const stack = page.locator(".readout").first();
     await expect(stack).toContainText("Dotfiles");
     await expect(stack).toContainText("github.com/octocat/dotfiles");
   });
@@ -112,7 +117,7 @@ test.describe("landing", () => {
     page,
   }) => {
     await page.goto("/");
-    const stack = page.locator("table.spec").first();
+    const stack = page.locator(".readout").first();
     // truncation is real (Multiplexer is elided from the preview...)
     await expect(stack).not.toContainText("Multiplexer");
     await expect(page.locator(".spec-more")).toContainText("+ 7 more");
@@ -283,9 +288,9 @@ test.describe("routing", () => {
     // `404` reserved it returns 200 + the profile.
     const html = await page.goto("/404");
     expect(html?.status()).toBe(404);
-    // The generic not-found page, never the spec sheet a live profile renders.
+    // The generic not-found page, never the session readout a live profile renders.
     await expect(page.locator("p.empty-msg")).toContainText("no page here.");
-    await expect(page.locator("table.spec")).toHaveCount(0);
+    await expect(page.locator(".readout")).toHaveCount(0);
     await expect(page.locator("body")).not.toContainText("Neovim");
 
     const json = await request.get("/api/v1/u/404", { maxRedirects: 0 });
@@ -470,7 +475,7 @@ test.describe("install command (progressive copy button)", () => {
   }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/antfu");
-    const install = page.locator(".foot .install");
+    const install = page.locator(".session > .cmdline .install");
     await expect(install).toHaveAttribute("role", "button");
     await expect(install).toHaveAttribute("tabindex", "0");
     await expect(install).toHaveAttribute("aria-label", /Copy install command: npx ymmv-cli/);
@@ -496,7 +501,7 @@ test.describe("install command (progressive copy button)", () => {
     expect(
       await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),
     ).toBe(true);
-    const install = page.locator(".foot .install");
+    const install = page.locator(".session > .cmdline .install");
     await install.focus();
     const before = await page.evaluate(() => window.scrollY);
     await page.keyboard.press("Space");
@@ -520,7 +525,7 @@ test.describe("install command (progressive copy button)", () => {
     page,
   }) => {
     await page.goto("/antfu");
-    const install = page.locator(".foot .install");
+    const install = page.locator(".session > .cmdline .install");
     await install.focus();
     await page.keyboard.press("Tab");
     // a broadened preventDefault gate in the keydown handler would trap Tab on the control
@@ -529,7 +534,7 @@ test.describe("install command (progressive copy button)", () => {
 
   test("announces a failure when the clipboard write is denied", async ({ page }) => {
     await page.goto("/antfu");
-    const install = page.locator(".foot .install");
+    const install = page.locator(".session > .cmdline .install");
     await expect(install).toHaveAttribute("role", "button"); // wired before we break the write
     // policy-denied clipboard (NotAllowedError): the promoted control must not silently no-op
     await page.evaluate(() => {
@@ -548,7 +553,7 @@ test.describe("install command without JS", () => {
   test.use({ javaScriptEnabled: false });
   test("stays plain selectable text with no dead control", async ({ page }) => {
     await page.goto("/antfu");
-    const install = page.locator(".foot .install");
+    const install = page.locator(".session > .cmdline .install");
     await expect(install).toBeVisible();
     await expect(install).toContainText("npx ymmv-cli@latest antfu");
     // a SPAN, not a native <button> — a button revert would pass the null-attribute checks
@@ -584,7 +589,10 @@ test.describe("the 3-column diff", () => {
   test("links both handles, offers a swap, and lists extras uncompared", async ({ page }) => {
     await page.goto("/antfu/vs/bardisty");
     await expect(page).toHaveTitle("ymmv.fyi/antfu/vs/bardisty"); // URL-as-title, pinned exactly
-    await expect(page.locator(".sheet")).toHaveCount(1); // the diff document is plated too
+    // the Session decision (2026-08-24): no live document wears a plate — the diff is bare too
+    await expect(page.locator(".sheet")).toHaveCount(0);
+    // and it opens with the command that produced it
+    await expect(page.locator(".cmdline").first()).toContainText("npx ymmv-cli@latest antfu");
     await expect(page.locator("h1.url a").first()).toHaveAttribute("href", "/antfu");
     await expect(page.locator("h1.url a").nth(1)).toHaveAttribute("href", "/bardisty");
     await expect(page.locator(".foot a")).toHaveAttribute("href", "/bardisty/vs/antfu");

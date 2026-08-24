@@ -76,8 +76,9 @@ differs from Y" heading. Change one surface, mirror the other.
   heading; muted elsewhere. Also the favicon mark. The junction dot appears ONLY in field renders
   (canvas, hero SVG, OG card) where it reads as a spark at the split; at glyph/icon sizes it
   fattens the junction into a blob, so the small marks go without it.
-- **Ratio bar** (`.diff-foot .ratio`): a minimap of the diff table — one segment per row, in row
-  order, amber where the stacks split. Decorative (aria-hidden), no anchors, no text.
+- **Ratio minimap** (`.diff-foot .diff-map`): a minimap of the diff readout — one glyph per row,
+  in row order, the CLI's no-color vocabulary (`~` differs in amber, `=` same in faint).
+  Decorative (aria-hidden), no anchors.
 
 ## Landing layout
 
@@ -93,9 +94,19 @@ transcript), `// 02 your stack becomes a page` (profile preview), `// 03 diff ag
 (the diff). Each label carries a short hairline lead-in between index and title, then the
 trailing rule runs to the container edge. Each fact appears once, as the real thing. On the wide
 grid 02 and 03 pair up asymmetrically (profile narrow-left, diff wide-right) with a COMMITTED
-stagger: the 03 label drops ~120px, level with the profile card's handle, so the page reads on a
+stagger: the 03 label drops ~120px, level with the profile card's opening lines, so the page reads on a
 01 → 02 → 03 diagonal. Magnitude is load-bearing — a 56px offset was tried and read as
 misalignment; go big or go aligned. Below 1080px they stack in narrative order.
+
+Retained as-is after a design exploration (2026-08-24, `/proto/landing`, two rounds). Rejected:
+all-transcript landing ("Session" — max coherence with the live pages, but zero conventional
+landing cues), display-poster hero ("Poster" — 78vh of brand before any product), diff-form-in-
+the-hero ("Try" — the live wire only pays off for visitors who already published), 01-in-the-hero
+split ("Split" — product above the fold, but the hero got crowded and sub-1080 collapses to
+baseline anyway), margin-rail-with-amber-fork ("Road" — the motif made structural, at the price
+of the wide grid and one more ornament), and README-register ("Ledger" — fastest to content, but
+drops the field, the one brand visual). The narrative three-artifact layout with the committed
+stagger stays the decision.
 
 Sample truncation rule: a preview earns rows only until the shape is clear, then declares the rest
 with an honest `+ N more` marker (`.spec-more`). The diff shows in full — it is the product.
@@ -114,18 +125,41 @@ the identity.
 
 ## Components & States
 
-- **Spec sheet** (`table.spec`): caps 11px labels at `--label-col`, 15px mono values on shared tab
-  stops, hairline rows. Group headers (`.group-h`) carry a trailing hairline rule to the column
-  edge — the same section-label dress as the landing's `.example-label`. URL values render
-  scheme-stripped with the full URL in `title`, gated through `safeHref`. The live profile
-  document is plated in a `.sheet` card (same frame + registration ticks as the landing's
-  `.sample`); the interactive foot (install pill, make-yours, diff-vs) sits OUTSIDE the plate —
-  raised controls on a raised surface would lose their lift.
-- **Diff** (`table.diff`): 30/35/35 fixed layout set on the thead; both differing values amber +
-  label dot (presence, not just hue — WCAG 1.4.1) + sr-only "differs:/same:" prefixes; missing
-  side is an em-dash glyph; extras render dimmed below, uncompared and never amber. Like the
-  profile, the live diff document (heading, table, foot, extras) is plated in a `.sheet` card —
-  the swap link is a text link, so it stays inside the plate.
+- **Profile session** (`.session` — decided 2026-08-24 from the `/proto/profile` prototype run,
+  direction "Transcript"): the profile page is a terminal session, not a plated document. The
+  command that produced the page opens it (`$ npx ymmv-cli@latest <handle>`, also the copy
+  control), the `ymmv.fyi/<handle>` breadcrumb carries the h1 inline in the shell's register
+  (mono 600 — no display-type handle), and the stack is the command's output: one `.readout` grid
+  (`fit-content(40%)` label column, 2ch gutter) so stack AND extras share a single value tab stop,
+  groups separated by a blank line — no group headers, no hairline rows, no plate, 14px/1.7. URL
+  values render scheme-stripped with the full URL in `title`, gated through `safeHref`. The foot
+  is the session's closing prompt lines: `$ npx ymmv-cli@latest  # make yours` (copyable) and the
+  `$ diff vs <you> →` prompt form (`.diff-cta`, no longer a raised panel). `updated YYYY-MM-DD`
+  stays an absolute date (edge-cached pages must not serve stale relative times).
+  Rejected in the run: density grid ("Manifest" — lost the shared tab stop), display-type lead
+  keys ("Poster" — imposes a ranking on the user's data), profile-as-half-a-diff ("Lane" — a
+  column of em-dashes for non-diffing visitors), window/status-bar chrome ("Window"), typed-out
+  entrance motion ("Live" — ~1s tax on every load), TOML/man-page formats ("Config"/"Man"), and
+  three from-scratch systems ("Portrait"/"Colophon"/"Specimen" — strongest looks, weakest ymmv
+  identity + runtime third-party fonts).
+- **Diff session** (`table.diff` inside `.session` — decided 2026-08-24 from the `/proto/diff`
+  prototype run, direction "Session", chosen over its own riffs): the diff wears the profile's
+  transcript voice. The command that produced it opens the page (`$ npx ymmv-cli@latest <theirs>`,
+  the copy control), the "how X differs from Y" heading sits in the session register (14px, amber
+  fork glyph — the fork IS the diff), and the readout keeps real `<table>` bones restyled bare:
+  no plate, no hairline rows, no caps ledger — lowercase handle column heads in `--faint`,
+  26/37/37 fixed layout. Row semantics unchanged: both differing values amber + label dot
+  (presence, not just hue — WCAG 1.4.1) + sr-only "differs:/same:" prefixes; missing side is an
+  em-dash glyph. The ratio minimap now speaks the CLI's own no-color vocabulary — a run of
+  `~`/`=` glyphs (`.diff-map`, amber `~` where the stacks split) — above the "N differ / N shared"
+  counts and the swap link. Extras render dimmed below (`table.extras-dim`), uncompared and never
+  amber, under a lowercase "extras (not compared)" line. NOTHING live wears the `.sheet` plate any
+  more; `.sample` remains the landing previews' frame.
+  Rejected in the run: keeping the plated 30/35/35 sheet (estranged from the transcript profile),
+  one-column git-style stacking ("Unified"/"Stack" — best on phones, loses the side-by-side eye
+  line), differences-first with shared collapsed ("Focus"/"Lead" — strong page, breaks the wire
+  order), and profile-with-margin-notes ("Margin" — most compact, but makes the viewer a footnote
+  on their own comparison).
 - **Install command** (`.install`): click-to-copy prompt pill. Exactly two glyphs earn their
   place: the `$` (says "terminal") and the copy icon (says "clickable") — no decorative caret;
   three ornaments on one command is one too many. Never a dead control — the copy affordance
