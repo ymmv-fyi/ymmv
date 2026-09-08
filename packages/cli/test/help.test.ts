@@ -34,14 +34,14 @@ describe("docs/api.md stays in sync with CURATED_KEYS", () => {
   });
 });
 
-// The root README's "Auto-detected" bullet is the privacy disclosure of what the CLI reads from
+// The root README's "Auto-detection" bullet is the privacy disclosure of what the CLI reads from
 // the environment — it drifted from detectStack once (under-reporting two probed fields), so it
 // gets the same treatment: chained to DETECTED_KEYS (whose own completeness is pinned against
 // detectStack in detect.test.ts). Prose uses display labels, so the map below translates; a
 // detected key with no map entry fails loudly instead of skipping.
-describe("README Auto-detected list stays in sync with DETECTED_KEYS", () => {
+describe("README Auto-detection list stays in sync with DETECTED_KEYS", () => {
   const readme = readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
-  const bullet = readme.match(/\*\*Auto-detected\.\*\*([\s\S]*?)(?:\n- |\n\n)/)?.[1];
+  const bullet = readme.match(/\*\*Auto-detection\.\*\*([\s\S]*?)(?:\n- |\n\n)/)?.[1];
 
   const README_LABELS: Record<(typeof DETECTED_KEYS)[number], string> = {
     os: "OS",
@@ -56,8 +56,8 @@ describe("README Auto-detected list stays in sync with DETECTED_KEYS", () => {
     "ai-tool": "AI tool",
   };
 
-  it("has the Auto-detected bullet", () => {
-    expect(bullet, "the **Auto-detected.** bullet must exist in README.md").toBeTruthy();
+  it("has the Auto-detection bullet", () => {
+    expect(bullet, "the **Auto-detection.** bullet must exist in README.md").toBeTruthy();
   });
 
   it.each([...DETECTED_KEYS])("names %s", (key) => {

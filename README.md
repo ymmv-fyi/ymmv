@@ -24,7 +24,7 @@ command again. Works on macOS, Linux, Windows, and WSL.
 
 ## What you get
 
-- **Auto-detected.** It reads your OS, shell, prompt, terminal, editor, multiplexer,
+- **Auto-detection.** It reads your OS, shell, prompt, terminal, editor, multiplexer,
   version manager, window manager, browser, and AI tool from the environment and
   pre-fills the form. You confirm or edit.
 - **Nothing publishes until you confirm.** Detection only pre-fills, and `ymmv delete`
