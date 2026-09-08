@@ -7,6 +7,7 @@ import Layout from "../../../components/Layout.astro";
 import NotFound from "../../../components/NotFound.astro";
 import Profile from "../../../components/Profile.astro";
 import { readCacheControl, resolveProfile } from "../../../lib/profile-read.ts";
+import { sanitizeText } from "../../../lib/sanitize.ts";
 
 // The web diff: /<handle>/vs/<viewer> — "how <handle> differs from <viewer>". Shareable; runs the
 // shared diff(). theirs = the [handle] being viewed; mine = the [viewer] ("you").
@@ -92,7 +93,7 @@ const noindex = Boolean(theirsProfile && !diffResult);
       <>
         <Profile profile={theirsProfile} />
         {/* copy rule: no em dashes in user-facing prose — sentence break, capital opener */}
-        <p class="nudge">No ymmv profile for <bdi>{mineRaw}</bdi> yet. Publish yours to diff <Arrow /></p>
+        <p class="nudge">No ymmv profile for <bdi>{sanitizeText(mineRaw)}</bdi> yet. Publish yours to diff <Arrow /></p>
       </>
     )
   }
