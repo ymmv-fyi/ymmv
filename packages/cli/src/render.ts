@@ -70,13 +70,12 @@ const CTRL_RE = new RegExp(
   `[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${String.fromCharCode(0x7f)}-${String.fromCharCode(0x9f)}]`,
   "g",
 );
-// Unicode bidi overrides + isolates (U+202A–202E, U+2066–2069) and LRM/RLM (U+200E/200F). These
-// visually reorder text (Trojan-Source-style spoofing) without being ANSI or C0/C1, so strip them
-// too — no legitimate single-line stack value needs a directional control.
-const BIDI_RE = new RegExp(
-  `[${String.fromCharCode(0x202a)}-${String.fromCharCode(0x202e)}${String.fromCharCode(0x2066)}-${String.fromCharCode(0x2069)}${String.fromCharCode(0x200e)}${String.fromCharCode(0x200f)}]`,
-  "g",
-);
+// Unicode bidi controls (\p{Bidi_Control}: embeddings/overrides U+202A–202E, isolates U+2066–2069,
+// LRM/RLM U+200E/200F, Arabic letter mark U+061C). These visually reorder text (Trojan-Source-style
+// spoofing) without being ANSI or C0/C1, so strip them too — no legitimate single-line stack value
+// needs a directional control. Same property as the web's packages/web/src/lib/sanitize.ts
+// (duplicated on purpose; @ymmv/shared never sanitizes).
+const BIDI_RE = /\p{Bidi_Control}/gu;
 
 /** Neutralize an untrusted value for terminal display: strip ANSI + control + bidi chars. */
 export function sanitizeValue(value: string): string {

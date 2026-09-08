@@ -33,6 +33,12 @@ describe("sanitizeValue (terminal-escape injection)", () => {
     const RLO = String.fromCharCode(0x202e); // right-to-left override
     expect(sanitizeValue(`zsh${RLO}evil`)).toBe("zshevil");
   });
+  it("strips one control from each Bidi_Control range (embedding, isolate, mark, ALM)", () => {
+    const cp = (n: number) => String.fromCharCode(n);
+    expect(sanitizeValue(`a${cp(0x202a)}b${cp(0x2066)}c${cp(0x200e)}d${cp(0x061c)}e`)).toBe(
+      "abcde",
+    );
+  });
 });
 
 describe("useColor", () => {
