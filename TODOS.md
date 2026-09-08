@@ -2,13 +2,6 @@
 
 ## Web
 
-### Full bidi/Trojan-source sanitizer for web surfaces
-**Priority:** P3
-The CLI strips bidi controls (U+202A–202E, U+2066–2069, LRM/RLM) from every untrusted value;
-the web only isolates the diff-extras line (`<bdi>`) and the empty-state handle. A shared
-sanitizer applied at render time would close the remaining within-value spoofing gap on all
-web text surfaces.
-
 ### `=`-containing extras labels are unaddressable by `ymmv unset --extra`
 **Priority:** P4
 The write path now trims extras labels/values and rejects empty ones, so padded and blank labels
@@ -98,6 +91,14 @@ the publish-resilience eng review outside voice (2026-07-18).
 keying reuse on a hash of dist+seed.sql.
 
 ## Completed
+
+### Full bidi/Trojan-source sanitizer for web surfaces
+**Done 2026-08-29.** Web-local `packages/web/src/lib/sanitize.ts` strips `\p{Bidi_Control}` at
+render: every profile/diff value goes through `UntrustedValue.astro` (escape + strip + safeHref +
+shorten-only-when-linked), diff cells get a bidi collide rung (values differing only by a control
+render with U+FFFD, never two equal strings), and the 404/nudge handles are stripped too. The CLI
+`BIDI_RE` moved to the same property (adds U+061C). No `@ymmv/shared` helper on purpose: shared
+stays wire-schema-only.
 
 ### og:image share card
 **Done 2026-07-07** (design-system redesign, `7982d44`). A static brand card ships at
