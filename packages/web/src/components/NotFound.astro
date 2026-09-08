@@ -1,13 +1,17 @@
 ---
 // Empty / 404 state (DESIGN.md → Components & States): friendly "no ymmv profile for <handle>"
 // + the one-line install. With no handle it's a generic 404.
-// `handle` is the raw (unresolved) URL segment — user-controlled, so it renders auto-escaped.
+// `handle` is the raw (unresolved) URL segment — user-controlled, so it renders auto-escaped and
+// with bidi controls stripped. A segment made only of controls has nothing left to name, so it
+// takes the generic branch.
+import { sanitizeText } from "../lib/sanitize.ts";
 import InstallCommand from "./InstallCommand.astro";
 
 interface Props {
   handle?: string;
 }
 const { handle } = Astro.props;
+const shown = handle ? sanitizeText(handle) : "";
 ---
 
 <div class="empty">
@@ -15,11 +19,11 @@ const { handle } = Astro.props;
     <path d="M0 19h72M18 19 34 7h38" stroke="currentColor" stroke-width="1.2" />
   </svg>
   {
-    handle ? (
+    shown ? (
       <>
-        <h1 class="handle">{handle}</h1>
+        <h1 class="handle">{shown}</h1>
         <p class="empty-msg">
-          no ymmv profile for <span class="h">{handle}</span> — yet.
+          no ymmv profile for <span class="h">{shown}</span> — yet.
         </p>
       </>
     ) : (

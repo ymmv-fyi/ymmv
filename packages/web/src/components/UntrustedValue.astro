@@ -1,0 +1,38 @@
+---
+// The one place an untrusted profile value becomes visible text. Astro auto-escapes it (HTML),
+// safeHref gates the scheme (a javascript: href fires on click even when escaped), sanitizeText
+// strips bidi controls (Trojan-Source reordering), and displayUrl drops the boring "https://".
+//
+// Display policy: shorten ONLY when the value is a real link. A value that fails the URL parse but
+// starts with "https://" (e.g. "https://evil com") is not a link, so it keeps its scheme and renders
+// as honest, malformed text instead of borrowing a link's look. Hrefs are never sanitized: safeHref
+// serializes through URL, which percent-encodes any control.
+//
+// `bdi`: wrap the text in <bdi> so a genuinely RTL value still isolates from its neighbours (the
+// diff extras "label = value" line).
+import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { safeHref } from "../lib/safe-href.ts";
+import { sanitizeText } from "../lib/sanitize.ts";
+
+interface Props {
+  value: string;
+  bdi?: boolean;
+}
+const { value, bdi = false } = Astro.props;
+const href = safeHref(value);
+const text = sanitizeText(href ? displayUrl(value) : value);
+const fullUrl = href ? urlTitle(value) : undefined;
+const title = fullUrl && sanitizeText(fullUrl);
+---
+
+{
+  href ? (
+    <a href={href} rel="nofollow ugc noopener noreferrer" target="_blank" title={title}>
+      {bdi ? <bdi>{text}</bdi> : text}
+    </a>
+  ) : bdi ? (
+    <bdi>{text}</bdi>
+  ) : (
+    text
+  )
+}

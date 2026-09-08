@@ -6,7 +6,8 @@
 // no-color vocabulary (~/=), and extras render dimmed below.
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
 // a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
-// Values are user-controlled → rendered via Astro auto-escaping.
+// Values are user-controlled → rendered via Astro auto-escaping and bidi-control stripping
+// (lib/sanitize.ts); extras go through UntrustedValue.
 //
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
 // only on differing rows (presence, not just hue), and each row carries a visually-hidden
@@ -18,9 +19,10 @@
 // uncompared-extras block. A live diff passes no `example`.
 import type { DiffResult } from "@ymmv/shared";
 import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { sanitizeText } from "../lib/sanitize.ts";
 import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
-import { safeHref } from "../lib/safe-href.ts";
+import UntrustedValue from "./UntrustedValue.astro";
 
 interface Props {
   result: DiffResult;
@@ -63,15 +65,26 @@ const HeadingTag = example ? "p" : "h1";
       {
         result.rows.map((row) => {
           const differs = row.status !== "same";
-          // Never display a marked difference as two equal-looking strings: if stripping would
-          // collide the sides (https://x vs x — dotfiles compares verbatim), render both raw.
-          const collide =
+          // Never display a marked difference as two equal-looking strings: if dropping "https://"
+          // would collide the sides (https://x vs x — dotfiles compares verbatim), render both raw;
+          // if the sides differ only by bidi controls, stripping would collide them too, so mark
+          // each control visibly (U+FFFD) instead of deleting it.
+          const shortenCollide =
             row.theirs != null &&
             row.mine != null &&
             row.theirs !== row.mine &&
             displayUrl(row.theirs) === displayUrl(row.mine);
-          const cell = (v: string) => (collide ? v : displayUrl(v));
-          const cellTitle = (v: string) => (collide ? undefined : urlTitle(v));
+          const base = (v: string) => (shortenCollide ? v : displayUrl(v));
+          const bidiCollide =
+            row.theirs != null &&
+            row.mine != null &&
+            row.theirs !== row.mine &&
+            sanitizeText(base(row.theirs)) === sanitizeText(base(row.mine));
+          const cell = (v: string) => sanitizeText(base(v), { mark: bidiCollide });
+          const cellTitle = (v: string) => {
+            const full = shortenCollide ? undefined : urlTitle(v);
+            return full && sanitizeText(full);
+          };
           return (
             <tr class={differs ? "changed" : "same"}>
               <th scope="row" class="k">
@@ -122,58 +135,27 @@ const HeadingTag = example ? "p" : "h1";
     !example && hasExtras && (
       <>
         <h2 class="x-h">extras (not compared)</h2>
-        {/* Same URL treatment as the profile page (safeHref link + full-URL title). <bdi> isolates
-            each untrusted run so a bidi control in a label can't visually reorder the
-            "label = value" line (the CLI strips bidi outright; a shared web sanitizer is a
-            follow-up). */}
+        {/* Same value treatment as the profile page (UntrustedValue: safeHref link + full-URL
+            title + bidi stripping). <bdi> isolates each run so a genuinely RTL label or value
+            still can't visually reorder the "label = value" line. */}
         <table class="extras-dim">
           <tbody>
-            {result.extras.theirs.map((x) => {
-              const href = safeHref(x.value);
-              return (
-                <tr>
-                  <th scope="row" class="k">{theirs}</th>
-                  <td class="v">
-                    <bdi>{x.label}</bdi> ={" "}
-                    {href ? (
-                      <a
-                        href={href}
-                        rel="nofollow ugc noopener noreferrer"
-                        target="_blank"
-                        title={urlTitle(x.value)}
-                      >
-                        <bdi>{displayUrl(x.value)}</bdi>
-                      </a>
-                    ) : (
-                      <bdi>{displayUrl(x.value)}</bdi>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {result.extras.mine.map((x) => {
-              const href = safeHref(x.value);
-              return (
-                <tr>
-                  <th scope="row" class="k">{mine}</th>
-                  <td class="v">
-                    <bdi>{x.label}</bdi> ={" "}
-                    {href ? (
-                      <a
-                        href={href}
-                        rel="nofollow ugc noopener noreferrer"
-                        target="_blank"
-                        title={urlTitle(x.value)}
-                      >
-                        <bdi>{displayUrl(x.value)}</bdi>
-                      </a>
-                    ) : (
-                      <bdi>{displayUrl(x.value)}</bdi>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {result.extras.theirs.map((x) => (
+              <tr>
+                <th scope="row" class="k">{theirs}</th>
+                <td class="v">
+                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi />
+                </td>
+              </tr>
+            ))}
+            {result.extras.mine.map((x) => (
+              <tr>
+                <th scope="row" class="k">{mine}</th>
+                <td class="v">
+                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </>

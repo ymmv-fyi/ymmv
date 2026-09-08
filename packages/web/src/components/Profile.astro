@@ -4,17 +4,17 @@
 // top, the stack is its output on one shared tab stop, and the next prompt line is the diff. No
 // plate — the page IS the transcript. (The diff page followed on 2026-08-24 — "Session" — so no
 // live document wears a plate any more; .sample remains the landing previews' frame.)
-// All values are user-controlled: Astro auto-escapes every {value}; URL values are gated through
-// safeHref before becoming an href (escaping does not neutralize a javascript: scheme).
+// All values are user-controlled: they render through UntrustedValue (Astro escaping + bidi-control
+// stripping + safeHref scheme gate before any href); extras labels are bidi-stripped inline.
 //
 // `example`: when this is the landing-page sample (not the page's own profile), render the handle
 // as a non-heading so it doesn't pollute the document outline / emit a 2nd <h1>, keep the typed
 // command a plain line (no copy control inside the preview card), and omit the interactive foot.
 import { KEY_LABELS, type Profile } from "@ymmv/shared";
-import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { sanitizeText } from "../lib/sanitize.ts";
 import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
-import { safeHref } from "../lib/safe-href.ts";
+import UntrustedValue from "./UntrustedValue.astro";
 
 interface Props {
   profile: Profile;
@@ -54,55 +54,27 @@ const revDate = updated_at?.slice(0, 10);
     <div class="readout">
       {hasStack && (
         <dl class="rows">
-          {entries.map((e) => {
-            const href = safeHref(e.value);
-            return (
-              <div class="row">
-                <dt>{KEY_LABELS[e.key]}</dt>
-                <dd>
-                  {href ? (
-                    <a
-                      href={href}
-                      rel="nofollow ugc noopener noreferrer"
-                      target="_blank"
-                      title={urlTitle(e.value)}
-                    >
-                      {displayUrl(e.value)}
-                    </a>
-                  ) : (
-                    e.value
-                  )}
-                </dd>
-              </div>
-            );
-          })}
+          {entries.map((e) => (
+            <div class="row">
+              <dt>{KEY_LABELS[e.key]}</dt>
+              <dd>
+                <UntrustedValue value={e.value} />
+              </dd>
+            </div>
+          ))}
         </dl>
       )}
       {hasStack && hasExtras && <div class="readout-gap" aria-hidden="true"></div>}
       {hasExtras && (
         <dl class="rows">
-          {extras.map((x) => {
-            const href = safeHref(x.value);
-            return (
-              <div class="row">
-                <dt>{x.label}</dt>
-                <dd>
-                  {href ? (
-                    <a
-                      href={href}
-                      rel="nofollow ugc noopener noreferrer"
-                      target="_blank"
-                      title={urlTitle(x.value)}
-                    >
-                      {displayUrl(x.value)}
-                    </a>
-                  ) : (
-                    x.value
-                  )}
-                </dd>
-              </div>
-            );
-          })}
+          {extras.map((x) => (
+            <div class="row">
+              <dt>{sanitizeText(x.label)}</dt>
+              <dd>
+                <UntrustedValue value={x.value} />
+              </dd>
+            </div>
+          ))}
         </dl>
       )}
     </div>

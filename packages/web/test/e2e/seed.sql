@@ -1,9 +1,12 @@
 -- E2E seed for the Playwright run (local D1 only). Idempotent: re-runnable via INSERT OR REPLACE.
 -- Covers: a live profile (antfu) with a deliberately long dotfiles URL (long-value wrap), a second
 -- profile (bardisty) to diff against, a renamed-away handle (antfuold → 301 → antfu), an XSS
--- row (xsstest) to prove HTML-escaping + the safeHref javascript:-scheme guard, and a live row on
--- the RESERVED handle `404` (6006) that the write API now refuses to create — seeded directly so
--- the reserved read-gate is exercised against real data instead of an absent row.
+-- row (xsstest) to prove HTML-escaping + the safeHref javascript:-scheme guard + bidi-control
+-- stripping (U+202E built with char(8238) so no control char sits in this file) + the non-link
+-- "https://" display policy, and a live row on the RESERVED handle `404` (6006) that the write API
+-- now refuses to create — seeded directly so the reserved read-gate is exercised against real data
+-- instead of an absent row. plainuser vs collide also carry a shell value that differs ONLY by a
+-- bidi control (the diff's bidi collide rung).
 
 DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006);
 DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006);
@@ -15,7 +18,7 @@ INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_a
   (2002, 'bardisty', 'bardisty', '[{"label":"Launcher","value":"Raycast"}]',
    '2026-06-28T10:00:00.000Z', '2026-06-21T00:00:00.000Z'),
   (3003, 'xsstest', 'xsstest',
-   '[{"label":"Bio <script>alert(1)</script>","value":"<b>not bold</b> & \"quoted\""},{"label":"Evil link","value":"javascript:alert(1)"}]',
+   '[{"label":"Bio <script>alert(1)</script>","value":"<b>not bold</b> & \"quoted\""},{"label":"Evil link","value":"javascript:alert(1)"},{"label":"Bidi' || char(8238) || 'label","value":"https://github.com/' || char(8238) || 'bidi"},{"label":"Broken","value":"https://evil com"}]',
    '2026-06-28T11:00:00.000Z', '2026-06-22T00:00:00.000Z'),
   (4004, 'plainuser', 'plainuser', '[]',
    '2026-06-28T12:00:00.000Z', '2026-06-23T00:00:00.000Z'),
@@ -55,13 +58,18 @@ INSERT INTO profile_entries (github_id, key, value) VALUES
   (2002, 'version-manager', 'fnm'),
   (2002, 'ai-tool', 'Claude Code'),
   (3003, 'dotfiles', 'javascript:alert(1)'),
+  (3003, 'shell', 'zsh' || char(8238) || 'evil'),
   (4004, 'editor', 'Zed'),
   (4004, 'os', 'Windows'),
+  (4004, 'shell', 'zsh'),
   -- plainuser vs collide: dotfiles differ ONLY by scheme (verbatim compare) — exercises the
   -- diff collide guard (both cells must render raw, never as two identical stripped strings)
   (4004, 'dotfiles', 'github.com/plain/dots'),
   (5005, 'editor', 'Zed'),
   (5005, 'os', 'Windows'),
+  -- differs from plainuser's 'zsh' only by a trailing U+202E → the bidi collide rung must render
+  -- "zsh" vs "zsh" + U+FFFD, never two equal strings on a "differs" row
+  (5005, 'shell', 'zsh' || char(8238)),
   (5005, 'dotfiles', 'https://github.com/plain/dots'),
   (6006, 'editor', 'Neovim'),
   (6006, 'os', 'Arch');

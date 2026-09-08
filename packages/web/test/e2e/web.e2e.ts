@@ -616,10 +616,22 @@ test.describe("the 3-column diff", () => {
     // verbatim-compared, so the row differs; stripping would display two identical values,
     // and the collide guard must render both raw instead
     await page.goto("/plainuser/vs/collide");
-    await expect(page.locator(".foot")).toContainText("1 differ");
+    await expect(page.locator(".foot")).toContainText("2 differ"); // dotfiles + the bidi shell row
     await expect(page.locator(".foot")).toContainText("2 shared");
-    await expect(page.locator("tr.changed .theirs")).toHaveText("github.com/plain/dots");
-    await expect(page.locator("tr.changed .yours")).toHaveText("https://github.com/plain/dots");
+    const dotfiles = page.locator("tr.changed").filter({ hasText: "dotfiles" });
+    await expect(dotfiles.locator(".theirs")).toHaveText("github.com/plain/dots");
+    await expect(dotfiles.locator(".yours")).toHaveText("https://github.com/plain/dots");
+  });
+
+  test("a bidi-only difference renders a visible U+FFFD marker, never two equal strings", async ({
+    page,
+  }) => {
+    // plainuser: "zsh" vs collide: "zsh" + U+202E — stripping alone would show "zsh" twice on a
+    // "differs" row, so the bidi collide rung marks the control instead
+    await page.goto("/plainuser/vs/collide");
+    const shell = page.locator("tr.changed").filter({ hasText: "shell" });
+    await expect(shell.locator(".theirs")).toHaveText("zsh");
+    await expect(shell.locator(".yours")).toHaveText(`zsh${String.fromCodePoint(0xfffd)}`);
   });
 
   test("nudges to publish when the viewer has no profile", async ({ page }) => {
@@ -708,6 +720,82 @@ test.describe("long values + safety", () => {
     await page.goto("/xsstest");
     await expect(page.locator("body")).toContainText("<script>alert(1)</script>");
     expect(await page.locator('a[href^="javascript:"]').count()).toBe(0);
+  });
+});
+
+test.describe("bidi controls (Trojan-Source spoofing)", () => {
+  // xsstest carries U+202E (RLO) in a shell entry, an extras label and an extras URL (seed.sql);
+  // every HTML surface must strip it while the JSON API keeps the stored value verbatim.
+  // innerText + regex: toContainText normalizes whitespace, not bidi controls.
+  const BIDI = /\p{Bidi_Control}/u;
+  const RLO_ENCODED = "%E2%80%AE"; // U+202E as a URL segment
+
+  test("profile page strips controls from values, labels and link titles; href stays serialized", async ({
+    page,
+  }) => {
+    await page.goto("/xsstest");
+    const text = await page.locator(".session").innerText();
+    expect(text).not.toMatch(BIDI);
+    expect(text).toContain("zshevil");
+    expect(text).toContain("Bidilabel");
+    // safeHref serializes through URL, so the control is percent-encoded in the href, and the
+    // full-URL tooltip is stripped
+    const link = page.locator(`a[href="https://github.com/${RLO_ENCODED}bidi"]`);
+    await expect(link).toHaveCount(1);
+    await expect(link).toHaveText("github.com/bidi");
+    await expect(link).toHaveAttribute("title", "https://github.com/bidi");
+  });
+
+  test("a non-link that starts with https:// keeps its scheme and is never an <a>", async ({
+    page,
+  }) => {
+    await page.goto("/xsstest");
+    const dd = page.locator("dl.rows dd").filter({ hasText: "https://evil com" });
+    await expect(dd).toHaveCount(1);
+    expect(await dd.locator("a").count()).toBe(0);
+  });
+
+  test("JSON API returns the stored value verbatim (never sanitized)", async ({ request }) => {
+    const res = await request.get("/api/v1/u/xsstest");
+    expect(res.status()).toBe(200);
+    expect(await res.text()).toMatch(BIDI);
+  });
+
+  test("diff page strips controls from cells and extras", async ({ page }) => {
+    await page.goto("/antfu/vs/xsstest");
+    const diff = await page.locator("table.diff").innerText();
+    expect(diff).not.toMatch(BIDI);
+    const shell = page.locator("tr.changed").filter({ hasText: "shell" });
+    await expect(shell.locator(".yours")).toHaveText("zshevil");
+    const extras = await page.locator("table.extras-dim").innerText();
+    expect(extras).not.toMatch(BIDI);
+    expect(extras).toContain("Bidilabel");
+    expect(extras).toContain("https://evil com");
+  });
+
+  test("404 page strips controls from the raw URL segment", async ({ page }) => {
+    const res = await page.goto(`/${RLO_ENCODED}ghost`);
+    expect(res?.status()).toBe(404);
+    const h1 = await page.locator("h1.handle").innerText();
+    expect(h1).toBe("ghost");
+    const span = await page.locator(".empty-msg .h").innerText();
+    expect(span).not.toMatch(BIDI);
+    expect(span).toContain("ghost");
+  });
+
+  test("an all-control URL segment takes the generic 404 branch", async ({ page }) => {
+    const res = await page.goto(`/${RLO_ENCODED}`);
+    expect(res?.status()).toBe(404);
+    await expect(page.locator("h1.handle")).toHaveText("404");
+    await expect(page.locator(".empty-msg")).toHaveText("no page here.");
+  });
+
+  test("diff nudge strips controls from the viewer segment", async ({ page }) => {
+    const res = await page.goto(`/antfu/vs/${RLO_ENCODED}ghost`);
+    expect(res?.status()).toBe(200);
+    const nudge = await page.locator(".nudge").innerText();
+    expect(nudge).not.toMatch(BIDI);
+    expect(nudge).toContain("ghost");
   });
 });
 
