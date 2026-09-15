@@ -93,8 +93,9 @@ Top to bottom:
 
 - **Top strip** (`.site-top`): the wordmark as a small home link (no longer the h1) and two quiet
   links (source, api), left, clear of the fixed theme toggle.
-- **Hero**: the claim is the h1 (`.claim`, display face, 52px max: "Your dev setup, published in
-  about ten seconds."), the serif aside beneath it (`.vary`), then the lede row — the tagline
+- **Hero**: the claim is the h1 (`.claim`, display face, 52px max: "Your dev setup. Published in
+  about ten seconds." — two sentences: Martian Mono's heavy comma is a stub that reads as clipped at
+  display size, so the claim avoids it), the serif aside beneath it (`.vary`), then the lede row — the tagline
   left, the install command and the one live-profile link right (`.lede`, `.hero-cta`).
   The tagline's detection claim is exact: the CLI detects ten keys (editor, shell, terminal
   "and seven more"); font, theme and dotfiles are typed. Never claim more than `detect.ts` sets.
