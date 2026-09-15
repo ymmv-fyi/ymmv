@@ -43,9 +43,9 @@
 
 /* The landing's wide grid: overriding --content on body re-derives everything that positions off
    the column (page max-width, the theme toggle's right-edge calc) in one move. Gated to the same
-   breakpoint as the 02/03 artifact pair — below it the sections stack, and a stacked spec card
-   stretched across ~1000px reads as a gap-riddled ledger, so mid-band keeps the 680px document
-   column. */
+   breakpoint as the demo pair (terminal | page) — below it the windows stack, and a stacked
+   window stretched across ~1000px reads as a gap-riddled ledger, so mid-band keeps the 680px
+   document column. */
 @media (min-width: 1080px) {
   body.wide {
     --content: var(--content-wide);
@@ -71,6 +71,13 @@ html[data-theme="dark"] {
   --border-raised: #352e22;
   --accent: #ffab2e;
   --accent-soft: #ffab2e26;
+  /* the landing's terminal window is dark in both themes (terminals are); in dark it is simply
+     the raised surface in the page's own ink */
+  --term-bg: var(--surface);
+  --term-text: var(--text);
+  --term-dim: var(--faint);
+  --term-accent: var(--accent);
+  --term-rule: var(--hairline);
 }
 html[data-theme="light"] {
   /* printed spec sheet on warm paper. AA against BOTH --bg and --surface (2026-07-07):
@@ -86,6 +93,12 @@ html[data-theme="light"] {
   --border-raised: var(--hairline);
   --accent: #8e5d0b;
   --accent-soft: #8e5d0b1a;
+  /* the terminal window keeps the dark palette's literals on warm paper */
+  --term-bg: #0e0c09;
+  --term-text: #ece7dc;
+  --term-dim: #8a8272;
+  --term-accent: #ffab2e;
+  --term-rule: #272219;
 }
 
 * {
@@ -110,7 +123,8 @@ html[data-theme="light"] {
   color-scheme: light;
 }
 
-/* the hero field bleeds to 100vw, which can poke under a classic scrollbar — clip, never scroll */
+/* nothing bleeds past the column any more, but keep the guard: any future full-bleed element
+   must clip, never scroll */
 body {
   overflow-x: clip;
 }
@@ -863,141 +877,82 @@ table.extras-dim th {
   color: var(--accent);
 }
 
-/* ---- landing ---- */
-.hero {
-  /* one source for the wordmark's fluid size — .vary tucks itself relative to this */
-  --wm: clamp(52px, 11vw, 88px);
-  position: relative;
-  padding: 36px 0 32px;
-  margin-bottom: 8px;
+/* ---- landing (DESIGN.md → Landing layout; decided 2026-09-14, direction "House") ---- */
+/* the top strip: the wordmark as a small home link and two quiet links, left, clear of the
+   fixed theme toggle on the right */
+.site-top {
+  display: flex;
+  align-items: baseline;
+  gap: 28px;
+  padding: 8px 0 44px;
 }
-/* The divergence field sits behind the hero content, bleeding to the viewport edges. NOT
-   z-index:-1 — body paints its own opaque background (html also has one, so it doesn't propagate
-   to the canvas backdrop), and a negative-z child would paint underneath it. The field sits at 0
-   with the hero's real content lifted to 1. A 100vw bleed can poke under a classic scrollbar, so
-   body carries overflow-x: clip. */
-.hero > :not(.field) {
-  position: relative;
-  z-index: 1;
-}
-/* One source for the field's soft radial falloff (the field breathes top-right of the hero and
-   never hard-edges): the token feeds the plain rule, the -webkit- fallback for pre-standard
-   Blink/WebKit (which ignore unprefixed mask-image entirely), and the intersect variant — so the
-   supports/no-supports paths can never render different fields. */
-.field {
-  --field-radial: radial-gradient(115% 95% at 72% 10%, #000 30%, transparent 78%);
-  position: absolute;
-  z-index: 0;
-  top: -64px;
-  bottom: 0;
-  left: 50%;
-  width: 100vw;
-  transform: translateX(-50%);
-  -webkit-mask-image: var(--field-radial);
-  mask-image: var(--field-radial);
-}
-/* Fade the field's top band so lanes/forks never run under the fixed theme toggle. Gated on
-   mask-composite support: without intersect, two mask layers UNION and the linear layer would
-   reveal the whole field — worse than no fade. */
-@supports (mask-composite: intersect) {
-  .field {
-    mask-image: linear-gradient(180deg, transparent 8px, #000 96px), var(--field-radial);
-    mask-composite: intersect;
-  }
-}
-/* Wide grid: the copy holds the left column, so the field earns real presence in the right zone —
-   mask re-centered right and deeper, static motif slightly lifted from its narrow-screen whisper.
-   The radial is deliberately tight on its left flank: rules crossing under the tagline's baselines
-   read as accidental underlines, so the field must be near-zero behind the copy column.
-   Same 1080px gate as body.wide: below it the column is 680px and there is no right zone. */
-@media (min-width: 1080px) {
-  .field {
-    --field-radial: radial-gradient(95% 125% at 82% 35%, #000 32%, transparent 74%);
-  }
-  .field-static {
-    opacity: 0.55;
-  }
-  /* the copy column measure only matters once the grid widens past it — below the gate the
-     hero copy IS the 680px column */
-  .hero-copy {
-    max-width: 620px;
-  }
-}
-.field svg,
-.field canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.field-static {
-  color: var(--faint);
-  opacity: 0.45;
-}
-.field canvas {
-  display: none;
-}
-/* the script sets data-anim only when motion is allowed: canvas in, static motif out */
-.field[data-anim] canvas {
-  display: block;
-}
-.field[data-anim] .field-static {
-  display: none;
-}
-/* canvas pixels ignore forced palettes — always fall back to the currentColor SVG there.
-   (Same specificity as the data-anim rules above, later in source, so it wins the cascade.) */
-@media (forced-colors: active) {
-  .field canvas,
-  .field[data-anim] canvas {
-    display: none;
-  }
-  .field[data-anim] .field-static {
-    display: block;
-  }
-}
-
 .wordmark {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: var(--wm, clamp(52px, 11vw, 88px));
-  line-height: 0.95;
-  letter-spacing: -0.045em;
-  display: flex;
-  align-items: baseline;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: 4px;
 }
 .wordmark .dim {
   color: var(--faint);
-  font-size: 0.42em;
+  font-size: 0.7em;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-/* the human voice: one serif italic aside inside the mono machine (--font-serif ships italic-only).
-   Tucked into the wordmark's lockup: indented one wordmark advance (past the "y", under "mmv.fyi")
-   and pulled up into the descender zone so the "y" tail doesn't push it away. Both offsets are
-   fractions of --wm, so the tuck tracks the fluid wordmark size. */
+.site-nav {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+}
+.site-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
+  transition: color 150ms ease;
+}
+.site-nav a:hover {
+  color: var(--accent);
+}
+
+/* ---- hero: the claim, the one serif aside, then the lede beside the CTA ---- */
+.hero {
+  padding: 36px 0 0;
+}
+.claim {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(30px, 4vw, 52px);
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+  max-width: 15em;
+  margin-bottom: 8px;
+}
+/* the human voice: one serif italic aside inside the mono machine (--font-serif ships italic-only) */
 .vary {
   font-family: var(--font-serif);
   font-style: italic;
-  /* sized as a fraction of the wordmark so the lockup holds at every viewport: left edge indents
-     past the "y", right edge lands on the end of "fyi" (factor tuned against the rendered widths) */
-  font-size: calc(var(--wm, 88px) * 0.3625);
+  font-size: clamp(22px, 2.4vw, 30px);
   line-height: 1.2;
   color: var(--mid);
-  margin: calc(var(--wm, 88px) * -0.05) 0 20px calc(var(--wm, 88px) * 0.68);
+  margin: 0 0 26px 2px;
+}
+.lede {
+  display: grid;
+  gap: 24px 48px;
+  align-items: start;
 }
 .tagline {
   color: var(--muted);
-  font-size: 15px;
-  margin: 0 0 30px;
-  max-width: 52ch;
-  text-wrap: balance;
-}
-.tagline .lead {
-  color: var(--text);
+  font-size: 16px;
+  max-width: 48ch;
+  text-wrap: pretty;
 }
 .tagline code {
-  font-family: var(--font-mono);
-  font-size: 0.95em;
+  font: inherit;
   font-weight: 500;
   color: var(--mid);
 }
@@ -1016,135 +971,245 @@ table.extras-dim th {
 .live-link a:hover {
   color: var(--accent);
 }
+@media (min-width: 900px) {
+  .lede {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+}
 
-/* ---- 01: the CLI transcript — the terminal, shown, not described. Static illustration of the
-   real publish flow (detect -> confirm -> published URL); copy mirrors packages/cli/src output
-   (CLI parity, DESIGN.md). Amber marks exactly what the CLI renders amber: the published link. ---- */
-.term {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  /* denser than body prose — a terminal sets tighter lines, and the blank separator lines
-     already carry the vertical rhythm between output units */
-  line-height: 1.7;
-  color: var(--text);
-  /* real terminals wrap — pre-wrap over a scroll container: nothing clips on narrow screens and
-     there's no keyboard-unreachable scroll region. Detection rows are short and never wrap. */
-  white-space: pre-wrap;
+/* ---- the demo: the run in a terminal window, and the page it makes in a browser window.
+   Windows are plated figures — hairline frame, two registration ticks — the spec-sheet dress. ---- */
+.demo {
+  display: grid;
+  gap: 24px;
+  margin-top: 44px;
+  align-items: start;
 }
-.term .t-p {
-  color: var(--faint);
-  user-select: none;
-}
-.term .t-dim {
-  color: var(--faint);
-}
-.term .t-link {
-  color: var(--accent);
-}
-/* ---- 02 + 03: the artifacts. Stacked in narrative order; on the wide grid they pair up
-   asymmetrically — the diff is the product, it gets the bigger plate, and a COMMITTED stagger
-   drops the 03 label level with the profile card's handle, giving the page a 01 → 02 → 03
-   reading diagonal. Magnitude is the point: a tried 56px offset read as misalignment; at ~120px
-   it reads as composition (and the band right of 02's header carries the label instead of
-   sitting empty). ---- */
 @media (min-width: 1080px) {
-  .artifacts {
-    display: grid;
-    grid-template-columns: 5fr 7fr;
-    column-gap: 40px;
-    align-items: start;
-  }
-  .artifact-diff {
-    padding-top: 120px;
+  .demo {
+    grid-template-columns: 7fr 5fr;
+    gap: 28px;
   }
 }
-/* base dress defined in the section-label block above; only the landing margin lives here */
-.example-label {
-  margin: 48px 0 18px;
-}
-/* Numbered labels get a short lead-in rule between the index and the title (// 01 -- RUN IT ----):
-   the index span is its own flex row so the lead-in rides inside it, leaving the h2's two pseudos
-   for the existing "// " mark and the trailing rule. Whitespace in the markup keeps textContent
-   reading "01 run it". */
-.example-label .idx {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.example-label .idx::after {
-  content: "";
-  width: 24px;
-  height: 1px;
-  background: var(--hairline);
-}
-/* The plated-figure card: .sample frames the landing PREVIEWS — its only wearer since both live
-   documents became transcripts (the profile 2026-08-24, the diff the same day). The frame keeps
-   the previews reading as figures in the landing's spec-sheet narrative. */
-.sample {
+.win {
   position: relative;
+  margin: 0;
+  min-width: 0;
+  background: var(--surface);
   border: 1px solid var(--border-raised);
   border-radius: var(--radius-card);
-  background: var(--surface);
-  /* less inset on narrow screens so the readout keeps its width */
-  padding: clamp(20px, 5vw, 28px) clamp(18px, 5vw, 24px);
 }
-/* registration ticks: two corner marks (top-left + bottom-right) over the hairline frame — the
-   card reads as a plated figure in a spec sheet. Decorative pseudos only; no markup, no hit area. */
-.sample::before,
-.sample::after {
+.win::before,
+.win::after {
   content: "";
   position: absolute;
   width: 12px;
   height: 12px;
   pointer-events: none;
 }
-.sample::before {
+.win::before {
   top: -1px;
   left: -1px;
   border-top: 1px solid var(--muted);
   border-left: 1px solid var(--muted);
 }
-.sample::after {
+.win::after {
   bottom: -1px;
   right: -1px;
   border-bottom: 1px solid var(--muted);
   border-right: 1px solid var(--muted);
 }
-/* truncation marker under the sample readout — the preview is honest about being a preview.
+.win-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.win-note {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.win-url {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+.win-page {
+  padding: 18px 22px 22px;
+}
+.win-page .session {
+  font-size: 13px;
+}
+/* the terminal window: dark in both themes (see the --term-* tokens) */
+.term-win {
+  background: var(--term-bg);
+  color: var(--term-text);
+}
+.term-win .win-bar {
+  border-bottom-color: var(--term-rule);
+  color: var(--term-dim);
+}
+/* the transcript (TerminalRun.astro): a static illustration of the real publish flow; copy mirrors
+   packages/cli/src output (CLI parity). Amber marks exactly what the CLI renders amber, the
+   published link; scaffolding sits dim, typed input and values in ink. Real terminals wrap —
+   pre-wrap, so nothing clips on narrow screens and there is no keyboard-unreachable scroll region. */
+.term {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  padding: 18px 20px 22px;
+}
+.term .tl {
+  display: block;
+  position: relative;
+  padding-inline-end: 4ch;
+  min-height: 1.7em;
+}
+.term .t-p {
+  color: var(--term-dim);
+  user-select: none;
+}
+.term .t-dim {
+  color: var(--term-dim);
+}
+.term .t-link {
+  color: var(--term-accent);
+}
+/* the elapsed-time marks of a typical run, at the right edge of their lines */
+.term .tt {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-size: 11px;
+  color: var(--term-dim);
+  user-select: none;
+}
+.term .type {
+  display: inline-block;
+  vertical-align: top;
+}
+/* the intro, only while the demo carries data-play (TerminalRun's script: once per session, never
+   under reduced motion): lines land at their --t, the command types out, the page rises once the
+   run is live. Without it, the server markup is the finished run. */
+.demo[data-play] .term .tl {
+  opacity: 0;
+  animation: run-in 120ms ease-out forwards;
+  animation-delay: var(--t);
+}
+.demo[data-play] .term .type {
+  clip-path: inset(0 100% 0 0);
+  animation: run-type 900ms steps(var(--n, 19)) forwards;
+}
+.demo[data-play] .page-win {
+  opacity: 0;
+  animation: run-rise 380ms var(--ease-out) 2900ms forwards;
+}
+@keyframes run-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes run-type {
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes run-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* truncation marker under the page preview — the preview is honest about being a preview.
    A faint transcript line, matching the session voice (no rules — transcripts have no hairlines). */
 .spec-more {
   font-family: var(--font-mono);
   color: var(--faint);
   margin-top: 4px;
 }
-/* The sample card frames its content in extra padding, so on phones the in-card content is
-   tighter than a full-bleed page would be — trim the side padding, and rebalance the in-card
-   diff columns (a slightly wider label column so one-word labels keep one line). */
-@media (max-width: 430px) {
-  .sample {
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-  /* the card trims another 24px, so the label column needs a touch more than the full-bleed
-     page: 38% of ~310px − gutter − 15px dot ≈ 11.2ch keeps "Multiplexer" one line, and 31%
-     values (~10.4ch) keep "Catppuccin" one line so multi-word values wrap between words */
-  .sample .diff thead td {
-    width: 38%;
-  }
-  .sample .diff thead th {
-    width: 31%;
-  }
-  /* the transcript's longest line (the confirm prompt) overflows a 390px card by a few px at
-     13px — one size down keeps every line visible without the scroll */
-  .term {
-    font-size: 12px;
+
+/* ---- what you get: the README's list, plain text, two columns ---- */
+.get {
+  margin-top: 64px;
+}
+.get .example-label {
+  margin: 0 0 20px;
+}
+.get-list {
+  display: grid;
+  gap: 26px 48px;
+}
+@media (min-width: 900px) {
+  .get-list {
+    grid-template-columns: 1fr 1fr;
   }
 }
-/* Per-artifact card overrides — after every base .sample rule so the cascade stays ascending. */
-/* the transcript card holds ~40ch of terminal output — cap it so it reads as a terminal window,
-   not a mostly-empty plate (the section label rule still spans the full column above it) */
-.artifact-term .sample {
-  max-width: 640px;
+.get-list dt {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.get-list dd {
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 52ch;
+  text-wrap: pretty;
+}
+.get-list code,
+.later code {
+  font: inherit;
+  font-weight: 500;
+  color: var(--mid);
+  white-space: nowrap;
+}
+.get-note {
+  margin-top: 26px;
+  font-size: 13px;
+  color: var(--faint);
+}
+/* the diff, as a footnote: it needs other people, so it waits until they publish */
+.later {
+  margin-top: 44px;
+  padding: 18px 22px;
+  border: 1px solid var(--border-raised);
+  border-radius: var(--radius-card);
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 72ch;
+  text-wrap: pretty;
+}
+.later b {
+  color: var(--text);
+  font-weight: 600;
+}
+/* phones: the windows pad the column, so the transcript and the page preview trim a size */
+@media (max-width: 430px) {
+  .term {
+    font-size: 12px;
+    padding-inline: 14px;
+  }
+  .win-note {
+    display: none;
+  }
+  .win-page {
+    padding-inline: 12px;
+  }
 }
 .site-foot {
   margin-top: 72px;
@@ -1238,6 +1303,8 @@ table.extras-dim th {
    width/offset changes stay single-source. Raised controls (.theme-toggle, .install) carry their
    own accent-colored variant at their definitions. */
 .url a:focus-visible,
+.wordmark:focus-visible,
+.site-nav a:focus-visible,
 .spec .v a:focus-visible,
 .foot a:focus-visible,
 .live-link a:focus-visible,
@@ -1259,6 +1326,13 @@ table.extras-dim th {
 @media (prefers-reduced-motion: reduce) {
   .page {
     animation: none;
+  }
+  .demo[data-play] .term .tl,
+  .demo[data-play] .term .type,
+  .demo[data-play] .page-win {
+    animation: none;
+    opacity: 1;
+    clip-path: none;
   }
   .theme-toggle,
   .install,

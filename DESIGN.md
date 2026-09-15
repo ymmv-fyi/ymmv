@@ -68,58 +68,75 @@ differs from Y" heading. Change one surface, mirror the other.
 
 ## The divergence motif
 
-- **Hero field** (landing): thin horizontal roads; occasionally one forks and the branch flashes
-  amber. Static SVG in the server markup (currentColor) is the no-JS / reduced-motion /
-  forced-colors render; `src/scripts/divergence.ts` swaps in a canvas only when motion is allowed,
-  pauses off-screen and on hidden tabs, and pulls toward the install CTA on hover.
+- **Hero field**: retired from the landing (2026-09-14, see Landing layout). The static roads and
+  the amber fork survive on the OG card and the favicon; the landing's visual is the product now.
 - **Fork glyph** (`.fork`): the inline brand mark — a road and a branch. Amber on the diff
   heading; muted elsewhere. Also the favicon mark. The junction dot appears ONLY in field renders
-  (canvas, hero SVG, OG card) where it reads as a spark at the split; at glyph/icon sizes it
-  fattens the junction into a blob, so the small marks go without it.
+  (the OG card) where it reads as a spark at the split; at glyph/icon sizes it fattens the
+  junction into a blob, so the small marks go without it.
 - **Ratio minimap** (`.diff-foot .diff-map`): a minimap of the diff readout — one glyph per row,
   in row order, the CLI's no-color vocabulary (`~` differs in amber, `=` same in faint).
   Decorative (aria-hidden), no anchors.
 
 ## Landing layout
 
+Decided 2026-09-14 from `/proto/landing` (three rounds, direction "House"). The pitch is what one
+developer gets today: the CLI. The diff needs other people and the network is small, so the
+landing no longer leads with it.
+
 The landing is a display surface, not a document: it earns the wide grid (`--content-wide`,
-1080px, via `body.wide`, engaging at ≥1080px viewports — the same gate as the artifact pair, so
+1080px, via `body.wide`, engaging at ≥1080px viewports — the same gate as the demo pair, so
 narrower screens keep the 680px column) while the reading pages (profile/diff) stay on the
-canonical 680px document column. Two-zone hero on wide screens: the pitch holds a readable left column
-(`.hero-copy`, max 620px); the right zone belongs to the divergence field, whose mask re-centers
-there (and always fades out under the fixed theme toggle).
+canonical 680px document column.
 
-The narrative is three numbered artifacts, not prose-then-pictures — `// 01 run it` (the CLI
-transcript), `// 02 your stack becomes a page` (profile preview), `// 03 diff against anyone`
-(the diff). Each label carries a short hairline lead-in between index and title, then the
-trailing rule runs to the container edge. Each fact appears once, as the real thing. On the wide
-grid 02 and 03 pair up asymmetrically (profile narrow-left, diff wide-right) with a COMMITTED
-stagger: the 03 label drops ~120px, level with the profile card's opening lines, so the page reads on a
-01 → 02 → 03 diagonal. Magnitude is load-bearing — a 56px offset was tried and read as
-misalignment; go big or go aligned. Below 1080px they stack in narrative order.
+Top to bottom:
 
-Retained as-is after a design exploration (2026-08-24, `/proto/landing`, two rounds). Rejected:
-all-transcript landing ("Session" — max coherence with the live pages, but zero conventional
-landing cues), display-poster hero ("Poster" — 78vh of brand before any product), diff-form-in-
-the-hero ("Try" — the live wire only pays off for visitors who already published), 01-in-the-hero
-split ("Split" — product above the fold, but the hero got crowded and sub-1080 collapses to
-baseline anyway), margin-rail-with-amber-fork ("Road" — the motif made structural, at the price
-of the wide grid and one more ornament), and README-register ("Ledger" — fastest to content, but
-drops the field, the one brand visual). The narrative three-artifact layout with the committed
-stagger stays the decision.
+- **Top strip** (`.site-top`): the wordmark as a small home link (no longer the h1) and two quiet
+  links (source, api), left, clear of the fixed theme toggle.
+- **Hero**: the claim is the h1 (`.claim`, display face, 52px max: "Your dev setup, published in
+  about ten seconds."), the serif aside beneath it (`.vary`), then the lede row — the tagline
+  left, the install command and the one live-profile link right (`.lede`, `.hero-cta`).
+  The tagline's detection claim is exact: the CLI detects ten keys (editor, shell, terminal
+  "and seven more"); font, theme and dotfiles are typed. Never claim more than `detect.ts` sets.
+- **The demo** (`.demo`): two plated windows (`.win` — hairline frame, registration ticks, 2px
+  corners). Left, the terminal (`TerminalRun.astro`, `.term-win`): the real publish run, copy
+  mirroring the CLI (parity), with the elapsed-time marks of a typical run (0s, 2s, 5s, 10s) at
+  the right edge. Right, the page it makes (`.page-win`): the production `Profile` component in
+  example mode, truncated with an honest `+ N more`. The terminal window is dark in both themes
+  (`--term-*` tokens). The intro — the command types itself, lines land in order, the page window
+  rises when the run is live — plays once per session (`sessionStorage`) and never under reduced
+  motion; the finished run is the server markup. It is the only motion on the page.
+- **What you get** (`.get`): the README's four points as plain text in two columns, no icons.
+- **Later** (`.later`): the diff, as a footnote, with the view and diff commands.
+- **Reference** (`.site-foot`): unchanged.
+
+Amber on the landing: the published link inside the terminal, the dotfiles link in the page
+preview, and link hovers. No live dot, no accent stripe — the scarcity rule holds.
+
+Rejected across the three rounds. Round 1 (the diff-first page): chips-to-build-your-own-diff
+("Pick"), serif front page ("Broadsheet"), highway signage ("Highway"), and the diff as a transit
+line diagram ("Transit", with both themes) — the last chosen for round 2. Round 2 (riffs on
+Transit): a horizontal strip map ("Strip"), rerouting your line by picking chips ("Reroute"),
+wayfinding volume ("Signal"), a draw-in intro ("Draw"), and "Solo" — the same materials with
+the solo-dev message, which turned out to be the real decision: the message, not the metaphor.
+The transit theme was dropped outright. Round 3 (the solo message, no metaphor): neutral
+gray-and-green "Demo" with the product shown in two windows — chosen structure; then riffs
+on it: the house dress ("House" — chosen), a press-to-run terminal ("Press" — most visitors
+won't press), three numbered steps ("Steps" — loses the side-by-side cause and effect), and
+terminal-before-words ("Run" — buries the headline). Within House, the divergence field was
+tried static and then removed: cut for a compact wordmark, it read as noise behind a
+three-line headline, and one frozen fork read as a stray line.
+
+Earlier (2026-08-24, two rounds) the three-artifact spec sheet with the committed stagger was
+retained over Session, Poster, Try, Split, Road and Ledger; that layout is now superseded.
 
 Sample truncation rule: a preview earns rows only until the shape is clear, then declares the rest
-with an honest `+ N more` marker (`.spec-more`). The diff shows in full — it is the product.
-
-**CLI transcript sample** (`.term`): a static illustration of the real publish flow. Its copy
-mirrors actual CLI output (`packages/cli/src/render.ts` + `commands.ts` — CLI parity: change the
-CLI's wording, update the transcript). Amber marks exactly what the CLI renders amber (the
-published link); scaffolding sits in `--faint`, typed input and values in ink.
+with an honest `+ N more` marker (`.spec-more`).
 
 ## Ornament budget
 
 Grain (one small feTurbulence tile at 4%, fixed overlay, never above the theme toggle), hairline
-rules, two registration ticks per `.sample` card (top-left + bottom-right), `//` section-mark
+rules, two registration ticks per `.win` window (top-left + bottom-right), `//` section-mark
 prefixes (CSS `::before` — never in textContent), caps ledger labels. Nothing else; restraint is
 the identity.
 
@@ -154,7 +171,7 @@ the identity.
   `~`/`=` glyphs (`.diff-map`, amber `~` where the stacks split) — above the "N differ / N shared"
   counts and the swap link. Extras render dimmed below (`table.extras-dim`), uncompared and never
   amber, under a lowercase "extras (not compared)" line. NOTHING live wears the `.sheet` plate any
-  more; `.sample` remains the landing previews' frame.
+  more; `.win` frames the landing's two windows.
   Rejected in the run: keeping the plated 30/35/35 sheet (estranged from the transcript profile),
   one-column git-style stacking ("Unified"/"Stack" — best on phones, loses the side-by-side eye
   line), differences-first with shared collapsed ("Focus"/"Lead" — strong page, breaks the wire
