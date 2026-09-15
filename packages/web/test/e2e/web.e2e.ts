@@ -104,7 +104,7 @@ test.describe("profile render", () => {
 });
 
 test.describe("landing", () => {
-  test("the example profile groups dotfiles under stack, exactly like a live profile", async ({
+  test("the page window groups dotfiles under stack, exactly like a live profile", async ({
     page,
   }) => {
     await page.goto("/");
@@ -113,19 +113,21 @@ test.describe("landing", () => {
     await expect(stack).toContainText("github.com/octocat/dotfiles");
   });
 
-  test("the profile sample is an honest preview: truncated rows + a '+ N more' marker", async ({
+  test("the page window is an honest preview: truncated rows + a '+ N more' marker", async ({
     page,
   }) => {
     await page.goto("/");
     const stack = page.locator(".readout").first();
-    // truncation is real (Multiplexer is elided from the preview...)
+    // truncation is real (Multiplexer is elided from the preview)...
     await expect(stack).not.toContainText("Multiplexer");
     await expect(page.locator(".spec-more")).toContainText("+ 7 more");
-    // ...but the diff below still compares the FULL profiles
-    await expect(page.locator("table.diff")).toContainText("Multiplexer");
+    // ...and the window is a preview of the profile page, not the diff: no diff on the landing
+    await expect(page.locator("table.diff")).toHaveCount(0);
   });
 
-  test("01 shows the CLI transcript (detect, confirm, published link)", async ({ page }) => {
+  test("the terminal window shows the CLI transcript (detect, confirm, published link)", async ({
+    page,
+  }) => {
     await page.goto("/");
     const term = page.locator(".term");
     await expect(term).toBeVisible();
@@ -134,6 +136,28 @@ test.describe("landing", () => {
     await expect(term).toContainText("Published octocat");
     // amber marks exactly what the CLI renders amber: the published link
     await expect(term.locator(".t-link")).toHaveText("ymmv.fyi/octocat");
+  });
+
+  test("the whole run is in the server markup; the intro only adds motion", async ({ page }) => {
+    // reduced motion: the script never arms the intro, and every line is visible at once
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    await expect(page.locator(".demo")).not.toHaveAttribute("data-play", "");
+    const last = page.locator(".term .tl").last();
+    await expect(last).toContainText("Published octocat");
+    expect(await last.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+  });
+
+  test("the intro plays once per session", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.goto("/");
+    await expect(page.locator(".demo")).toHaveAttribute("data-play", "");
+    // the run finishes and the page window is fully in view
+    await expect
+      .poll(() => page.locator(".page-win").evaluate((el) => getComputedStyle(el).opacity))
+      .toBe("1");
+    await page.reload();
+    await expect(page.locator(".demo")).not.toHaveAttribute("data-play", "");
   });
 
   test("the hero links one real, live profile", async ({ page }) => {
@@ -147,14 +171,14 @@ test.describe("landing", () => {
     await expect(page.locator("h1.handle")).toContainText("bardisty");
   });
 
-  test("the landing never plates its previews twice, and never scrolls sideways on a phone", async ({
+  test("the landing never plates its preview twice, and never scrolls sideways on a phone", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
-    // previews are framed by .sample only — a .sheet here means the example gate broke
+    // the preview is framed by .win only — a .sheet here means the example gate broke
     await expect(page.locator(".sheet")).toHaveCount(0);
-    // the hand-tuned narrow-viewport fits (12px transcript, 35% diff label column) have no other
+    // the hand-tuned narrow-viewport fits (12px transcript, trimmed window padding) have no other
     // tripwire — any copy or font change that reintroduces overflow fails here
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
@@ -176,50 +200,26 @@ test.describe("landing", () => {
     });
   });
 
-  test("renders an example diff (octocat vs hubot) with counts, handles, and a missing row", async ({
-    page,
-  }) => {
-    await page.goto("/");
-    const diff = page.locator("table.diff");
-    await expect(diff).toBeVisible();
-    // both handles head the two value columns
-    await expect(diff.locator("thead")).toContainText("octocat");
-    await expect(diff.locator("thead")).toContainText("hubot");
-    // 7 differ / 6 shared — the hubot persona math (also catches any accidental alias-fold)
-    const foot = page.locator(".diff-foot");
-    await expect(foot).toContainText("7 differ");
-    await expect(foot).toContainText("6 shared");
-    // the example diff is static → no live "swap" navigation
-    await expect(foot.locator("a")).toHaveCount(0);
-    // dotfiles: octocat has it (left/theirs), hubot doesn't → em-dash on the right (yours) cell
-    const dotfiles = diff.locator("tbody tr", { hasText: "Dotfiles" });
-    await expect(dotfiles.locator(".theirs")).toContainText("github.com/octocat/dotfiles");
-    await expect(dotfiles.locator(".yours .missing")).toHaveText("—");
-    // example mode suppresses the "Extras (not compared)" block — octocat carries a Keyboard extra,
-    // so this guards that the !example gate (not an empty-extras coincidence) is what hides it
-    await expect(page.locator("table.extras-dim")).toHaveCount(0);
-  });
-
-  test("spends amber only on the differing rows of the example diff", async ({ page }) => {
+  test("spends amber only on the published link inside the terminal", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/");
-    const diff = page.locator("table.diff");
-    const changedColor = await diff
-      .locator("tr.changed .yours")
+    const term = page.locator(".term");
+    const linkColor = await term.locator(".t-link").evaluate((el) => getComputedStyle(el).color);
+    const dimColor = await term
+      .locator(".t-dim")
       .first()
       .evaluate((el) => getComputedStyle(el).color);
-    const sameColor = await diff
-      .locator("tr.same .yours")
-      .first()
-      .evaluate((el) => getComputedStyle(el).color);
-    expect(changedColor).toBe("rgb(255, 171, 46)"); // amber on a difference
-    expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
+    expect(linkColor).toBe("rgb(255, 171, 46)"); // amber on the published link
+    expect(dimColor).not.toBe(linkColor); // scaffolding recedes — never amber
   });
 
-  test("keeps a single h1 (the wordmark) despite the added example diff", async ({ page }) => {
+  test("keeps a single h1: the claim, not the wordmark", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("h1")).toHaveCount(1);
-    await expect(page.locator("h1")).toHaveClass(/wordmark/);
+    await expect(page.locator("h1")).toHaveClass(/claim/);
+    await expect(page.locator("h1")).toContainText("ten seconds");
+    // the wordmark is a plain home link now
+    await expect(page.locator(".wordmark")).toHaveAttribute("href", "/");
   });
 
   test("the footer is a labelled quick reference", async ({ page }) => {

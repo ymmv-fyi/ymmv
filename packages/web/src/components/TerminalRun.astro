@@ -1,0 +1,55 @@
+---
+// The landing's hero artifact: a terminal window showing the real publish run (decided 2026-09-14
+// from the /proto/landing rounds, direction "House" — see DESIGN.md → Landing layout). The
+// transcript mirrors the CLI's actual output (packages/cli/src/render.ts + commands.ts — CLI
+// parity: change the CLI's wording, update these lines); amber marks exactly what the CLI renders
+// amber, the published link. Each line carries the moment it lands in the intro (--t) and, on
+// some, the elapsed-time mark of a typical run at the right edge.
+//
+// The intro (the command types itself, lines land in order, the page window rises when the run
+// is live) plays once per session and never under reduced motion; the finished transcript is the
+// server markup, so no-JS and returning visitors see the whole run at once. Lines are built as
+// one HTML string so no template whitespace leaks into the pre-wrap lines.
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const line = (t: number, body: string, mark?: string) =>
+  `<span class="tl" style="--t:${t}ms">${body}${
+    mark ? `<span class="tt" aria-hidden="true">${mark}</span>` : ""
+  }</span>`;
+const dim = (t: string) => `<span class="t-dim">${esc(t)}</span>`;
+const CMD = "npx ymmv-cli@latest";
+const TRANSCRIPT = [
+  line(0, `<span class="t-p">$ </span><span class="type" style="--n:${CMD.length}">${CMD}</span>`, "0s"),
+  line(1000, ""),
+  line(1150, `${dim("  Editor    ")}Neovim`, "2s"),
+  line(1250, `${dim("  Shell     ")}fish`),
+  line(1350, `${dim("  Terminal  ")}Ghostty`),
+  line(1450, dim("  …")),
+  line(1500, ""),
+  line(1900, `${dim("  Publish to ymmv.fyi/octocat? [Y/n/e=edit]")} y`, "5s"),
+  line(2400, ""),
+  line(2600, `  Published octocat → <span class="t-link">ymmv.fyi/octocat</span>`, "10s"),
+].join("");
+---
+
+<figure class="win term-win">
+  <figcaption class="win-bar">
+    <span class="win-title">terminal</span>
+    <span class="win-note" aria-hidden="true">a typical run, once you're signed in</span>
+  </figcaption>
+  <div class="term" set:html={TRANSCRIPT} />
+</figure>
+
+<script>
+  // Once per session (sessionStorage, not localStorage: a genuinely new visit sees it again),
+  // never under reduced motion. The section carries data-play; the stylesheet does the rest.
+  const demo = document.querySelector<HTMLElement>("[data-demo]");
+  if (demo && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const KEY = "ymmv-landing-run";
+    let seen = false;
+    try {
+      seen = sessionStorage.getItem(KEY) === "1";
+      sessionStorage.setItem(KEY, "1");
+    } catch (e) {}
+    if (!seen) demo.setAttribute("data-play", "");
+  }
+</script>
