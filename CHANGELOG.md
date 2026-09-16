@@ -12,8 +12,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   before the first send, so a login that switched accounts while the command was running is
   refused too. A token file written by an older CLI has no id, so its first automatic re-login
   still uses the handle-only check; the re-login records the id. A later `ymmv login` from an
-  older CLI drops the id again. The login response from the site now carries the GitHub account
-  id, so this CLI version needs a Worker deployed with or after this release.
+  older CLI drops the id again.
 
 ## [0.9.0] - 2026-07-22
 
