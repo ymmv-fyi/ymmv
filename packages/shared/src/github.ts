@@ -9,3 +9,12 @@
  * `GITHUB_CLIENT_SECRET` (set via `wrangler secret put`), never committed.
  */
 export const GITHUB_CLIENT_ID = "Ov23liMoD29eizQcN1KZ";
+
+/**
+ * A GitHub account id as GitHub issues them: a positive safe integer. The ONE rule for every
+ * boundary that reads one off the wire or off disk — the Worker's introspection parse, the CLI's
+ * mint parse, and the CLI's token store — so a value one side accepts can never fail the other.
+ */
+export function isGithubId(x: unknown): x is number {
+  return typeof x === "number" && Number.isSafeInteger(x) && x > 0;
+}
