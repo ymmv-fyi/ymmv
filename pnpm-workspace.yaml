@@ -4,15 +4,17 @@ packages:
 # Pin transitive dev deps up out of their vulnerable ranges (Dependabot). Scoped so only
 # the affected versions are bumped: yaml stack-overflow (GHSA-48c2-rrv3-qjmp) reaches us via
 # yaml-language-server; esbuild dev-server file read (GHSA-g7r4-m6w7-qqqr) via tsup;
-# fast-uri (GHSA-4c8g-83qw-93j6, GHSA-v2hh-gcrm-f6hx) via ajv, capped <4 to stay inside
-# ajv's ^3 range; sharp (GHSA-f88m-g3jw-g9cj) via astro + miniflare (miniflare pins 0.34.5
-# exactly, so only an override can move it); svgo (GHSA-2p49-hgcm-8545) via astro.
+# fast-uri (GHSA-4c8g-83qw-93j6, GHSA-v2hh-gcrm-f6hx, then the 3.1.6 host-confusion set) via
+# ajv, capped <4 to stay inside ajv's ^3 range; sharp (GHSA-f88m-g3jw-g9cj, then libheif
+# GHSA-rgj7-g3m4-5g8c) via astro + miniflare (miniflare pins sharp exactly, so only an
+# override can move it); svgo (GHSA-2p49-hgcm-8545, then removeScripts GHSA-w27v-7q3p-w38r)
+# via astro.
 overrides:
   "yaml@>=2.0.0 <2.8.3": ">=2.8.3"
   "esbuild@>=0.27.3 <0.28.1": ">=0.28.1"
-  "fast-uri@>=3.0.0 <3.1.4": ">=3.1.4 <4"
-  "sharp@<0.35.0": ">=0.35.0"
-  "svgo@>=4.0.0 <4.0.2": ">=4.0.2"
+  "fast-uri@>=3.0.0 <3.1.6": ">=3.1.6 <4"
+  "sharp@<0.35.4": ">=0.35.4"
+  "svgo@>=4.0.0 <4.1.0": ">=4.1.0"
   # postcss (GHSA-r28c-9q8g-f849) via vite and postcss-load-config.
   "postcss@<8.5.18": ">=8.5.18"
 
