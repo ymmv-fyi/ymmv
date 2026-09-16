@@ -27,6 +27,11 @@ const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(bod
 const missing = () => new Response("not found", { status: 404 });
 const fail = (status: number) => new Response("err", { status }); // a real error, NOT a 404
 
+/** The Profile JSON the test POSTed: fetch call `call` (default 1, after the GET), its RequestInit body. */
+function posted(fetchFn: { mock: { calls: unknown[][] } }, call = 1): Profile {
+  const init = fetchFn.mock.calls[call]?.[1] as RequestInit;
+  return JSON.parse(init.body as string) as Profile;
+}
 /** Interface-complete scripted prompter — override only what a test drives. */
 function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
   return { ask: vi.fn(), confirm: vi.fn(), choice: vi.fn(), close: vi.fn(), ...overrides };
@@ -202,7 +207,7 @@ describe("publish", () => {
       choice: vi.fn().mockResolvedValue("y"),
     });
     await publish({ interactive: true, yes: false, prompter });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]);
     expect(body.handle).toBe("me");
   });
@@ -242,7 +247,7 @@ describe("publish", () => {
     const ask = vi.fn();
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toContainEqual(foreign);
     expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
     expect(ask).not.toHaveBeenCalled(); // card-first: Enter-to-publish, no field walk
@@ -264,7 +269,7 @@ describe("publish", () => {
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
     });
     await publish({ interactive: true, yes: false, prompter });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toContainEqual(foreign);
     expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one prompt per curated key, no more
@@ -304,7 +309,7 @@ describe("publish", () => {
       "y",
       "Y/n/e=edit",
     );
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
     const out = logs.join("\n");
     expect(out).toMatch(/ymmv\.fyi\/me/); // breadcrumb
@@ -348,7 +353,7 @@ describe("publish", () => {
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
     });
     await publish({ interactive: true, yes: false, prompter });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: "Zed" }]);
     expect(logs.filter(isCard).length).toBe(2);
   });
@@ -410,7 +415,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST (clean run)
     vi.stubGlobal("fetch", fetchFn);
     await publish({ interactive: false, yes: true });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toContainEqual(foreign);
     expect(logs.join("\n")).toMatch(/newer field/);
 
@@ -467,8 +472,8 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice });
     await publish({ interactive: true, yes: false, prompter });
     // Answers survived: both POSTs carry the typed value, and the 13-prompt walk ran ONCE.
-    const post1 = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
-    const post2 = JSON.parse((fetchFn.mock.calls[2]?.[1] as RequestInit).body as string) as Profile;
+    const post1 = posted(fetchFn);
+    const post2 = posted(fetchFn, 2);
     expect(post1.entries).toEqual([{ key: "editor", value: "Neovim" }]);
     expect(post2.entries).toEqual([{ key: "editor", value: "Neovim" }]);
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length);
@@ -579,7 +584,7 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // no re-ask at the boundary
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: atCap }]);
   });
 
@@ -600,7 +605,7 @@ describe("publish", () => {
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(/that value is 300 characters; the cap is 256/);
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, no full re-walk
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]); // no 422 round-trip
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
@@ -615,7 +620,7 @@ describe("set", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     await runSet({ kind: "curated", key: "shell", value: "zsh" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual(
       expect.arrayContaining([
         { key: "editor", value: "Vim" },
@@ -635,7 +640,7 @@ describe("set", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     await runSet({ kind: "extra", label: "Launcher", value: "Raycast" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
   });
 
@@ -689,7 +694,7 @@ describe("set", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     await runSet({ kind: "extra", label: "L5", value: "updated" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.extras).toHaveLength(32);
     expect(body.extras).toContainEqual({ label: "L5", value: "updated" });
     expect(process.exitCode).toBeUndefined();
@@ -745,7 +750,7 @@ describe("unset", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "shell" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
     expect(logs).toContain('\n  Removed Shell (was "zsh"). → https://ymmv.fyi/me');
     expect(logs.join("\n")).not.toMatch(/Published/);
@@ -759,7 +764,7 @@ describe("unset", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "extra", label: "keyboard" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.extras).toEqual([]);
     expect(logs).toContain('\n  Removed extra "Keyboard" (was "HHKB"). → https://ymmv.fyi/me');
   });
@@ -861,7 +866,7 @@ describe("unset", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "editor" });
-    const body = JSON.parse((fetchFn.mock.calls[1]?.[1] as RequestInit).body as string) as Profile;
+    const body = posted(fetchFn);
     expect(body.entries).toEqual([]);
   });
 });
