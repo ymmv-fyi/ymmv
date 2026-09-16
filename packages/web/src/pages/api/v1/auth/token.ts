@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { GITHUB_CLIENT_ID, isReserved, isValidHandle } from "@ymmv/shared";
+import { GITHUB_CLIENT_ID, isReserved, isValidHandle, type MintResult } from "@ymmv/shared";
 import type { APIRoute } from "astro";
 import { mintToken } from "../../../../lib/auth.ts";
 import { githubClientSecret, verifyGithubToken } from "../../../../lib/github.ts";
@@ -86,7 +86,10 @@ export const POST: APIRoute = async ({ request }) => {
       handle = null;
     }
     const token = await mintToken(env.DB, id);
-    return json(200, { token, handle });
+    // github_id rides along so the CLI can compare IDENTITY across a re-login: a handle string can
+    // change hands (rename + reclaim) while the account id cannot. `satisfies` pins the wire shape
+    // to the shared contract the CLI parses against.
+    return json(200, { token, handle, github_id: id } satisfies MintResult);
   } catch {
     console.error("mint failed for github_id", user.id);
     return json(500, { error: "internal_error" });

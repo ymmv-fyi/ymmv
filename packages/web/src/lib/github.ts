@@ -1,3 +1,5 @@
+import { isGithubId } from "@ymmv/shared";
+
 // GitHub token introspection for the device-flow mint endpoint. The Worker verifies that the
 // CLI-supplied access token was issued to ymmv's OWN OAuth app (audience binding) AND resolves its
 // owner in ONE call, via GitHub's "check a token" endpoint. It never trusts a client-supplied
@@ -74,7 +76,9 @@ export async function verifyGithubToken(
     return { kind: "transient" };
   }
   const user = data.user;
-  if (!user || typeof user.id !== "number" || typeof user.login !== "string") {
+  // isGithubId: the same rule the CLI applies to the mint response and its token file. An id
+  // GitHub hands us must never be one the CLI would refuse (zero, fractional, unsafe).
+  if (!user || !isGithubId(user.id) || typeof user.login !== "string") {
     return { kind: "transient" };
   }
   return { kind: "ok", id: user.id, login: user.login };

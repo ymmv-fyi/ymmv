@@ -73,6 +73,24 @@ describe("verifyGithubToken — GitHub token introspection (audience binding)", 
     expect(await verifyGithubToken("x", CLIENT_ID, CLIENT_SECRET)).toEqual({ kind: "transient" });
   });
 
+  it("200 with an id the CLI would refuse (zero, negative, fractional, unsafe, string) → transient", async () => {
+    // Shared isGithubId rule: a value the Worker mints under must be one the CLI's mint parse and
+    // token store accept, or a login succeeds server-side and fails client-side.
+    for (const id of [0, -1, 1.5, 2 ** 53, "77"]) {
+      stubFetch(() => introspect({ user: { id, login: "grace" } }));
+      expect(await verifyGithubToken("x", CLIENT_ID, CLIENT_SECRET)).toEqual({ kind: "transient" });
+    }
+  });
+
+  it("200 with a valid id but a non-string login → transient (the login half of the same guard)", async () => {
+    // The mint binds `login` as the handle and writes it to the users row; a number or a missing
+    // field must fail here, not become a handle downstream.
+    for (const login of [undefined, 42, null, { name: "grace" }]) {
+      stubFetch(() => introspect({ user: { id: 77, login } }));
+      expect(await verifyGithubToken("x", CLIENT_ID, CLIENT_SECRET)).toEqual({ kind: "transient" });
+    }
+  });
+
   it("never logs the access token or the client secret on the error path", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     stubFetch(() => introspect("", 401));

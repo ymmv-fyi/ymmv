@@ -64,11 +64,10 @@ function publishCtx(token: string, handle: string, entries: { key: string; value
   } as unknown as APIContext;
 }
 
-async function mint(accessToken = "gho_valid"): Promise<{ token: string; handle: string | null }> {
-  return (await (await MINT(mintCtx({ access_token: accessToken }))).json()) as {
-    token: string;
-    handle: string | null;
-  };
+type MintBody = { token: string; handle: string | null; github_id: number };
+
+async function mint(accessToken = "gho_valid"): Promise<MintBody> {
+  return (await (await MINT(mintCtx({ access_token: accessToken }))).json()) as MintBody;
 }
 
 // Pool storage isn't rolled back per-test here, so start each test from a clean slate (these tests
@@ -90,8 +89,9 @@ describe("POST /api/v1/auth/token — mint", () => {
     const res = await MINT(mintCtx({ access_token: "gho_valid" }));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    const body = (await res.json()) as { token: string; handle: string };
+    const body = (await res.json()) as MintBody;
     expect(body.handle).toBe("carol");
+    expect(body.github_id).toBe(4242); // the identity the token row below is bound to
     expect(body.token.startsWith("ymmv_")).toBe(true);
     // Verifies via introspection (audience check), not a bare /user identity read.
     expect(fetchFn).toHaveBeenCalledWith(
@@ -176,8 +176,9 @@ describe("POST /api/v1/auth/token — mint", () => {
 
   it("reserved GitHub username → handle:null, token still minted", async () => {
     stubGithub(() => introspectOk(50, "login")); // "login" is a reserved route/verb
-    const { token, handle } = await mint();
+    const { token, handle, github_id } = await mint();
     expect(handle).toBeNull();
+    expect(github_id).toBe(50); // identity exists even when no handle does
     expect(token.startsWith("ymmv_")).toBe(true);
     const user = await env.DB.prepare("SELECT handle FROM users WHERE github_id = ?")
       .bind(50)
@@ -203,6 +204,7 @@ describe("POST /api/v1/auth/token — mint", () => {
   it("re-login refreshes the handle + records history, preserving a published row's updated_at/extras", async () => {
     stubGithub(() => introspectOk(4242, "carol"));
     const first = await mint();
+    expect(first.github_id).toBe(4242);
     await PUBLISH(publishCtx(first.token, "carol", [{ key: "editor", value: "Vim" }]));
     const published = await env.DB.prepare(
       "SELECT updated_at, extras FROM users WHERE github_id = ?",
@@ -212,7 +214,8 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(published?.updated_at).not.toBeNull();
 
     stubGithub(() => introspectOk(4242, "caroline")); // GitHub rename
-    await mint("gho_2");
+    const renamed = await mint("gho_2");
+    expect(renamed.github_id).toBe(first.github_id); // the id is what survives a rename
     const after = await env.DB.prepare(
       "SELECT handle, handle_lower, updated_at, extras FROM users WHERE github_id = ?",
     )
@@ -261,12 +264,16 @@ describe("POST /api/v1/auth/token — mint", () => {
 
   it("login reclaims a handle another account vacated, and the reclaimer can then publish (login is authoritative)", async () => {
     stubGithub(() => introspectOk(1, "alice"));
-    await mint(); // gid1 binds alice
+    const g1 = await mint(); // gid1 binds alice
+    expect(g1.github_id).toBe(1);
     stubGithub(() => introspectOk(1, "alice2"));
     await mint("g1b"); // gid1 renames → alice vacated (history under gid1, no live holder)
     stubGithub(() => introspectOk(2, "alice")); // gid2 now owns "alice" on GitHub
     const g2 = await mint();
     expect(g2.handle).toBe("alice");
+    // Same handle string as g1's first login, different account: the exact shape a handle-only
+    // client compare cannot see (issue #57). The id is the only thing that tells them apart.
+    expect(g2.github_id).toBe(2);
     const owner = await env.DB.prepare("SELECT github_id FROM users WHERE handle_lower = ?")
       .bind("alice")
       .first<{ github_id: number }>();
