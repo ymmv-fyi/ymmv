@@ -541,16 +541,18 @@ describe("detector maps derived from TOOLS match the pinned mappings", () => {
   it.each(Object.entries(TERM_EXPECTED))("terminal $TERM_PROGRAM=%s → %s", (token, canonical) => {
     expect(terminalOf(token)).toBe(canonical);
   });
-  it.each(
-    Object.entries(WM_EXPECTED),
-  )("window-manager XDG_CURRENT_DESKTOP=%s → %s", (token, canonical) => {
-    expect(wmOf(token)).toBe(canonical);
-  });
-  it.each(
-    Object.entries(BROWSER_EXPECTED),
-  )("browser $BROWSER=/usr/bin/%s → %s", (token, canonical) => {
-    expect(browserOf(token)).toBe(canonical);
-  });
+  it.each(Object.entries(WM_EXPECTED))(
+    "window-manager XDG_CURRENT_DESKTOP=%s → %s",
+    (token, canonical) => {
+      expect(wmOf(token)).toBe(canonical);
+    },
+  );
+  it.each(Object.entries(BROWSER_EXPECTED))(
+    "browser $BROWSER=/usr/bin/%s → %s",
+    (token, canonical) => {
+      expect(browserOf(token)).toBe(canonical);
+    },
+  );
 
   // No EXTRA tokens sneaked in: the count of TOOLS envTokens per field equals the pinned set.
   it("TOOLS contributes exactly the pinned envTokens per field (no additions/removals)", () => {

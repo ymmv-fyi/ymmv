@@ -70,16 +70,15 @@ describe("main() update-check wiring", () => {
     expect(errs.join("\n")).toContain("\n  UPDATE NOTICE"); // message()-wrapped output unit
   });
 
-  it.each([
-    ["help"],
-    ["version"],
-    ["--version"],
-  ])("`%s` never starts a check (reference surfaces stay exactly themselves)", async (arg) => {
-    stubNotice("UPDATE NOTICE");
-    await main([arg]);
-    expect(startUpdateCheck).not.toHaveBeenCalled();
-    expect(errs.join("\n")).not.toContain("UPDATE NOTICE");
-  });
+  it.each([["help"], ["version"], ["--version"]])(
+    "`%s` never starts a check (reference surfaces stay exactly themselves)",
+    async (arg) => {
+      stubNotice("UPDATE NOTICE");
+      await main([arg]);
+      expect(startUpdateCheck).not.toHaveBeenCalled();
+      expect(errs.join("\n")).not.toContain("UPDATE NOTICE");
+    },
+  );
 
   it("an arg error never starts a check", async () => {
     stubNotice("UPDATE NOTICE");

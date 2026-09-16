@@ -9,7 +9,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9",
     "@astrojs/cloudflare": "^14",
-    "@cloudflare/vitest-pool-workers": "^0.16",
+    "@cloudflare/vitest-pool-workers": "^0.22",
     "@playwright/test": "^1.61.1",
     "astro": "^7",
     "jsonc-parser": "^3.3.1",
