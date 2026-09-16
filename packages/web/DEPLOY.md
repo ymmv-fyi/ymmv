@@ -10,6 +10,14 @@ Build + deploy only. Skipped vs CI:
   `pnpm exec wrangler d1 migrations apply ymmv --env production --remote` (from `packages/web`) first.
 - **CLI publish**: tag-only; nothing goes to npm here.
 
+## Worker before CLI (do not roll back behind a published CLI)
+
+The CLI's login parse requires every field the current mint response carries (`token`, `handle`,
+`github_id`); a Worker that omits one fails every login with "Unexpected response". A tag release
+already orders this (`publish-cli` needs `deploy-worker` in `release.yml`). Manually: never roll
+the Worker back to a build older than the published CLI expects, and when a manual deploy
+precedes a CLI tag, deploy first, tag second.
+
 ## Two gotchas (do not skip)
 
 - **Never bare-deploy.** Without `CLOUDFLARE_ENV=production` at build time, the config bakes the
