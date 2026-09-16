@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isGithubId, type MintResult } from "@ymmv/shared";
 import envPaths from "env-paths";
 import { BASE } from "./config.js";
 
@@ -13,6 +14,11 @@ export interface StoredToken {
   base: string;
   token: string;
   handle: string | null;
+  /** The GitHub account id the token was minted for. Nullable on READ only: a token.json written
+   *  by a CLI that predates the field has none, and must keep loading. Every WRITE carries one
+   *  (saveToken takes a MintResult), so for a FILE credential `null` means exactly "legacy file".
+   *  An env Credential (loadCredential below) is also null: YMMV_TOKEN has no trusted identity. */
+  github_id: number | null;
 }
 
 export function tokenFilePath(): string {
@@ -20,8 +26,9 @@ export function tokenFilePath(): string {
   return join(envPaths("ymmv", { suffix: "" }).config, "token.json");
 }
 
-/** Persist the token for the CURRENT base — 0600, via a temp file + atomic rename. */
-export async function saveToken(data: Omit<StoredToken, "base">): Promise<void> {
+/** Persist the token for the CURRENT base — 0600, via a temp file + atomic rename. Takes the mint
+ *  result as-is: the wire shape IS the stored shape (minus base), and its github_id is non-null. */
+export async function saveToken(data: MintResult): Promise<void> {
   const path = tokenFilePath();
   const dir = dirname(path);
   // 0o700 the credential dir, not just the 0o600 token file. `mode` on mkdir only applies to dirs it
@@ -34,7 +41,12 @@ export async function saveToken(data: Omit<StoredToken, "base">): Promise<void> 
   // Unique temp name so we never reuse crash residue or collide with a concurrent save, and an
   // explicit chmod because writeFile's `mode` only applies when it CREATES the file.
   const tmp = `${path}.${randomUUID()}.tmp`;
-  const stored: StoredToken = { base: BASE, token: data.token, handle: data.handle };
+  const stored: StoredToken = {
+    base: BASE,
+    token: data.token,
+    handle: data.handle,
+    github_id: data.github_id,
+  };
   try {
     await writeFile(tmp, JSON.stringify(stored), { mode: 0o600 });
     if (process.platform !== "win32") await chmod(tmp, 0o600);
@@ -64,17 +76,31 @@ export async function loadToken(): Promise<StoredToken | null> {
   // "reserved word" diagnosis, and a non-string truthy one would crash later on .toLowerCase().
   // A present-but-empty token is corruption too (`Bearer ` requests). Any corruption reads as
   // logged-out (clean re-login); login() still revokes the old token via peekCredential, which
-  // ignores the handle.
+  // ignores the handle. `github_id`: ABSENT (or null) is the legacy pre-field file and reads as
+  // null — it must not log the user out, and it must not leak through as `undefined`, which the
+  // reauth guard's `!== null` test would read as a known id. PRESENT but not a GitHub id is
+  // corruption like any other field.
+  const rawId: unknown = parsed?.github_id;
+  const idOk = rawId === undefined || rawId === null || isGithubId(rawId);
   if (
     !parsed ||
     parsed.base !== BASE ||
     typeof parsed.token !== "string" ||
     parsed.token === "" ||
-    (parsed.handle !== null && typeof parsed.handle !== "string")
+    (parsed.handle !== null && typeof parsed.handle !== "string") ||
+    !idOk
   ) {
     return null;
   }
-  return parsed as StoredToken;
+  // Explicit fields, not a cast: stray keys in the file never ride along. A hand-edited "" handle
+  // reads as null, the same normalization the mint boundary applies, so no `=== null` no-handle
+  // check downstream ever meets a falsy-but-not-null value.
+  return {
+    base: parsed.base,
+    token: parsed.token,
+    handle: parsed.handle === "" ? null : parsed.handle,
+    github_id: isGithubId(rawId) ? rawId : null,
+  };
 }
 
 /**
@@ -112,7 +138,15 @@ export interface Credential extends StoredToken {
 export async function loadCredential(): Promise<Credential | null> {
   const envToken = process.env.YMMV_TOKEN || "";
   if (envToken !== "") {
-    return { base: BASE, token: envToken, handle: process.env.YMMV_HANDLE || null, source: "env" };
+    // github_id null: an env credential carries no trusted identity (YMMV_HANDLE is unverified and
+    // there is no whoami lookup). Env credentials never reach the reauth guard anyway.
+    return {
+      base: BASE,
+      token: envToken,
+      handle: process.env.YMMV_HANDLE || null,
+      github_id: null,
+      source: "env",
+    };
   }
   const stored = await loadToken();
   return stored ? { ...stored, source: "file" } : null;

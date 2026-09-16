@@ -14,7 +14,7 @@ import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
-import { deleteToken, loadCredential, loadToken } from "../src/token-store.js";
+import { deleteToken, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
   handle: string,
@@ -23,6 +23,14 @@ function prof(
 ): Profile {
   return { schema_version: SCHEMA_VERSION, handle, entries, extras, updated_at: "2026-01-01" };
 }
+/** A file credential as loadToken returns it; id 1001 is the account this run logged in as. */
+const stored = (o: Partial<StoredToken> = {}): StoredToken => ({
+  base: "B",
+  token: "t",
+  handle: "me",
+  github_id: 1001,
+  ...o,
+});
 const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const missing = () => new Response("not found", { status: 404 });
 const fail = (status: number) => new Response("err", { status }); // a real error, NOT a 404
@@ -74,7 +82,7 @@ describe("view — the 3 branches", () => {
   });
 
   it("logged in WITH a profile → renders the diff", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -87,7 +95,7 @@ describe("view — the 3 branches", () => {
   });
 
   it("logged in WITHOUT a profile → plain view + amber nudge", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -102,7 +110,7 @@ describe("view — the 3 branches", () => {
   });
 
   it("a transient failure on the OWN-profile fetch degrades honestly: card + stderr note, no nudge", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -137,7 +145,7 @@ describe("view — the 3 branches", () => {
 
 describe("publish", () => {
   it("refuses to publish when the bound handle is null (reserved GitHub username)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: null });
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     await publish({ interactive: false, yes: true }); // -y so the non-TTY consent gate passes
@@ -162,7 +170,7 @@ describe("publish", () => {
   });
 
   it("hints when a legacy extra duplicates a curated field — recomputed per edit pass", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(
@@ -195,7 +203,7 @@ describe("publish", () => {
   });
 
   it("interactive: the edited values are what get published", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET existing → none
@@ -213,7 +221,7 @@ describe("publish", () => {
   });
 
   it("prints carried + dup-extra notes as ONE unit with 4-space carried rows", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
     const fetchFn = vi
       .fn()
@@ -237,7 +245,7 @@ describe("publish", () => {
   // A newer taxonomy's keys (unknown to this build) must survive a bare publish — the upsert is a
   // full replace, so dropping them here would delete them server-side.
   it("republish: carries unknown keys through verbatim with zero prompts (card-first)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
     const fetchFn = vi
       .fn()
@@ -256,7 +264,7 @@ describe("publish", () => {
   });
 
   it("republish + e: the edit pass walks all curated keys, never the carried ones", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
     const fetchFn = vi
       .fn()
@@ -277,7 +285,7 @@ describe("publish", () => {
   });
 
   it("prints the Published confirmation after y (the line has a positive pin, not just negatives)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -292,7 +300,7 @@ describe("publish", () => {
   });
 
   it("republish: card-first — existing values POST as-is on y, preview shows gap rows", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
@@ -320,7 +328,7 @@ describe("publish", () => {
   // REGRESSION (behavior fix): -y on a TTY used to walk all 13 prompts despite help's
   // "publish without prompts". It must now publish the merged defaults with zero interaction.
   it("-y interactive: no prompts, no confirm — preview card then POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
@@ -339,7 +347,7 @@ describe("publish", () => {
   });
 
   it("e-loop: edits land in the POST body and a second card renders", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
@@ -359,7 +367,7 @@ describe("publish", () => {
   });
 
   it('e-loop: clearing with "-" surfaces as a — gap row on the next card', async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
@@ -380,7 +388,7 @@ describe("publish", () => {
   });
 
   it("Ctrl+C at a field prompt: Aborted line, exit 130, no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // first publish → prompts run
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ ask: vi.fn().mockRejectedValue(new PromptAborted()) });
@@ -392,7 +400,7 @@ describe("publish", () => {
   });
 
   it("Ctrl+C at the publish choice: same clean abort", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
@@ -405,7 +413,7 @@ describe("publish", () => {
   });
 
   it("non-interactive: carries unknown keys too, and stays silent when there are none", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
     const fetchFn = vi
       .fn()
@@ -425,7 +433,7 @@ describe("publish", () => {
   });
 
   it("interactive: declining the confirm publishes nothing", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // only the GET existing
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({
@@ -440,7 +448,7 @@ describe("publish", () => {
   });
 
   it("aborts (no POST) when loading the existing profile transiently fails", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValue(fail(500)); // GET existing → 5xx, not a 404
     vi.stubGlobal("fetch", fetchFn);
     await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/fetch failed/);
@@ -448,7 +456,7 @@ describe("publish", () => {
   });
 
   it("aborts when the pre-publish read resolves a different handle (rename guard) — no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me-renamed")));
     vi.stubGlobal("fetch", fetchFn);
     await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/ymmv login/);
@@ -458,7 +466,7 @@ describe("publish", () => {
   it("a failed publish keeps the prompt answers: card + choice re-run, second y succeeds", async () => {
     // The finding's trigger: 13 answers typed, confirm, POST fails → the whole session used to be
     // discarded (exit 1). Now the loop re-enters with the answers intact and no re-walk.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET existing → none (first publish, guided walk)
@@ -487,7 +495,7 @@ describe("publish", () => {
   });
 
   it("n after a failed publish aborts cleanly (exit 0, no further POST)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET
@@ -504,7 +512,7 @@ describe("publish", () => {
   });
 
   it("Ctrl+C after a failed publish still exits 130 through the outer handler", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET
@@ -523,8 +531,8 @@ describe("publish", () => {
     // Identity drifted mid-command (a concurrent `ymmv login`): retrying the SAME merge would
     // fail identically, so the loop must rethrow to the top-level handler, not loop politely.
     vi.mocked(loadToken)
-      .mockResolvedValueOnce({ base: "B", token: "t", handle: "me" }) // the command's own login
-      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" }); // publishProfile's re-check
+      .mockResolvedValueOnce(stored()) // the command's own login
+      .mockResolvedValue(stored({ token: "t2", handle: "mallory", github_id: 2002 })); // publishProfile's re-check
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only — no POST
     vi.stubGlobal("fetch", fetchFn);
     const choice = vi.fn().mockResolvedValue("y");
@@ -536,10 +544,26 @@ describe("publish", () => {
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
 
+  it("a same-handle store under a DIFFERENT account at the first send is refused (id passed through)", async () => {
+    // publish() hands publishProfile the credential it merged under, so a squat that keeps the
+    // handle string is caught before the first POST, not only on the post-reauth retry.
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(stored()) // the command's own login
+      .mockResolvedValue(stored({ token: "t2", github_id: 2002 })); // publishProfile's re-check
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only — no POST
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await expect(publish({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /login changed/,
+    );
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
   it("a lost response mid-loop prints the may-not-have-completed copy, never a false negative", async () => {
     // A NetworkError can arrive AFTER the server committed — "Nothing was published" would be a
     // lie the CLI can't back up. Server-answered failures keep the definite copy (tested above).
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET existing
@@ -557,7 +581,7 @@ describe("publish", () => {
   it("^C during the mid-publish re-login device flow exits 130, not the retry loop", async () => {
     // The loop's PromptAborted rethrow must cover an abort ESCAPING publishProfile (the ^C lands
     // in login() during the 401 self-heal), not just one at the confirm choice.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(login).mockRejectedValue(new PromptAborted());
     const fetchFn = vi
       .fn()
@@ -573,7 +597,7 @@ describe("publish", () => {
   });
 
   it("an interactive answer exactly at the cap is accepted without a re-ask", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing())
@@ -589,7 +613,7 @@ describe("publish", () => {
   });
 
   it("an over-cap interactive answer re-prompts in place instead of failing after the walk", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET existing → none
@@ -611,9 +635,47 @@ describe("publish", () => {
   });
 });
 
+describe("first-send identity drift is caught on every publish path (id passed through)", () => {
+  // Same handle, different account between the command's own login and the send: the handle
+  // string can't tell, the id can. One case per publishProfile call site outside the loop.
+  const drift = () =>
+    vi
+      .mocked(loadToken)
+      .mockResolvedValueOnce(stored()) // the command's own login
+      .mockResolvedValue(stored({ token: "t2", github_id: 2002 })); // publishProfile's re-check
+
+  it("ymmv -y (non-interactive publish)", async () => {
+    drift();
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publish({ interactive: false, yes: true })).rejects.toThrow(/login changed/);
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("ymmv set", async () => {
+    drift();
+    const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me")));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
+      /login changed/,
+    );
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("ymmv unset", async () => {
+    drift();
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "shell", value: "zsh" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "shell" })).rejects.toThrow(/login changed/);
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+});
+
 describe("set", () => {
   it("curated: merges into the existing profile and republishes the union", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }]))) // GET existing
@@ -633,7 +695,7 @@ describe("set", () => {
   });
 
   it("extra: adds a free-form extra even with no existing profile", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // no existing profile
@@ -645,7 +707,7 @@ describe("set", () => {
   });
 
   it("refuses when the bound handle is null (reserved username)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: null });
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     await runSet({ kind: "curated", key: "shell", value: "zsh" });
@@ -654,7 +716,7 @@ describe("set", () => {
   });
 
   it("aborts (no republish) when loading the existing profile transiently fails", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fail(500)));
     await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
       /fetch failed/,
@@ -662,7 +724,7 @@ describe("set", () => {
   });
 
   it("refuses when the read resolves a different handle (server-side rename) — no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me-renamed")));
     vi.stubGlobal("fetch", fetchFn);
     await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
@@ -672,7 +734,7 @@ describe("set", () => {
   });
 
   it("a genuine 33rd extra is refused locally with the cap named — no POST, exit 1", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
     const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me", [], atCap))); // GET only
     vi.stubGlobal("fetch", fetchFn);
@@ -686,7 +748,7 @@ describe("set", () => {
   });
 
   it("replacing an existing label AT the cap still publishes (an edit is not a 33rd extra)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
     const fetchFn = vi
       .fn()
@@ -703,7 +765,7 @@ describe("set", () => {
   it("-y refuses locally when a DETECTED value exceeds the cap (no doomed POST, no re-ask path)", async () => {
     // Detection is env-derived and skips both the argv and prompt pre-flights; the -y branch has
     // no edit loop to recover with, so an over-cap detected value must fail before the network.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(detectStack).mockReturnValue(new Map([["terminal", "x".repeat(300)]]));
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only
     vi.stubGlobal("fetch", fetchFn);
@@ -718,7 +780,7 @@ describe("set", () => {
   it("a curated set publishes even when extras sit at the cap (the guard is extras-only)", async () => {
     // A future widening of the guard (dropping the kind check) would block every set for
     // at-cap profiles — this pins the scope.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const atCap = Array.from({ length: 32 }, (_, i) => ({ label: `L${i}`, value: "v" }));
     const fetchFn = vi
       .fn()
@@ -736,7 +798,7 @@ describe("unset", () => {
     fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST");
 
   it("curated: republishes without the key and echoes the old value", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(
@@ -757,7 +819,7 @@ describe("unset", () => {
   });
 
   it("extra: drops it from the POSTed extras, message shows the stored casing", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Keyboard", value: "HHKB" }]))) // GET
@@ -770,7 +832,7 @@ describe("unset", () => {
   });
 
   it("curated no-op: not set → message, exit 0, and NO network write", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
@@ -782,7 +844,7 @@ describe("unset", () => {
   });
 
   it("extra no-op: unknown label → message, no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(jsonRes(prof("me")));
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "extra", label: "Keyboard" });
@@ -792,7 +854,7 @@ describe("unset", () => {
   });
 
   it("never published (404): friendly nudge, exit 0, no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing());
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "editor" });
@@ -802,7 +864,7 @@ describe("unset", () => {
   });
 
   it("aborts (no republish) when loading the existing profile transiently fails", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValue(fail(500));
     vi.stubGlobal("fetch", fetchFn);
     await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(/fetch failed/);
@@ -810,7 +872,7 @@ describe("unset", () => {
   });
 
   it("refuses when the bound handle is null (reserved username)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: null });
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     await runUnset({ kind: "curated", key: "editor" });
@@ -819,7 +881,7 @@ describe("unset", () => {
   });
 
   it("sanitizes the echoed old value (ANSI stripped — it came off the wire)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(
@@ -834,7 +896,7 @@ describe("unset", () => {
   });
 
   it("extra: sanitizes the echoed label AND value (both come off the wire)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
     const dirty = `Key${esc}[31mboard`;
     const fetchFn = vi
@@ -849,7 +911,7 @@ describe("unset", () => {
   });
 
   it("refuses when the read resolves a different handle (server-side rename) — no POST", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me-renamed", [{ key: "editor", value: "Vim" }])));
@@ -859,7 +921,7 @@ describe("unset", () => {
   });
 
   it("removing the last entry publishes entries: []", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
@@ -873,7 +935,7 @@ describe("unset", () => {
 
 describe("delete", () => {
   it("non-interactive WITHOUT -y: refuses (no network, no token drop, exit 1)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     await runDelete({ interactive: false, yes: false });
@@ -887,7 +949,7 @@ describe("delete", () => {
   });
 
   it("non-interactive WITH -y: deletes server-side, then drops the now-dead local token", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
     await runDelete({ interactive: false, yes: true });
     expect(deleteToken).toHaveBeenCalledTimes(1);
@@ -895,7 +957,7 @@ describe("delete", () => {
   });
 
   it("interactive: a 'no' at the confirm cancels without touching anything", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
@@ -906,7 +968,7 @@ describe("delete", () => {
   });
 
   it("Ctrl+C at the delete confirm: Cancelled line, exit 130, nothing touched", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "me" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ confirm: vi.fn().mockRejectedValue(new PromptAborted()) });
@@ -925,6 +987,7 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     base: "B",
     token: "ymmv_env",
     handle,
+    github_id: null,
     source: "env" as const,
   });
 

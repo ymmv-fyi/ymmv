@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
+import { MintRejected, mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
+import { REVOKE_CAP_MS } from "../src/http.js";
 
 // Real mintYmmvToken (NOT mocked here — other CLI suites mock auth-http.js; Vitest isolates files, so
 // no bleed). Stub the global fetch to drive each Worker response the mint handler can return.
@@ -18,9 +19,85 @@ function stubFetch(body: unknown, status: number, headers: Record<string, string
 afterEach(() => vi.unstubAllGlobals());
 
 describe("mintYmmvToken", () => {
-  it("returns {token, handle} on 200", async () => {
+  it("returns {token, handle, github_id} on 200", async () => {
+    stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242 }, 200);
+    expect(await mintYmmvToken("gho_x")).toEqual({
+      token: "ymmv_x",
+      handle: "carol",
+      github_id: 4242,
+    });
+  });
+
+  it("a 200 WITHOUT github_id throws MintRejected AND revokes the token the Worker already minted", async () => {
+    // Tolerating a missing id would store null and silently drop the reauth guard back to the
+    // handle-only check — the exact hole issue #57 closes. Deploy the Worker before the CLI.
+    // The token in that reply is already live in D1 and nothing local will ever hold it: the
+    // refusal must revoke it (best-effort) or every such login leaves an orphaned session.
     stubFetch({ token: "ymmv_x", handle: "carol" }, 200);
-    expect(await mintYmmvToken("gho_x")).toEqual({ token: "ymmv_x", handle: "carol" });
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected); // api.ts turns this into a loop-exiting refusal
+    expect((err as Error).message).toMatch(/Unexpected response from/);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, init] = vi.mocked(fetch).mock.calls[1] as [string, RequestInit];
+    expect(url).toContain("/api/v1/auth/logout");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer ymmv_x");
+  });
+
+  it("a 200 with a github_id that is not a positive safe integer throws the same way", async () => {
+    for (const bad of ["4242", 0, -5, 1.5, 2 ** 53, null]) {
+      stubFetch({ token: "ymmv_x", handle: "carol", github_id: bad }, 200);
+      await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
+      expect(fetch).toHaveBeenCalledTimes(2); // revoke attempted here too
+    }
+  });
+
+  it("a rejected reply with no usable token has nothing to revoke: one request only", async () => {
+    stubFetch({ token: "", handle: "carol", github_id: 4242 }, 200);
+    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a handle a real Worker never binds (empty, control-only, invalid), revoking the token", async () => {
+    // A foreign YMMV_API origin is the only source of these. Stored, "" would be falsy-but-not-null
+    // and slip past every `=== null` no-handle check; a control-only string sanitizes to exactly
+    // that; a slash-bearing one would reach the publish body and printed URLs.
+    const esc = String.fromCharCode(0x1b);
+    for (const bad of ["", `${esc}[31m`, "a/b", " ", "x".repeat(10_000), 42, undefined]) {
+      const body: Record<string, unknown> = { token: "ymmv_x", github_id: 4242 };
+      if (bad !== undefined) body.handle = bad; // undefined = the handle key is missing entirely
+      stubFetch(body, 200);
+      const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(MintRejected);
+      expect(fetch).toHaveBeenCalledTimes(2); // mint + revoke
+    }
+  });
+
+  it("caps the best-effort revoke at REVOKE_CAP_MS and reports when it fails", async () => {
+    // stubFetch hands out ONE Response object: the mint parse drains it, so the revoke's json()
+    // rejects and revokeYmmvToken throws. A failed revoke must make the refusal SAY the minted
+    // login is still live. safeFetch attaches a signal to every request, so the cap itself is
+    // only observable through the spy.
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    stubFetch({ token: "ymmv_x", handle: "carol" }, 200);
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/could not be revoked/);
+    expect(spy).toHaveBeenCalledWith(REVOKE_CAP_MS);
+    spy.mockRestore();
+  });
+
+  it("a revoke that succeeds keeps the plain refusal copy", async () => {
+    const mint = new Response(JSON.stringify({ token: "ymmv_x", handle: "carol" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    const revoked = new Response(JSON.stringify({ revoked: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(mint).mockResolvedValueOnce(revoked));
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).not.toMatch(/could not be revoked/);
   });
 
   it("surfaces a 429 (login rate limit) with the server message + retry hint", async () => {
@@ -99,7 +176,7 @@ describe("mintYmmvToken", () => {
   it('sets redirect:"manual" so a 3xx can never masquerade as a successful mint', async () => {
     // A stubbed fetch can't reproduce real redirect-following, so lock in the guard-option itself:
     // absent it, Node follows the 30x and re-POSTs the access_token to the redirect target.
-    stubFetch({ token: "ymmv_x", handle: "carol" }, 200);
+    stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242 }, 200);
     await mintYmmvToken("gho_x");
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/auth/token"),
@@ -123,23 +200,36 @@ describe("mintYmmvToken", () => {
     await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
   });
 
-  it("a 200 with a non-JSON body throws the same clear error", async () => {
+  it("a 200 with a non-JSON body throws the same clear error, as a TRANSIENT plain Error", async () => {
+    // A mid-body reset or captive portal is a transport event, not a Worker this binary can't
+    // use: not MintRejected, so the interactive loop keeps the user's answers. Nothing to revoke.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response("<html>portal</html>", { status: 200 })),
     );
-    await expect(mintYmmvToken("gho_x")).rejects.toThrow(/Unexpected response from/);
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/Unexpected response from/);
+    expect(err).not.toBeInstanceOf(MintRejected);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("sanitizes the minted handle at the boundary — every downstream print inherits it clean", async () => {
     const esc = String.fromCharCode(0x1b);
-    stubFetch({ token: "ymmv_x", handle: `car${esc}[31mol` }, 200);
-    expect(await mintYmmvToken("gho_x")).toEqual({ token: "ymmv_x", handle: "carol" });
+    stubFetch({ token: "ymmv_x", handle: `car${esc}[31mol`, github_id: 4242 }, 200);
+    expect(await mintYmmvToken("gho_x")).toEqual({
+      token: "ymmv_x",
+      handle: "carol",
+      github_id: 4242,
+    });
   });
 
   it("preserves a null handle (reserved GitHub username)", async () => {
-    stubFetch({ token: "ymmv_x", handle: null }, 200);
-    expect(await mintYmmvToken("gho_x")).toEqual({ token: "ymmv_x", handle: null });
+    stubFetch({ token: "ymmv_x", handle: null, github_id: 4242 }, 200);
+    expect(await mintYmmvToken("gho_x")).toEqual({
+      token: "ymmv_x",
+      handle: null,
+      github_id: 4242,
+    });
   });
 });
 

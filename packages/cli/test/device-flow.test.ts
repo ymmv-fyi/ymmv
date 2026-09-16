@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
-vi.mock("../src/auth-http.js");
+// Partial: transport fns mocked, MintRejected real, so the propagation api.ts branches on is pinned.
+vi.mock("../src/auth-http.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/auth-http.js")>()),
+  mintYmmvToken: vi.fn(),
+  revokeYmmvToken: vi.fn(),
+}));
 vi.mock("../src/token-store.js");
 
-import { mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
+import { MintRejected, mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
 import { BASE } from "../src/config.js";
 import { type DeviceCode, login, pollForToken, requestDeviceCode } from "../src/device-flow.js";
 import { peekCredential, saveToken } from "../src/token-store.js";
@@ -387,20 +392,28 @@ describe("login() orchestration", () => {
   }
 
   it("runs the device flow, mints, and stores the token", async () => {
-    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    vi.mocked(mintYmmvToken).mockResolvedValue({
+      token: "ymmv_abc",
+      handle: "carol",
+      github_id: 4242,
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     await withTTY(true, async () => {
       await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
     });
     expect(mintYmmvToken).toHaveBeenCalledWith("gho_x");
-    expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_abc", handle: "carol" });
+    expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_abc", handle: "carol", github_id: 4242 });
     logSpy.mockRestore();
   });
 
   it("warns on stderr when YMMV_TOKEN is set — BEFORE the device flow starts (Ctrl+C window)", async () => {
     // The saved login would be shadowed: loadCredential prefers the env token on every read.
     vi.stubEnv("YMMV_TOKEN", "ymmv_env");
-    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    vi.mocked(mintYmmvToken).mockResolvedValue({
+      token: "ymmv_abc",
+      handle: "carol",
+      github_id: 4242,
+    });
     const errs: string[] = [];
     const errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errs.push(a.join(" "));
@@ -422,7 +435,11 @@ describe("login() orchestration", () => {
       expect(warnOrder).toBeDefined();
       expect(warnOrder as number).toBeLessThan(firstFetchOrder as number);
       // Still completes and saves: the login is legitimate, just shadowed until the env is unset.
-      expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_abc", handle: "carol" });
+      expect(saveToken).toHaveBeenCalledWith({
+        token: "ymmv_abc",
+        handle: "carol",
+        github_id: 4242,
+      });
       expect(logs.join("\n")).toContain("Logged in as carol.");
     } finally {
       vi.unstubAllEnvs();
@@ -432,7 +449,11 @@ describe("login() orchestration", () => {
   });
 
   it("prints a SANITIZED user code and the waiting line (both come off the wire)", async () => {
-    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    vi.mocked(mintYmmvToken).mockResolvedValue({
+      token: "ymmv_abc",
+      handle: "carol",
+      github_id: 4242,
+    });
     const esc = String.fromCharCode(0x1b);
     const logs: string[] = [];
     const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
@@ -454,7 +475,11 @@ describe("login() orchestration", () => {
   });
 
   it("prints the no-handle success line as an indented unit (reserved GitHub username)", async () => {
-    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: null });
+    vi.mocked(mintYmmvToken).mockResolvedValue({
+      token: "ymmv_abc",
+      handle: null,
+      github_id: 4242,
+    });
     const logs: string[] = [];
     const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.join(" "));
@@ -469,7 +494,11 @@ describe("login() orchestration", () => {
   });
 
   it("linkifies ONLY a github.com https verification_uri — anything else prints inert", async () => {
-    vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_abc", handle: "carol" });
+    vi.mocked(mintYmmvToken).mockResolvedValue({
+      token: "ymmv_abc",
+      handle: "carol",
+      github_id: 4242,
+    });
     vi.stubEnv("FORCE_COLOR", "1"); // force the linkify path despite piped test stdout
     const esc = String.fromCharCode(0x1b);
     const osc8 = `${esc}]8;;`;
@@ -518,7 +547,11 @@ describe("login() orchestration", () => {
       vi.mocked(revokeYmmvToken).mockReset();
       vi.mocked(saveToken).mockReset();
       vi.mocked(mintYmmvToken).mockReset();
-      vi.mocked(mintYmmvToken).mockResolvedValue({ token: "ymmv_new", handle: "carol" });
+      vi.mocked(mintYmmvToken).mockResolvedValue({
+        token: "ymmv_new",
+        handle: "carol",
+        github_id: 4242,
+      });
       logs = [];
       errs = [];
       logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
@@ -555,9 +588,29 @@ describe("login() orchestration", () => {
       vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
       vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("logout failed: 503"));
       await run();
-      expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_new", handle: "carol" });
+      expect(saveToken).toHaveBeenCalledWith({
+        token: "ymmv_new",
+        handle: "carol",
+        github_id: 4242,
+      });
       expect(logs.at(-1)).toBe("\n  Logged in as carol.");
       expect(errs.join("\n")).toContain("(couldn't revoke the previous session's token)");
+    });
+
+    it("a mint the CLI refuses (older Worker, no github_id) leaves the stored login untouched", async () => {
+      // The refusal copy promises "Nothing was saved"; only statement order in login() backs it.
+      // Pin it: no save, no revoke of the OLD token — the working login survives on disk.
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(mintYmmvToken).mockRejectedValue(
+        new MintRejected(
+          "Unexpected response from https://x.test. Nothing was saved; run `ymmv login` again.",
+        ),
+      );
+      const err = await run().catch((e: Error) => e);
+      expect(err).toBeInstanceOf(MintRejected); // propagates AS the class api.ts branches on
+      expect((err as Error).message).toMatch(/Unexpected response from/);
+      expect(saveToken).not.toHaveBeenCalled();
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
     });
 
     it("cross-base: warns (sanitized, prose recovery, no runnable command) and does NOT revoke", async () => {

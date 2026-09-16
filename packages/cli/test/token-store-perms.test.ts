@@ -20,7 +20,7 @@ afterAll(async () => {
 
 describe("token file permissions (real fs)", () => {
   it.skipIf(process.platform === "win32")("writes token.json with mode 0600 on POSIX", async () => {
-    await saveToken({ token: "ymmv_real", handle: "carol" });
+    await saveToken({ token: "ymmv_real", handle: "carol", github_id: 4242 });
     expect((await stat(tokenFilePath())).mode & 0o777).toBe(0o600);
   });
 
@@ -33,7 +33,7 @@ describe("token file permissions (real fs)", () => {
       // restrictive umask could otherwise mask the create mode down.
       await mkdir(dir, { recursive: true });
       await chmod(dir, 0o755);
-      await saveToken({ token: "ymmv_dir", handle: "carol" });
+      await saveToken({ token: "ymmv_dir", handle: "carol", github_id: 4242 });
       expect((await stat(dir)).mode & 0o777).toBe(0o700);
     },
   );

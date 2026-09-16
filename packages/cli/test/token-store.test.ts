@@ -30,7 +30,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("saveToken", () => {
   it("mkdirs a 0700 dir, writes a unique 0600 temp file scoped to the base, chmods it, then atomically renames", async () => {
-    await saveToken({ token: "ymmv_x", handle: "carol" });
+    await saveToken({ token: "ymmv_x", handle: "carol", github_id: 4242 });
     expect(mkdir).toHaveBeenCalledWith(DIR, { recursive: true, mode: 0o700 });
     // POSIX also chmods the dir 0o700 to tighten a pre-existing world-traversable dir.
     if (process.platform !== "win32") expect(chmod).toHaveBeenCalledWith(DIR, 0o700);
@@ -39,7 +39,7 @@ describe("saveToken", () => {
     expect(tmp).toMatch(/token\.json\..+\.tmp$/);
     expect(writeFile).toHaveBeenCalledWith(tmp, expect.any(String), { mode: 0o600 });
     const written = JSON.parse(vi.mocked(writeFile).mock.calls[0]?.[1] as string);
-    expect(written).toEqual({ base: BASE, token: "ymmv_x", handle: "carol" });
+    expect(written).toEqual({ base: BASE, token: "ymmv_x", handle: "carol", github_id: 4242 });
     if (process.platform !== "win32") expect(chmod).toHaveBeenCalledWith(tmp, 0o600);
     expect(rename).toHaveBeenCalledWith(tmp, PATH);
   });
@@ -48,9 +48,61 @@ describe("saveToken", () => {
 describe("loadToken", () => {
   it("returns the stored token when the base matches", async () => {
     vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol", github_id: 4242 }),
+    );
+    expect(await loadToken()).toEqual({
+      base: BASE,
+      token: "ymmv_x",
+      handle: "carol",
+      github_id: 4242,
+    });
+  });
+
+  // github_id: ABSENT is the legacy pre-field file and must keep loading (as null, never as
+  // undefined — the reauth guard's `!== null` test would read undefined as a known id and refuse
+  // every legacy heal). PRESENT but invalid is corruption like any other field.
+  it("a legacy file without github_id loads with github_id: null (NOT logged out)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
       JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol" }),
     );
-    expect(await loadToken()).toEqual({ base: BASE, token: "ymmv_x", handle: "carol" });
+    const loaded = await loadToken();
+    expect(loaded).toEqual({ base: BASE, token: "ymmv_x", handle: "carol", github_id: null });
+    expect(loaded && "github_id" in loaded).toBe(true); // present as null, not merely absent
+  });
+
+  it("an explicit github_id: null loads as null too", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol", github_id: null }),
+    );
+    expect((await loadToken())?.github_id).toBeNull();
+  });
+
+  it("returns null (logged out) when github_id is present but not a GitHub id (hand-edited file)", async () => {
+    for (const bad of [0, -1, 1.5, "4242", 2 ** 53, true]) {
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol", github_id: bad }),
+      );
+      expect(await loadToken()).toBeNull();
+    }
+  });
+
+  it("reads a hand-edited empty-string handle as null (same normalization as the mint boundary)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: "", github_id: 4242 }),
+    );
+    expect((await loadToken())?.handle).toBeNull();
+  });
+
+  it("drops stray keys from the file (explicit fields, not a cast)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol", github_id: 1, extra: "x" }),
+    );
+    expect(await loadToken()).toEqual({
+      base: BASE,
+      token: "ymmv_x",
+      handle: "carol",
+      github_id: 1,
+    });
   });
 
   it("returns null when the stored base differs (base-scoping)", async () => {
@@ -98,9 +150,14 @@ describe("loadToken", () => {
 
   it("still loads handle: null (the legit reserved-username state)", async () => {
     vi.mocked(readFile).mockResolvedValue(
-      JSON.stringify({ base: BASE, token: "ymmv_x", handle: null }),
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: null, github_id: 4242 }),
     );
-    expect(await loadToken()).toEqual({ base: BASE, token: "ymmv_x", handle: null });
+    expect(await loadToken()).toEqual({
+      base: BASE,
+      token: "ymmv_x",
+      handle: null,
+      github_id: 4242,
+    });
   });
 });
 
@@ -111,6 +168,14 @@ describe("peekCredential", () => {
     );
     expect(await loadToken()).toBeNull(); // strict reader: logged out
     expect(await peekCredential()).toEqual({ base: BASE, token: "ymmv_x" }); // lenient: revocable
+  });
+
+  it("returns base + token from a corrupt-github_id file too (a bad id must not strand a live token)", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_x", handle: "carol", github_id: "nope" }),
+    );
+    expect(await loadToken()).toBeNull();
+    expect(await peekCredential()).toEqual({ base: BASE, token: "ymmv_x" });
   });
 
   it("returns a foreign-base credential (login's cross-base warn needs it)", async () => {
@@ -148,6 +213,7 @@ describe("loadCredential", () => {
       base: BASE,
       token: "ymmv_env",
       handle: "carol",
+      github_id: null, // no trusted identity behind an env token
       source: "env",
     });
     expect(readFile).not.toHaveBeenCalled(); // env wins WITHOUT touching the store
@@ -156,12 +222,13 @@ describe("loadCredential", () => {
   it("empty YMMV_TOKEN means unset: falls through to the file token with source file", async () => {
     vi.stubEnv("YMMV_TOKEN", "");
     vi.mocked(readFile).mockResolvedValue(
-      JSON.stringify({ base: BASE, token: "ymmv_file", handle: "carol" }),
+      JSON.stringify({ base: BASE, token: "ymmv_file", handle: "carol", github_id: 4242 }),
     );
     expect(await loadCredential()).toEqual({
       base: BASE,
       token: "ymmv_file",
       handle: "carol",
+      github_id: 4242,
       source: "file",
     });
   });
