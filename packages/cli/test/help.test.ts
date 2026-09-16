@@ -121,3 +121,27 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
     expect(res.status, res.stderr).toBe(0);
   });
 });
+
+// The CLI's mint parse requires every field the deployed Worker returns (`github_id` since #57),
+// so a Worker older than the published CLI fails every login. A tag release keeps them ordered
+// only because publish-cli waits for deploy-worker; packages/web/DEPLOY.md cites that. Pin it so
+// a workflow edit that drops the dependency trips here, not on a tag.
+describe("release.yml publishes the CLI only after the Worker deploys", () => {
+  const wf = readFileSync(
+    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+
+  it("publish-cli needs deploy-worker", () => {
+    // The job block: everything indented deeper than the job key (or blank) until the next job.
+    const job = wf.match(/^ {2}publish-cli:\n((?:(?: {4}.*)?\n)*)/m)?.[1];
+    expect(job, "a publish-cli job must exist").toBeTruthy();
+    const flow = (job as string).match(/^\s*needs:\s*\[([^\]]*)\]/m)?.[1];
+    const block = (job as string).match(/^\s*needs:\s*\n((?:\s*- .*\n?)+)/m)?.[1];
+    const needs = (flow ? flow.split(",") : (block ?? "").split("\n"))
+      .map((n) => n.replace(/^\s*- /, "").trim())
+      .filter(Boolean);
+    expect(needs, "publish-cli must declare needs: (flow or block form)").not.toHaveLength(0);
+    expect(needs).toContain("deploy-worker");
+  });
+});

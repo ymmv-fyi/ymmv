@@ -1,9 +1,18 @@
+import { isGithubId, isValidHandle, type MintResult } from "@ymmv/shared";
 import { BASE } from "./config.js";
-import { isTimeoutError, safeFetch, serverMessage, wireText, withRetryHint } from "./http.js";
+import {
+  isTimeoutError,
+  REVOKE_CAP_MS,
+  safeFetch,
+  serverMessage,
+  wireText,
+  withRetryHint,
+} from "./http.js";
 import { sanitizeValue } from "./render.js";
 
-// The CLI<->Worker auth contract. Kept in its own module (imported by device-flow.ts AND index.ts)
-// so api.ts can import login() for 401/409 reauth without a device-flow <-> api import cycle.
+// The CLI<->Worker auth contract. Kept in its own module (imported by device-flow.ts, index.ts,
+// and api.ts, which takes only MintRejected) so api.ts can import login() for 401/409 reauth
+// without a device-flow <-> api import cycle.
 
 /** Body-read guard for the auth wire: malformed/interrupted bodies become null (callers author
  *  their own copy), but a body-read TIMEOUT is rethrown — a stalled body is a network timeout and
@@ -17,9 +26,15 @@ async function bodyJson(res: Response): Promise<unknown | null> {
   }
 }
 
-export interface MintResult {
-  token: string;
-  handle: string | null;
+/** A 200 the CLI refuses to store: the mint reply lacked a usable token, handle, or account id.
+ *  Deterministic for this binary against this Worker (an older Worker never grows the field), so
+ *  api.ts turns it into a PublishRefusal: the interactive loop must exit, not re-run the device
+ *  flow, because every extra pass would mint (and orphan) another token. */
+export class MintRejected extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "MintRejected";
+  }
 }
 
 /** Exchange a GitHub access token for a minted ymmv token (the Worker verifies the token's audience
@@ -76,30 +91,61 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   // Shape-check the mint response BEFORE it can touch the token store: a middlebox 200 with `{}`
   // (or non-JSON) must not overwrite a previously valid token.json with a token-less blob — that
   // silently destroys an existing login. The handle is sanitized at this boundary so every
-  // downstream print (prompts, confirms, "Logged in as") gets a clean value.
+  // downstream print (prompts, confirms, "Logged in as") gets a clean value. github_id is
+  // REQUIRED (strict, not optional): a Worker that can't say which account it minted for can't
+  // produce a credential the reauth guard in api.ts may trust, so it fails loudly here instead of
+  // silently downgrading that guard to the handle-only check — deploy the Worker before the CLI.
   const data = (await bodyJson(res)) as Partial<MintResult> | null;
+  const unexpected = `Unexpected response from ${BASE}. Nothing was saved; run \`ymmv login\` again.`;
+  // A body that isn't JSON at all is a transport event (mid-body reset, captive portal), not a
+  // Worker reply this binary can't use: a plain Error, so the interactive loop keeps its answers.
+  if (!data) throw new Error(unexpected);
+  const token = typeof data.token === "string" && data.token.length > 0 ? data.token : null;
+  // The handle is sanitized, then validated, at this boundary: a real Worker binds only a valid
+  // handle (or null), so anything else, an empty or control-char-only string or a slash-bearing
+  // one from a foreign YMMV_API origin, is a reply this binary refuses to store.
+  const handle =
+    data.handle === null
+      ? null
+      : typeof data.handle === "string"
+        ? sanitizeValue(data.handle)
+        : undefined;
   if (
-    !data ||
-    typeof data.token !== "string" ||
-    data.token.length === 0 ||
-    (data.handle !== null && typeof data.handle !== "string")
+    token === null ||
+    handle === undefined ||
+    (handle !== null && !isValidHandle(handle)) ||
+    !isGithubId(data.github_id)
   ) {
-    throw new Error(
-      `Unexpected response from ${BASE}. Nothing was saved; run \`ymmv login\` again.`,
+    // A well-formed token in a reply we refuse is ALREADY live in D1 (the Worker mints before it
+    // responds) and nothing local will ever hold it. Revoke it now, best-effort, or it stays an
+    // orphaned active session only the server could ever see. Capped at REVOKE_CAP_MS, not
+    // REQUEST_TIMEOUT_MS: this origin is already misbehaving, and a hung revoke must not stall
+    // the login error for the full request timeout. If even the revoke fails, say so: the copy
+    // must not claim a clean slate the server doesn't have.
+    let revokeFailed = false;
+    if (token !== null) {
+      await revokeYmmvToken(token, AbortSignal.timeout(REVOKE_CAP_MS)).catch(() => {
+        revokeFailed = true;
+      });
+    }
+    throw new MintRejected(
+      revokeFailed ? `${unexpected} The login the server minted could not be revoked.` : unexpected,
     );
   }
-  return { token: data.token, handle: data.handle === null ? null : sanitizeValue(data.handle) };
+  return { token, handle, github_id: data.github_id };
 }
 
 /** Revoke a ymmv token server-side. Returns whether a live token was actually revoked.
- *  safeFetch gives the revoke the default timeout; logout() still owns the user-facing copy for
- *  ANY throw, so a hung revoke fails into its retry message instead of hanging logout forever. */
-export async function revokeYmmvToken(token: string): Promise<boolean> {
+ *  Two callers: logout() (default timeout via safeFetch; it owns the user-facing copy for ANY
+ *  throw, so a hung revoke fails into its retry message instead of hanging logout forever) and
+ *  the mint refusal above (passes its own short `signal` and folds a failure into its copy). */
+export async function revokeYmmvToken(token: string, signal?: AbortSignal): Promise<boolean> {
   const res = await safeFetch(
     `${BASE}/api/v1/auth/logout`,
     {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
+      signal,
       // Never follow a redirect: a 30x→200 must not read as a successful revoke (which would delete
       // the local file while the server token stays live). Same guard as mint + publish/delete.
       redirect: "manual",

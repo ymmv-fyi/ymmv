@@ -244,20 +244,20 @@ export async function login(deps: PollDeps = {}): Promise<void> {
     ),
   );
   const accessToken = await pollForToken(dc, deps);
-  const { token, handle } = await mintYmmvToken(accessToken);
+  const minted = await mintYmmvToken(accessToken);
   // The device flow takes minutes: a concurrent login may have replaced the stored token since
   // the pre-flow peek. Re-read so the revoke targets what the file ACTUALLY holds at overwrite
   // time (the pre-flow `prior` still owns the cross-base warn); the leftover race is the
-  // save-to-revoke gap, tracked in TODOS.md (atomic login token rotate).
+  // save-to-revoke gap, tracked in issue #58 (atomic login token rotate).
   const replaced = await peekCredential();
   try {
-    await saveToken({ token, handle });
+    await saveToken(minted);
   } catch (e) {
     // Don't strand a minted token we couldn't persist — the user would have no way to revoke it.
-    await revokeYmmvToken(token).catch(() => {});
+    await revokeYmmvToken(minted.token).catch(() => {});
     throw e;
   }
-  if (replaced && replaced.base === BASE && replaced.token !== token) {
+  if (replaced && replaced.base === BASE && replaced.token !== minted.token) {
     // The new token is safely on disk; retire the one it replaced. Best effort — a failed revoke
     // must never block a login that already succeeded, but say so (the old token stays live and
     // this CLI no longer holds a reference to it). The !== guard is defensive: if a server ever
@@ -270,8 +270,8 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   }
   console.log(
     message(
-      handle
-        ? `Logged in as ${handle}.`
+      minted.handle
+        ? `Logged in as ${minted.handle}.`
         : "Logged in. No handle bound (your GitHub username is a reserved word).",
     ),
   );

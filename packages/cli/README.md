@@ -68,7 +68,9 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
 ## Environment variables
 
 - `NO_COLOR` disables color output (and `FORCE_COLOR=0`/`false` force-disables it).
-- `YMMV_API` points the CLI at a different Worker (development/staging). Bare origin only.
+- `YMMV_API` points the CLI at a different Worker (development/staging). Bare origin only. That
+  Worker must be deployed with or after this CLI release: `ymmv login` requires the account id the
+  login response carries and refuses (revoking what it minted) otherwise.
 - `YMMV_TOKEN` authenticates without a browser (CI and scripts, below). Takes precedence over
   the stored login and is read-only: the CLI never writes, revokes, or deletes it, and
   `ymmv login` / `ymmv logout` keep acting on the stored login. Viewing (`ymmv <handle>`) also

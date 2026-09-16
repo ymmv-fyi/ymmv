@@ -1,16 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/token-store.js");
-vi.mock("../src/auth-http.js");
+// Partial: the transport fns are mocked, but MintRejected stays real — api.ts must recognise the
+// class a real mint throws, and an automocked constructor would produce message-less instances.
+vi.mock("../src/auth-http.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/auth-http.js")>()),
+  mintYmmvToken: vi.fn(),
+  revokeYmmvToken: vi.fn(),
+}));
 vi.mock("../src/device-flow.js");
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { deleteProfile, PublishRefusal, publishProfile } from "../src/api.js";
-import { revokeYmmvToken } from "../src/auth-http.js";
+import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
-import { deleteToken, loadCredential, loadToken, peekBase } from "../src/token-store.js";
+import {
+  type Credential,
+  deleteToken,
+  loadCredential,
+  loadToken,
+  peekBase,
+  type StoredToken,
+} from "../src/token-store.js";
 
 const PROFILE: Profile = {
   schema_version: SCHEMA_VERSION,
@@ -19,6 +32,24 @@ const PROFILE: Profile = {
   extras: [],
   updated_at: "x",
 };
+
+/** A file credential as loadToken returns it. Ids: 1001 is the account this run logged in as,
+ *  2002 a stranger; no user-facing message may ever contain either. */
+const stored = (o: Partial<StoredToken> = {}): StoredToken => ({
+  base: "B",
+  token: "t",
+  handle: "carol",
+  github_id: 1001,
+  ...o,
+});
+
+/** The credential a command merged its profile under, as passed to publishProfile. MINE is the
+ *  normal case; LEGACY is a pre-#57 token.json (no id) at command start. */
+const asMine = (c: StoredToken): Credential => ({ ...c, source: "file" });
+const MINE = asMine(stored());
+const MINE_OLD = asMine(stored({ handle: "old" }));
+const LEGACY = asMine(stored({ github_id: null }));
+const LEGACY_OLD = asMine(stored({ handle: "old", github_id: null }));
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 const status = (code: number, body: unknown = {}) =>
@@ -101,7 +132,7 @@ describe("YMMV_API startup validation", () => {
 
 describe("ymmv logout", () => {
   it("revokes server-side, then deletes the local file", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");
@@ -111,7 +142,7 @@ describe("ymmv logout", () => {
   it("KEEPS the local token when the revoke can't reach the server", async () => {
     // Class-truthful mock: the real revokeYmmvToken surfaces connectivity failures as safeFetch's
     // typed NetworkError — logout branches on that type, never on message text.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockRejectedValue(new NetworkError("Can't reach B (offline)"));
     await main(["logout"]);
     expect(deleteToken).not.toHaveBeenCalled();
@@ -121,7 +152,7 @@ describe("ymmv logout", () => {
   it("KEEPS the local token when the revoke times out (hung connection, not just refused)", async () => {
     // A BODY-read timeout escapes safeFetch's wrapper as the bare TimeoutError DOMException —
     // connectivity-shaped, so it must land in the couldn't-reach branch via isTimeoutError.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockRejectedValue(
       new DOMException("The operation was aborted due to timeout", "TimeoutError"),
     );
@@ -138,7 +169,7 @@ describe("ymmv logout", () => {
     for (const failure of ["logout failed: 500", "logout failed: unexpected response"]) {
       vi.clearAllMocks();
       errs.length = 0;
-      vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+      vi.mocked(loadToken).mockResolvedValue(stored());
       vi.mocked(revokeYmmvToken).mockRejectedValue(new Error(failure));
       await main(["logout"]);
       expect(deleteToken).not.toHaveBeenCalled();
@@ -183,7 +214,7 @@ describe("ymmv logout", () => {
   });
 
   it("notes when the server had no active session for the revoked token", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockResolvedValue(false);
     await main(["logout"]);
     expect(deleteToken).toHaveBeenCalledTimes(1);
@@ -191,7 +222,7 @@ describe("ymmv logout", () => {
   });
 
   it("prints the revoke-unreachable warning as an indented unit on stderr", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockRejectedValue(new NetworkError("Can't reach B (offline)"));
     await main(["logout"]);
     expect(errs).toContain(
@@ -220,7 +251,7 @@ describe("ymmv login", () => {
 
 describe("ymmv unset dispatch", () => {
   it("main(['unset','shell']) routes to the unset flow (GET then POST without the key)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(ok({ ...PROFILE, entries: [{ key: "shell", value: "zsh" }] })) // GET
@@ -236,7 +267,7 @@ describe("ymmv unset dispatch", () => {
 
 describe("publish auto-reauth", () => {
   it("on 401: explains the re-login, deletes the token, re-logs-in, retries once", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     // The context line must land BEFORE login()'s device prompt — an unexplained GitHub auth
     // challenge mid-publish reads as phishing. login is mocked to drop a marker so order is real.
     vi.mocked(login).mockImplementation(async () => {
@@ -247,7 +278,7 @@ describe("publish auto-reauth", () => {
       .mockResolvedValueOnce(status(401))
       .mockResolvedValueOnce(ok({ handle: "carol" }));
     vi.stubGlobal("fetch", fetchFn);
-    await publishProfile(PROFILE);
+    await publishProfile(PROFILE, MINE);
     expect(deleteToken).toHaveBeenCalledTimes(1);
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(2);
@@ -258,8 +289,8 @@ describe("publish auto-reauth", () => {
 
   it("on 409 (stale handle): explains, re-logs-in WITHOUT deleting, then REFUSES the rebound retry", async () => {
     vi.mocked(loadToken)
-      .mockResolvedValueOnce({ base: "B", token: "t", handle: "old" })
-      .mockResolvedValue({ base: "B", token: "t2", handle: "new" });
+      .mockResolvedValueOnce(stored({ handle: "old" }))
+      .mockResolvedValue(stored({ token: "t2", handle: "new" }));
     // handle_not_bound is what the server's bound-handle guard sends for a stale handle; the CLI
     // branches on the 409 status alone, never the error code.
     const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" }));
@@ -267,7 +298,7 @@ describe("publish auto-reauth", () => {
     // The caller merged this profile from a read of "old" — which after a rename may be a
     // squatter's profile. Publishing that pre-reauth merge under the newly bound "new" would be
     // a silent cross-identity write; a fresh run re-reads under "new" and merges correctly.
-    await expect(publishProfile({ ...PROFILE, handle: "old" })).rejects.toThrow(
+    await expect(publishProfile({ ...PROFILE, handle: "old" }, MINE_OLD)).rejects.toThrow(
       /now binds "new".*Re-run the command/,
     );
     expect(deleteToken).not.toHaveBeenCalled();
@@ -280,28 +311,135 @@ describe("publish auto-reauth", () => {
 
   it("refuses the FIRST send when the stored login no longer matches the merged profile", async () => {
     // a concurrent `ymmv login` swapped accounts between the caller's read and this write
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t2", handle: "mallory" });
+    vi.mocked(loadToken).mockResolvedValue(
+      stored({ token: "t2", handle: "mallory", github_id: 2002 }),
+    );
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/login changed/);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/login changed/);
     expect(fetchFn).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
+  });
+
+  it("refuses the FIRST send on a same-account RENAME too (the handle half of the guard)", async () => {
+    // Same id, different handle: the merge was built for "carol", the store now says "caroline".
+    // For an env credential this handle comparison is the entire guard.
+    vi.mocked(loadToken).mockResolvedValue(stored({ token: "t2", handle: "caroline" }));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/login changed/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("a LEGACY caller credential (no id) with a store still lacking one sends: the one handle-only allowance", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored({ github_id: null }));
+    const fetchFn = vi.fn().mockResolvedValue(ok({ handle: "carol" }));
+    vi.stubGlobal("fetch", fetchFn);
+    expect((await publishProfile(PROFILE, LEGACY)).handle).toBe("carol");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("a LEGACY caller credential whose store now carries an id is refused: the file was rewritten unverified", async () => {
+    // A same-handle account switch via a concurrent login (or a heal whose retry then failed) would
+    // otherwise pass the handle-only check with no id to compare. Refuse; a fresh run re-reads.
+    vi.mocked(loadToken).mockResolvedValue(stored({ token: "t2", github_id: 2002 }));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, LEGACY)).rejects.toThrow(/login changed/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("not logged in at the first send: a login as the SAME account sends after the context line", async () => {
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(stored({ token: "t2" }));
+    const fetchFn = vi.fn().mockResolvedValue(ok({ handle: "carol" }));
+    vi.stubGlobal("fetch", fetchFn);
+    expect((await publishProfile(PROFILE, MINE)).handle).toBe("carol");
+    expect(logs).toContain("\n  Not logged in. Logging in to publish.");
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("not logged in at the first send: a device flow a STRANGER approved is refused before any POST", async () => {
+    // Same handle string, different account: exactly the reclaim shape the id guard exists for,
+    // now on a credential the device flow minted seconds ago.
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(stored({ token: "t2", github_id: 2002 }));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/login changed/);
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("not logged in at the first send: a login that persisted nothing is a refusal, not a second device flow", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/did not persist a token/);
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("not logged in at the first send: prints ONE context line, logs in, and a refused mint exits the loop", async () => {
+    // token.json vanished mid-command (concurrent logout, or a heal that deleted it and whose
+    // retry failed transiently). The device flow must be introduced, and an older Worker's
+    // refused mint must be a PublishRefusal here too, not only inside the heal.
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(login).mockRejectedValueOnce(
+      new MintRejected("Unexpected response from B. Nothing was saved; run `ymmv login` again."),
+    );
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect((err as Error).message).toMatch(/Unexpected response from/);
+    expect(logs).toContain("\n  Not logged in. Logging in to publish.");
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses the FIRST send when the store now holds the SAME handle under a DIFFERENT account", async () => {
+    // token.json vanished (concurrent logout) and ensureLogin ran a device flow a stranger who now
+    // owns "carol" approved, or a concurrent `ymmv login` swapped accounts: the handle string
+    // matches, only the id tells. The caller passes the credential it merged under.
+    const mine = { ...stored(), source: "file" as const };
+    vi.mocked(loadToken).mockResolvedValue(stored({ token: "t2", github_id: 2002 }));
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const err = await publishProfile(PROFILE, mine).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect((err as Error).message).toMatch(/login changed/);
+    expect((err as Error).message).not.toMatch(/1001|2002/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("an env credential passed as `expected` compares handle only (it carries no trusted id)", async () => {
+    const env = { ...stored({ token: "ymmv_env", github_id: null }), source: "env" as const };
+    vi.mocked(loadCredential).mockResolvedValue(env);
+    const fetchFn = vi.fn().mockResolvedValue(ok({ handle: "carol" }));
+    vi.stubGlobal("fetch", fetchFn);
+    expect((await publishProfile(PROFILE, env)).handle).toBe("carol");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("a 200 with an unreadable body still reports SUCCESS (the commit already happened)", async () => {
     // A truncated/malformed success body must never resurface as a failed publish — the
     // interactive loop would falsely print "Nothing was published" for a live profile.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json", { status: 200 })));
-    const res = await publishProfile(PROFILE);
+    const res = await publishProfile(PROFILE, MINE);
     expect(res.handle).toBe("carol"); // login-bound fallback echo
   });
 
   it("sanitizes the server-echoed handle in the publish result (callers print it verbatim)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ handle: `car${esc}[31mol` })));
-    const res = await publishProfile(PROFILE);
+    const res = await publishProfile(PROFILE, MINE);
     expect(res.handle).toBe("carol");
     expect(res.url).toMatch(/\/carol$/);
     expect(res.handle).not.toContain(esc);
@@ -309,18 +447,18 @@ describe("publish auto-reauth", () => {
 
   it("REFUSES the 401 retry when re-login binds a DIFFERENT account (no cross-account clobber)", async () => {
     vi.mocked(loadToken)
-      .mockResolvedValueOnce({ base: "B", token: "t", handle: "carol" }) // pre-send login
-      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" }); // after the 401 re-login
+      .mockResolvedValueOnce(stored()) // pre-send login
+      .mockResolvedValue(stored({ token: "t2", handle: "mallory", github_id: 2002 })); // after the 401 re-login
     const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
     vi.stubGlobal("fetch", fetchFn);
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/different account.*mallory/i);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/different account.*mallory/i);
     expect(fetchFn).toHaveBeenCalledTimes(1); // the retry POST never went out
   });
 
   it("throws after a second auth failure (no infinite loop)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/authentication failed/i);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/authentication failed/i);
   });
 
   it("second 409 handle_not_bound gets HONEST post-heal copy, never the server's 'run login and retry'", async () => {
@@ -328,7 +466,7 @@ describe("publish auto-reauth", () => {
     // server's handle_not_bound message says "Run `ymmv login` and retry" — but the CLI has
     // ALREADY done exactly that; parroting it would send the user in a loop. Branch on the slug
     // and tell the truth instead.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -338,7 +476,7 @@ describe("publish auto-reauth", () => {
         }),
       ),
     );
-    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/still refuses this handle after a fresh login/);
     expect((err as Error).message).not.toMatch(/Run `ymmv login`/);
     // PublishRefusal is the interactive loop's discriminator: as a plain Error, a repeated `y`
@@ -352,27 +490,27 @@ describe("publish auto-reauth", () => {
     // the interactive loop would then politely re-offer a retry that can never succeed.
     // Rebound-after-401 site:
     vi.mocked(loadToken)
-      .mockResolvedValueOnce({ base: "B", token: "t", handle: "carol" })
-      .mockResolvedValue({ base: "B", token: "t2", handle: "mallory" });
+      .mockResolvedValueOnce(stored())
+      .mockResolvedValue(stored({ token: "t2", handle: "mallory", github_id: 2002 }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
-    await expect(publishProfile(PROFILE)).rejects.toBeInstanceOf(PublishRefusal);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toBeInstanceOf(PublishRefusal);
     // Post-retry second-401 site:
     vi.clearAllMocks();
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
-    await expect(publishProfile(PROFILE)).rejects.toBeInstanceOf(PublishRefusal);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toBeInstanceOf(PublishRefusal);
   });
 
   it("second 409 with a message-less handle_not_bound body gets the same honest copy", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { error: "handle_not_bound" })));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(
       /still refuses this handle after a fresh login/,
     );
   });
 
   it("second 409 with a DIFFERENT slug keeps that server message (only handle_not_bound is stale advice)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -381,27 +519,33 @@ describe("publish auto-reauth", () => {
           status(409, { error: "handle_reused", message: "That handle moved to a new account." }),
         ),
     );
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/That handle moved to a new account/);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(
+      /That handle moved to a new account/,
+    );
   });
 
   it("second 409 with a non-JSON or non-string-message body falls back too", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response("<html>proxy</html>", { status: 409 })),
     );
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(
+      /handle is taken by another account/,
+    );
     vi.mocked(login).mockClear();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { message: 123 })));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/handle is taken by another account/);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(
+      /handle is taken by another account/,
+    );
   });
 
   it("sanitizes and caps a hostile second-409 message before it reaches the terminal", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const esc = String.fromCharCode(0x1b);
     const hostile = `bad ${esc}[2Jcopy ${"x".repeat(500)}`;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(409, { message: hostile })));
-    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toContain(esc);
     expect((err as Error).message.length).toBeLessThanOrEqual(201); // wireText cap + ellipsis
@@ -409,15 +553,15 @@ describe("publish auto-reauth", () => {
   });
 
   it("a generic POST failure surfaces as publish failed with status and capped body", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("boom", { status: 500 })));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/publish failed: 500 boom/);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/publish failed: 500 boom/);
   });
 
   it("a generic POST failure with a {message} body surfaces the server's copy, not the dump", async () => {
     // The server's 4xx bodies carry curated human copy (422 caps, 400 schema upgrade); wrapping
     // it in `publish failed: 422 {...}` JSON noise defeats the point of writing it.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi
@@ -426,7 +570,7 @@ describe("publish auto-reauth", () => {
           status(422, { error: "value_too_long", message: "Values are capped at 256 characters." }),
         ),
     );
-    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
     expect((err as Error).message).toBe("Values are capped at 256 characters.");
     expect((err as Error).message).not.toMatch(/publish failed/);
   });
@@ -434,7 +578,7 @@ describe("publish auto-reauth", () => {
   it("a schema-rejection 400 surfaces the upgrade instruction AS a refusal (no retry loop)", async () => {
     // First-publish path: the read 404s (no profile), so the stale CLI reaches the POST and gets
     // the 400. No edit can change the compiled SCHEMA_VERSION — the interactive loop must exit.
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -446,16 +590,205 @@ describe("publish auto-reauth", () => {
         }),
       ),
     );
-    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/^Upgrade the ymmv CLI \(npm i -g ymmv-cli\)\.$/);
     expect(err).toBeInstanceOf(PublishRefusal);
+  });
+
+  // Identity rows the handle STRING can't see (issue #57): one test per row of the table in
+  // api.ts, plus the fail-closed and refused-mint rows.
+  describe("account-id rows", () => {
+    const refusal = async (p: Profile = PROFILE, expected: Credential = MINE) => {
+      const err = await publishProfile(p, expected).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(PublishRefusal);
+      const msg = (err as Error).message;
+      expect(msg).not.toMatch(/1001|2002/); // ids never print
+      return msg;
+    };
+
+    it("401: SAME handle, DIFFERENT account (rename + squat) → refuses, retry never sent", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", github_id: 2002 }));
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal();
+      expect(msg).toMatch(/"carol" now belongs to a different GitHub account/);
+      expect(msg).toMatch(/Nothing was published/);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("409: SAME handle, DIFFERENT account → same squat refusal, never the 'publish under it' line", async () => {
+      // The friendly rebound copy would walk the user's merge onto the stranger's profile.
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", github_id: 2002 }));
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal();
+      expect(msg).toMatch(/now belongs to a different GitHub account/);
+      expect(msg).not.toMatch(/now binds/);
+      expect(deleteToken).not.toHaveBeenCalled();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("401: SAME account, RENAMED handle → the rebound copy (the id proves it is not a different account)", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", handle: "caroline" }));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(status(401)));
+      const msg = await refusal();
+      expect(msg).toMatch(/now binds "caroline".*Re-run the command to publish under it/);
+      expect(msg).not.toMatch(/different account/);
+    });
+
+    it("409: DIFFERENT handle AND DIFFERENT account → the two-handle copy, never 'now binds'", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored({ handle: "old" }))
+        .mockResolvedValue(stored({ token: "t2", handle: "new", github_id: 2002 }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" })),
+      );
+      const msg = await refusal({ ...PROFILE, handle: "old" }, MINE_OLD);
+      expect(msg).toMatch(/different account \("new", not "old"\)/);
+      expect(msg).not.toMatch(/now binds/);
+    });
+
+    it("LEGACY (pre-field token.json, no id): same handle after a 401 still retries (regression)", async () => {
+      // The one deliberate handle-only heal: the file has no id to consult, and the re-login just
+      // wrote one. A leaked `undefined` here (instead of null) would refuse every upgraded user.
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored({ github_id: null }))
+        .mockResolvedValue(stored({ token: "t2" }));
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(status(401))
+        .mockResolvedValueOnce(ok({ handle: "carol" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const res = await publishProfile(PROFILE, LEGACY);
+      expect(res.handle).toBe("carol");
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("LEGACY with a changed handle keeps today's status-based copy (401 different / 409 rebound)", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored({ github_id: null }))
+        .mockResolvedValue(stored({ token: "t2", handle: "mallory", github_id: 2002 }));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(status(401)));
+      expect(await refusal(PROFILE, LEGACY)).toMatch(
+        /different account \("mallory", not "carol"\)/,
+      );
+      vi.clearAllMocks();
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored({ handle: "old", github_id: null }))
+        .mockResolvedValue(stored({ handle: "new" }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" })),
+      );
+      expect(await refusal({ ...PROFILE, handle: "old" }, LEGACY_OLD)).toMatch(/now binds "new"/);
+    });
+
+    it("LEGACY file whose re-login binds NO handle: the reserved-word line, no retry", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored({ github_id: null }))
+        .mockResolvedValue(stored({ token: "t2", handle: null }));
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal(PROFILE, LEGACY);
+      expect(msg).toMatch(/no longer binds a handle/);
+      expect(msg).not.toContain('""');
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a re-login that binds NO handle (reserved username) gets its own line, never an empty quoted handle", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", handle: null }));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(status(401)));
+      const msg = await refusal();
+      expect(msg).toMatch(/no longer binds a handle \(your GitHub username is a reserved word\)/);
+      expect(msg).not.toContain('""');
+    });
+
+    it("same account, same handle: the retry goes out (the happy heal is unchanged)", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2" }));
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(status(409, { error: "handle_not_bound" }))
+        .mockResolvedValueOnce(ok({ handle: "carol" }));
+      vi.stubGlobal("fetch", fetchFn);
+      expect((await publishProfile(PROFILE, MINE)).handle).toBe("carol");
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("a DIFFERENT account with a reserved username: the different-account line wins, never 'your username'", async () => {
+      // Precedence pin: a PROVEN account change is diagnosed before the null-handle line, so the
+      // user is never told "your GitHub username is a reserved word" about a stranger's username.
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", handle: null, github_id: 2002 }));
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal();
+      expect(msg).toMatch(/bound a different GitHub account/);
+      expect(msg).not.toMatch(/reserved word|now binds|""/);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a mint the CLI refuses DURING the heal is a PublishRefusal: the loop exits, no second device flow", async () => {
+      // A Worker one version behind rejects deterministically; as a plain Error the interactive
+      // loop would re-offer `y`, run the device flow again, and orphan another minted token.
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      vi.mocked(login).mockRejectedValueOnce(
+        new MintRejected("Unexpected response from B. Nothing was saved; run `ymmv login` again."),
+      );
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal();
+      expect(msg).toMatch(/Unexpected response from/);
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a re-login that persisted nothing is a refusal, not a SECOND unexplained device flow", async () => {
+      vi.mocked(loadToken).mockResolvedValueOnce(stored()).mockResolvedValue(null); // token.json still absent after login()
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      const msg = await refusal();
+      expect(msg).toMatch(/did not persist a token/);
+      expect(login).toHaveBeenCalledTimes(1); // ensureLogin() would have run a second one
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("a post-reauth credential carrying NO id fails CLOSED: refuse, never retry the merge", async () => {
+      // Defensive pin (an older CLI racing the file write is the only way here): idChanged is true
+      // whenever the new credential can't prove its account. Assert the DIRECTION, not the copy —
+      // an unproven identity must not receive the merge.
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(stored())
+        .mockResolvedValue(stored({ token: "t2", github_id: null }));
+      const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+      vi.stubGlobal("fetch", fetchFn);
+      await refusal();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
 describe("deleteProfile", () => {
   // The caller (runDelete) passes the credential it confirmed against — deleteProfile never
   // re-reads the store, so a concurrent login can't swap accounts between confirm and send.
-  const FILE_CRED = { base: "B", token: "t", handle: "me", source: "file" as const };
+  const FILE_CRED = {
+    base: "B",
+    token: "t",
+    handle: "me",
+    github_id: 1001,
+    source: "file" as const,
+  };
 
   it("sends a bearer DELETE with the PASSED credential and succeeds on 200", async () => {
     const fetchFn = vi.fn().mockResolvedValue(ok({ ok: true }));
@@ -503,27 +836,27 @@ describe("write rate limit (429)", () => {
     );
 
   it("publish surfaces the server message + retry-after (not a raw 'publish failed', no reauth loop)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(limited()));
-    await expect(publishProfile(PROFILE)).rejects.toThrow(/slow down.*retry in 60s/i);
+    await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/slow down.*retry in 60s/i);
     expect(login).not.toHaveBeenCalled(); // 429 is not 401/409 — no reauth loop
   });
 
   it("delete surfaces the rate-limit message + retry-after", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(limited()));
     await expect(
-      deleteProfile({ base: "B", token: "t", handle: "me", source: "file" }),
+      deleteProfile({ base: "B", token: "t", handle: "me", github_id: 1001, source: "file" }),
     ).rejects.toThrow(/retry in 60s/i);
   });
 
   it("drops the retry hint when retry-after is not the seconds form (HTTP-date)", async () => {
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     const dated = new Response(JSON.stringify({ error: "rate_limited" }), {
       status: 429,
       headers: { "retry-after": "Thu, 03 Jul 2026 04:00:00 GMT" },
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(dated));
-    const err = await publishProfile(PROFILE).catch((e: Error) => e);
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/rate limited/i);
     expect((err as Error).message).not.toContain("retry in");
@@ -533,13 +866,19 @@ describe("write rate limit (429)", () => {
 // An env credential is read-only config: it must never enter the file-token heal paths
 // (deleteToken / device-flow re-login), and its error copy names the VARIABLE — never the value.
 describe("env credential (YMMV_TOKEN) API paths", () => {
-  const envCred = { base: "B", token: "ymmv_env", handle: "carol", source: "env" as const };
+  const envCred = {
+    base: "B",
+    token: "ymmv_env",
+    handle: "carol",
+    github_id: null,
+    source: "env" as const,
+  };
 
   it("publish 401 refuses naming YMMV_TOKEN: one POST, file token kept, no re-login", async () => {
     vi.mocked(loadCredential).mockResolvedValue(envCred);
     const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
     vi.stubGlobal("fetch", fetchFn);
-    const err: unknown = await publishProfile(PROFILE).catch((e: unknown) => e);
+    const err: unknown = await publishProfile(PROFILE, envCred).catch((e: unknown) => e);
     // PublishRefusal, not Error: deterministic for this process (no edit changes the env), so the
     // interactive loop must exit instead of re-offering a retry that fails identically.
     expect(err).toBeInstanceOf(PublishRefusal);
@@ -554,7 +893,7 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     vi.mocked(loadCredential).mockResolvedValue(envCred);
     const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" }));
     vi.stubGlobal("fetch", fetchFn);
-    const err: unknown = await publishProfile(PROFILE).catch((e: unknown) => e);
+    const err: unknown = await publishProfile(PROFILE, envCred).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PublishRefusal);
     expect(String(err)).toContain("YMMV_HANDLE");
     expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -600,7 +939,7 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
 
   it("logout is EXEMPT from the env gate (a malformed env token must not strand the file logout)", async () => {
     vi.stubEnv("YMMV_TOKEN", "bad token");
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(process.exitCode).toBeUndefined();
@@ -611,7 +950,7 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
 
   it("logout with YMMV_TOKEN set keeps file semantics and notes the env token persists", async () => {
     vi.stubEnv("YMMV_TOKEN", "ymmv_env");
-    vi.mocked(loadToken).mockResolvedValue({ base: "B", token: "t", handle: "carol" });
+    vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");

@@ -10,6 +10,11 @@ import { sanitizeValue } from "./render.js";
  *  after the SYN) must become words, not hang a command forever. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/** The best-effort revoke of a token the CLI refuses to store (auth-http.ts) caps itself here
+ *  instead of REQUEST_TIMEOUT_MS: that origin is already misbehaving, and a hung revoke must not
+ *  stall the login error for the full request timeout. */
+export const REVOKE_CAP_MS = 5_000;
+
 /** The one line every timeout prints, on every surface — a single constant so the copy can't
  *  drift between causeText and displayError. */
 const TIMEOUT_TEXT = "request timed out";
@@ -161,8 +166,8 @@ export async function safeFetch(
 ): Promise<Response> {
   try {
     // Default timeout so a dead-but-open connection fails with words instead of hanging. An
-    // explicit caller signal wins (none exist today); Node >=22 unrefs the timer, so the signal
-    // never holds the process open.
+    // explicit caller signal wins (the mint-refusal revoke in auth-http.ts passes REVOKE_CAP_MS);
+    // Node >=22 unrefs the timer, so the signal never holds the process open.
     return await fetchFn(url, {
       ...init,
       signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),

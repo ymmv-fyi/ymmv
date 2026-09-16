@@ -264,7 +264,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
     }
     const entries = assemble();
     showCard(entries);
-    printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
+    printPublished(await publishProfile(newProfile(handle, entries, extras), cred), color);
     return;
   }
 
@@ -283,7 +283,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
       );
       if (ans === "y") {
         try {
-          printPublished(await publishProfile(newProfile(handle, entries, extras)), color);
+          printPublished(await publishProfile(newProfile(handle, entries, extras), cred), color);
           return;
         } catch (e) {
           // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the 13 answers
@@ -295,7 +295,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
           // Honest about what's known: a server-ANSWERED failure (4xx/5xx body) proves nothing
           // was written, but a lost response (NetworkError/timeout) can arrive AFTER the server
           // committed — never claim "nothing was published" for those. (The retry also replays
-          // the pre-loop read; see the RMW entry in TODOS.md.)
+          // the pre-loop read; see issue #56, the uncached read path for RMW mutations.)
           const ambiguous = e instanceof NetworkError || isTimeoutError(e);
           console.error(
             message(
@@ -337,8 +337,8 @@ export async function view(handle: string): Promise<void> {
 
   // view never forces a login, and stays ENV-BLIND on purpose (loadToken, not loadCredential):
   // YMMV_HANDLE is unverified input, so an env credential must never label a fetched profile as
-  // "you" — a mislabeled diff is confidently wrong output (pinned in commands.test.ts; see the
-  // TODOS identity entry for the trusted-identity path that would lift this).
+  // "you" — a mislabeled diff is confidently wrong output (pinned in commands.test.ts; issue #64
+  // tracks the trusted-identity path, a whoami lookup, that would lift this).
   const cred = await loadToken();
   if (cred?.handle) {
     // A transient failure fetching MY profile degrades to a plain view (read-only path, no
@@ -398,7 +398,7 @@ export async function runSet(target: SetTarget): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const res = await publishProfile(newProfile(handle, entries, extras));
+  const res = await publishProfile(newProfile(handle, entries, extras), cred);
   const line =
     target.kind === "curated"
       ? `Set ${KEY_LABELS[target.key]} = ${target.value}.`
@@ -431,7 +431,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
     );
     return; // idempotent no-op: exit 0, and crucially no network write
   }
-  const res = await publishProfile(newProfile(handle, entries, extras));
+  const res = await publishProfile(newProfile(handle, entries, extras), cred);
   // removed.* comes off the wire (unlike runSet's echo of the user's own argv) — sanitize it.
   const line =
     target.kind === "curated"
