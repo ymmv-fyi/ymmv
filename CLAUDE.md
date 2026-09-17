@@ -51,3 +51,23 @@ Workers + D1.
   (`packages/web/test/e2e/seed.sql`) updated.
 - **Secrets:** never log the ymmv bearer or the GitHub access_token (regression
   tests must not print tokens).
+
+## Deploy Configuration (configured by /setup-deploy)
+- Platform: Cloudflare Workers (wrangler), Worker `ymmv-production`
+- Production URL: https://ymmv.fyi
+- Deploy workflow: `.github/workflows/release.yml` (`deploy-worker`), fires on a
+  `vX.Y.Z` tag only. **Merging to main deploys nothing.**
+- Deploy status command: `gh run list --workflow release.yml --limit 1`
+- Merge method: rebase
+- Project type: web app + API (Worker) and npm CLI (`ymmv-cli`)
+- Post-deploy health check: https://ymmv.fyi
+
+### Custom deploy hooks
+- Pre-merge: none (CI gates the PR)
+- Deploy trigger: web-only change = manual runbook `packages/web/DEPLOY.md`
+  (maintainer, needs Cloudflare creds); CLI or CLI+Worker = maintainer pushes a
+  `vX.Y.Z` tag
+- Deploy status: tag = the `release.yml` run; manual = wrangler output names
+  `ymmv-production` + the `ymmv.fyi` / `www.ymmv.fyi` custom domains
+- Health check: https://ymmv.fyi (200) and https://ymmv.fyi/api/v1/u/bardisty
+  (200, JSON)
