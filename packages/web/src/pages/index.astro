@@ -5,6 +5,7 @@ import InstallCommand from "../components/InstallCommand.astro";
 import Layout from "../components/Layout.astro";
 import ProfileExample from "../components/Profile.astro";
 import TerminalRun from "../components/TerminalRun.astro";
+import { readCacheControl } from "../lib/profile-read.ts";
 
 // Landing (decided 2026-09-14 from the /proto/landing rounds, direction "House" — DESIGN.md →
 // Landing layout): the solo pitch. What one developer gets today is one command that publishes
@@ -59,6 +60,11 @@ const jsonLd = JSON.stringify({
   description:
     "Terminal-native developer tool-stack profiles. Publish from the CLI, get a page at ymmv.fyi/you, diff against anyone.",
 });
+
+// The landing is request-invariant, but its HTML names hashed /_astro assets that a deploy
+// replaces, so it takes the SHORT (notfound) policy: a long stale window could serve markup
+// pointing at assets that no longer exist.
+Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 ---
 
 <Layout title="ymmv.fyi: your stack, in the terminal" wide canonicalPath="/">

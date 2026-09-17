@@ -2,6 +2,11 @@
 // Astro's catch-all 404 (unmatched routes). Astro serves this with a 404 status in SSR.
 import Layout from "../components/Layout.astro";
 import NotFound from "../components/NotFound.astro";
+import { readCacheControl } from "../lib/profile-read.ts";
+
+// every response carries an explicit edge policy — short-cached like a [handle] notfound, so a
+// route added by a deploy isn't edge-cached-missing for long
+Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 ---
 
 <Layout title="404 — ymmv.fyi">

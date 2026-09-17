@@ -104,6 +104,11 @@ test.describe("profile render", () => {
 });
 
 test.describe("landing", () => {
+  test("carries the short edge-cache policy", async ({ request }) => {
+    const res = await request.get("/");
+    expect(res.headers()["cache-control"]).toContain("s-maxage=10");
+  });
+
   test("the page window groups dotfiles under stack, exactly like a live profile", async ({
     page,
   }) => {
@@ -288,6 +293,7 @@ test.describe("routing", () => {
     // `404` reserved it returns 200 + the profile.
     const html = await page.goto("/404");
     expect(html?.status()).toBe(404);
+    expect(html?.headers()["cache-control"]).toContain("s-maxage=10");
     // The generic not-found page, never the session readout a live profile renders.
     await expect(page.locator("p.empty-msg")).toContainText("no page here.");
     await expect(page.locator(".readout")).toHaveCount(0);
@@ -300,6 +306,13 @@ test.describe("routing", () => {
     expect(json.headers()["content-type"]).toContain("application/json");
     expect(json.headers()["access-control-allow-origin"]).toBe("*");
     expect(await json.json()).toEqual({ error: "not_found" });
+  });
+
+  test("an unmatched route 404s with the short edge-cache policy", async ({ request }) => {
+    // Multi-segment paths miss every route and land on the catch-all 404.astro.
+    const res = await request.get("/no/such/route");
+    expect(res.status()).toBe(404);
+    expect(res.headers()["cache-control"]).toContain("s-maxage=10");
   });
 
   test("sends the edge-cache header on a profile read", async ({ request }) => {
