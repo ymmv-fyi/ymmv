@@ -74,6 +74,13 @@ INSERT INTO profile_entries (github_id, key, value) VALUES
   (6006, 'editor', 'Neovim'),
   (6006, 'os', 'Arch');
 
+-- A live bearer for bardisty (2002) so the built Worker's whoami can be exercised end to end. The
+-- raw token is `ymmv_e2e_seed_token_2002` (local D1 only, never a real credential); the row holds
+-- its SHA-256, exactly as mintToken stores one.
+INSERT OR REPLACE INTO tokens (hash, github_id, created_at, revoked_at) VALUES
+  ('61a61c1569ea7f295200cf9199757e130d7372443f1433524a66a10488f10a4e', 2002,
+   '2026-06-21T00:00:00.000Z', NULL);
+
 -- antfu was renamed away from "antfuold" → that old URL must 301 to /antfu.
 INSERT OR REPLACE INTO handle_history (old_handle_lower, github_id, changed_at) VALUES
   ('antfuold', 1001, '2026-06-25T00:00:00.000Z');

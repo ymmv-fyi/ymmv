@@ -3,6 +3,8 @@
 // the same `hashToken`. Raw tokens are never stored — only their SHA-256. The API is the trust
 // boundary: every authed write resolves identity through here.
 
+import type { WhoamiResult } from "@ymmv/shared";
+
 /** SHA-256 hex of a raw token. Web Crypto — available in workerd and Node 22 (tests seed rows). */
 export async function hashToken(raw: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
@@ -18,6 +20,30 @@ export function parseBearer(request: Request): string | null {
 }
 
 /**
+ * Resolve the identity a request's bearer is bound to, or null if the bearer is missing, unknown,
+ * or revoked. This query is the ONE definition of a valid token: `authenticateRequest` below is
+ * its projection, so whoami and the authed writes can never disagree about which tokens are live.
+ * LEFT JOIN on purpose: an account with no bound handle (reserved username, or a handle another
+ * account has since proven) still authenticates — `handle` is just null.
+ */
+export async function authenticateIdentity(
+  request: Request,
+  db: D1Database,
+): Promise<WhoamiResult | null> {
+  const raw = parseBearer(request);
+  if (!raw) return null;
+  const hash = await hashToken(raw);
+  const row = await db
+    .prepare(
+      "SELECT t.github_id, u.handle FROM tokens t LEFT JOIN users u ON u.github_id = t.github_id " +
+        "WHERE t.hash = ? AND t.revoked_at IS NULL",
+    )
+    .bind(hash)
+    .first<{ github_id: number; handle: string | null }>();
+  return row ? { github_id: row.github_id, handle: row.handle ?? null } : null;
+}
+
+/**
  * Resolve the authenticated github_id for a request, or null if the bearer is missing, unknown,
  * or revoked. A single null result (→ 401) covers all three: the CLI re-logs-in on a 401.
  */
@@ -25,14 +51,7 @@ export async function authenticateRequest(
   request: Request,
   db: D1Database,
 ): Promise<number | null> {
-  const raw = parseBearer(request);
-  if (!raw) return null;
-  const hash = await hashToken(raw);
-  const row = await db
-    .prepare("SELECT github_id FROM tokens WHERE hash = ? AND revoked_at IS NULL")
-    .bind(hash)
-    .first<{ github_id: number }>();
-  return row?.github_id ?? null;
+  return (await authenticateIdentity(request, db))?.github_id ?? null;
 }
 
 /**
