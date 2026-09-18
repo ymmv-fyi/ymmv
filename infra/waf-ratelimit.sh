@@ -32,10 +32,15 @@ set -euo pipefail
 # ---- The rule (transcribed from the live zone entrypoint, read-only verified 2026-07-19) ----
 RULE_DESCRIPTION="ymmv: rate-limit profile + auth writes per IP"
 RULE_ACTION="block"
-RULE_EXPRESSION='(http.request.method in {"POST" "DELETE"} and (starts_with(http.request.uri.path, "/api/v1/profile") or starts_with(http.request.uri.path, "/api/v1/auth")))'
+RULE_EXPRESSION='((http.request.method in {"POST" "DELETE"} and (starts_with(http.request.uri.path, "/api/v1/profile") or starts_with(http.request.uri.path, "/api/v1/auth"))) or (http.request.method in {"GET" "HEAD"} and starts_with(http.request.uri.path, "/api/v1/auth/whoami")))'
 # Per IP per colo: 30 requests / 10s, then block for 10s. Complements the Workers bindings
 # declared in wrangler.jsonc (per-identity writes + per-IP mint): this rule is the volumetric
-# shield in front of them, and the only edge cover for endpoints with no binding (logout).
+# shield in front of them, and the only edge cover for endpoints with no binding (logout, and
+# the one GET here: whoami is bearer-authed and no-store, so a junk-token flood is never absorbed
+# by the edge cache and this rule is the only thing between it and a D1 read per request).
+# starts_with, not eq: Astro serves the route with or without a trailing slash (trailingSlash
+# defaults to "ignore"), so an exact match would let `/api/v1/auth/whoami/` dodge the rule. HEAD
+# too: Astro answers HEAD by running the GET handler (same D1 read, body dropped).
 RL_CHARACTERISTICS='["ip.src","cf.colo.id"]'
 RL_PERIOD=10
 RL_REQUESTS_PER_PERIOD=30
