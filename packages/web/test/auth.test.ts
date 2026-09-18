@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
 import { POST as LOGOUT } from "../src/pages/api/v1/auth/logout.ts";
 import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
-import { POST as PUBLISH } from "../src/pages/api/v1/profile.ts";
+import { GET as WHOAMI } from "../src/pages/api/v1/auth/whoami.ts";
+import { DELETE as DELETE_PROFILE, POST as PUBLISH } from "../src/pages/api/v1/profile.ts";
 
 // The mint handler runs in the SAME workerd isolate as the test, so a global fetch stub intercepts
 // its outbound token-introspection call to api.github.com/applications/{client_id}/token.
@@ -45,6 +46,23 @@ function logoutCtx(token: string | null): APIContext {
   if (token !== null) headers.authorization = `Bearer ${token}`;
   return {
     request: new Request("https://ymmv.test/api/v1/auth/logout", { method: "POST", headers }),
+  } as unknown as APIContext;
+}
+
+function whoamiCtx(token: string | null): APIContext {
+  const headers: Record<string, string> = {};
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  return {
+    request: new Request("https://ymmv.test/api/v1/auth/whoami", { headers }),
+  } as unknown as APIContext;
+}
+
+function deleteCtx(token: string): APIContext {
+  return {
+    request: new Request("https://ymmv.test/api/v1/profile", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${token}` },
+    }),
   } as unknown as APIContext;
 }
 
@@ -347,5 +365,99 @@ describe("POST /api/v1/auth/logout — revoke", () => {
     expect(((await (await LOGOUT(logoutCtx(token))).json()) as { revoked: boolean }).revoked).toBe(
       false,
     );
+  });
+});
+
+describe("GET /api/v1/auth/whoami — identity lookup", () => {
+  async function mintThenUnstub(id: number, login: string): Promise<MintBody> {
+    stubGithub(() => introspectOk(id, login));
+    const minted = await mint();
+    vi.unstubAllGlobals();
+    return minted;
+  }
+
+  it("200 with the bound identity; no-store, no CORS, and the token is never echoed", async () => {
+    const { token } = await mintThenUnstub(4242, "Carol");
+    const res = await WHOAMI(whoamiCtx(token));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("access-control-allow-origin")).toBeNull(); // bearer endpoint, not public API
+    const text = await res.text();
+    expect(text).not.toContain(token);
+    // Display casing, exactly as login bound it — the same value the mint returned.
+    expect(JSON.parse(text)).toEqual({ github_id: 4242, handle: "Carol" });
+  });
+
+  it("200 handle:null for an account with no bound handle (reserved username)", async () => {
+    const { token } = await mintThenUnstub(50, "login");
+    const res = await WHOAMI(whoamiCtx(token));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ github_id: 50, handle: null });
+  });
+
+  it("200 handle:null after another account proves the handle (limbo), and the token stays live", async () => {
+    const nine = await mintThenUnstub(9, "famous");
+    await mintThenUnstub(4242, "famous"); // gid 4242 now owns "famous" on GitHub
+    expect(await (await WHOAMI(whoamiCtx(nine.token))).json()).toEqual({
+      github_id: 9,
+      handle: null,
+    });
+  });
+
+  it("401 for a missing, unknown, or revoked bearer (one answer for all three)", async () => {
+    const { token } = await mintThenUnstub(11, "erin");
+    expect((await WHOAMI(whoamiCtx(null))).status).toBe(401);
+    const unknown = await WHOAMI(whoamiCtx("ymmv_not_a_real_token"));
+    expect(unknown.status).toBe(401);
+    expect(unknown.headers.get("cache-control")).toBe("no-store");
+    expect(await unknown.json()).toEqual({ error: "unauthorized" });
+    await LOGOUT(logoutCtx(token));
+    expect((await WHOAMI(whoamiCtx(token))).status).toBe(401);
+  });
+
+  it("500 internal_error when the lookup throws, and the log line carries no token", async () => {
+    const { token } = await mintThenUnstub(12, "frank");
+    const logged: unknown[][] = [];
+    const errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      logged.push(a);
+    });
+    const dbSpy = vi.spyOn(env.DB, "prepare").mockImplementation(() => {
+      throw new Error(`d1 down while resolving ${token}`);
+    });
+    try {
+      const res = await WHOAMI(whoamiCtx(token));
+      expect(res.status).toBe(500);
+      const text = await res.text();
+      expect(JSON.parse(text)).toEqual({ error: "internal_error" });
+      expect(text).not.toContain(token);
+      expect(JSON.stringify(logged)).not.toContain(token);
+    } finally {
+      dbSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  it("consults neither rate-limit binding, for a live bearer or a junk one (the documented design)", async () => {
+    // A limiter folded into the shared auth path would silently spend a write-budget token on
+    // every CI publish (each starts with a whoami), or 429 shared CI egress IPs. Pin the choice.
+    const { token } = await mintThenUnstub(13, "gina");
+    const writeSpy = vi.spyOn(env.RL_WRITE, "limit");
+    const authSpy = vi.spyOn(env.RL_AUTH, "limit");
+    try {
+      expect((await WHOAMI(whoamiCtx(token))).status).toBe(200);
+      expect((await WHOAMI(whoamiCtx("ymmv_junk"))).status).toBe(401);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(authSpy).not.toHaveBeenCalled();
+    } finally {
+      writeSpy.mockRestore();
+      authSpy.mockRestore();
+    }
+  });
+
+  // authenticateRequest is a projection of the whoami lookup. Pin the LEFT JOIN: an INNER JOIN
+  // would silently 401 every authed write for an account whose handle is NULL.
+  it("an account with a NULL handle still authenticates writes (DELETE 200, not 401)", async () => {
+    const { token } = await mintThenUnstub(50, "login");
+    expect((await DELETE_PROFILE(deleteCtx(token))).status).toBe(200);
   });
 });

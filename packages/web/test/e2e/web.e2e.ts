@@ -271,6 +271,35 @@ test.describe("routing", () => {
     expect(preflight.headers()["access-control-allow-methods"]).toContain("GET");
   });
 
+  test("whoami is mounted in the built Worker: a garbage bearer is a JSON 401, never the HTML 404", async ({
+    request,
+  }) => {
+    // The unit suite calls the handler directly; only this proves Astro routes GET to it. The CLI
+    // reads a 404 here as "this server has no identity lookup", so a mis-mounted route would fail
+    // every YMMV_TOKEN command with the wrong diagnosis.
+    const res = await request.get("/api/v1/auth/whoami", {
+      headers: { authorization: "Bearer ymmv_not_a_real_token" },
+    });
+    expect(res.status()).toBe(401);
+    expect(res.headers()["content-type"]).toContain("application/json");
+    expect(res.headers()["cache-control"]).toBe("no-store");
+    expect(res.headers()["access-control-allow-origin"]).toBeUndefined();
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  test("whoami returns the CLI contract for a live bearer through the built Worker", async ({
+    request,
+  }) => {
+    // seed.sql holds the SHA-256 of this token for github_id 2002. The body IS the CLI contract:
+    // a missing github_id makes the CLI's parseIdentity refuse and fails every YMMV_TOKEN command.
+    const res = await request.get("/api/v1/auth/whoami", {
+      headers: { authorization: "Bearer ymmv_e2e_seed_token_2002" },
+    });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["cache-control"]).toBe("no-store");
+    expect(await res.json()).toEqual({ github_id: 2002, handle: "bardisty" });
+  });
+
   test("404s an unknown handle with the friendly empty state", async ({ page }) => {
     const res = await page.goto("/ghosthandle");
     expect(res?.status()).toBe(404);

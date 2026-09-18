@@ -3,16 +3,9 @@ import { GITHUB_CLIENT_ID, isReserved, isValidHandle, type MintResult } from "@y
 import type { APIRoute } from "astro";
 import { mintToken } from "../../../../lib/auth.ts";
 import { githubClientSecret, verifyGithubToken } from "../../../../lib/github.ts";
+import { noStoreJson } from "../../../../lib/json.ts";
 import { checkAuthRateLimit, checkWriteRateLimit } from "../../../../lib/rate-limit.ts";
 import { handleBindStatements } from "../../../../lib/users.ts";
-
-// Bearer-token responses must never be cached by any intermediary.
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
-}
 
 // POST /api/v1/auth/token — device-flow mint. The body carries the GitHub access token the CLI just
 // obtained; THAT is the credential (there is no ymmv bearer yet). The Worker verifies via GitHub token
@@ -24,11 +17,11 @@ export const POST: APIRoute = async ({ request }) => {
   try {
     body = await request.json();
   } catch {
-    return json(400, { error: "bad_json" });
+    return noStoreJson(400, { error: "bad_json" });
   }
   const accessToken = (body as { access_token?: unknown })?.access_token;
   if (typeof accessToken !== "string" || accessToken.trim() === "") {
-    return json(400, { error: "missing_access_token" });
+    return noStoreJson(400, { error: "missing_access_token" });
   }
 
   // Per-IP cap on this unauthenticated endpoint, BEFORE the outbound introspection call, so a
@@ -42,13 +35,13 @@ export const POST: APIRoute = async ({ request }) => {
   const clientSecret = githubClientSecret(env);
   if (!clientSecret) {
     console.error("mint misconfigured: GITHUB_CLIENT_SECRET is unset");
-    return json(500, { error: "internal_error" });
+    return noStoreJson(500, { error: "internal_error" });
   }
 
   const user = await verifyGithubToken(accessToken, GITHUB_CLIENT_ID, clientSecret);
-  if (user.kind === "auth_failed") return json(401, { error: "github_auth_failed" });
+  if (user.kind === "auth_failed") return noStoreJson(401, { error: "github_auth_failed" });
   if (user.kind === "transient") {
-    return json(503, {
+    return noStoreJson(503, {
       error: "github_unavailable",
       message: "GitHub is unavailable. Try again.",
     });
@@ -89,9 +82,9 @@ export const POST: APIRoute = async ({ request }) => {
     // github_id rides along so the CLI can compare IDENTITY across a re-login: a handle string can
     // change hands (rename + reclaim) while the account id cannot. `satisfies` pins the wire shape
     // to the shared contract the CLI parses against.
-    return json(200, { token, handle, github_id: id } satisfies MintResult);
+    return noStoreJson(200, { token, handle, github_id: id } satisfies MintResult);
   } catch {
     console.error("mint failed for github_id", user.id);
-    return json(500, { error: "internal_error" });
+    return noStoreJson(500, { error: "internal_error" });
   }
 };
