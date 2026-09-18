@@ -13,8 +13,11 @@ Build + deploy only. Skipped vs CI:
 ## Worker before CLI (do not roll back behind a published CLI)
 
 The CLI's login parse requires every field the current mint response carries (`token`, `handle`,
-`github_id`); a Worker that omits one fails every login with "Unexpected response". A tag release
-already orders this (`publish-cli` needs `deploy-worker` in `release.yml`). Manually: never roll
+`github_id`); a Worker that omits one fails every login with "Unexpected response". Every
+`YMMV_TOKEN` command needs `GET /api/v1/auth/whoami` too: against a Worker without it, `ymmv -y`,
+`ymmv set`/`unset`, and `ymmv delete` fail with an error saying the server is behind the CLI
+release (`ymmv <handle>` still renders, without a diff). A tag release already orders this
+(`publish-cli` needs `deploy-worker` in `release.yml`). Manually: never roll
 the Worker back to a build older than the published CLI expects, and when a manual deploy
 precedes a CLI tag, deploy first, tag second.
 
