@@ -1,8 +1,8 @@
 /**
  * The public API contract — the shape the CLI and the web render consume, and the JSON
  * returned by `GET /api/v1/u/<handle>`. Documented so external integrators can build on it.
- * Also holds the CLI<->Worker auth contract (`MintResult`), so the two surfaces compile against
- * one shape instead of two hand-typed copies.
+ * Also holds the CLI<->Worker auth contract (`MintResult`, `WhoamiResult`), so the two surfaces
+ * compile against one shape instead of two hand-typed copies.
  *
  * SECURITY: every string here (`value`, `label`, `handle`, ...) is USER-CONTROLLED and
  * UNTRUSTED. `@ymmv/shared` never sanitizes — each surface sanitizes at its own boundary
@@ -18,15 +18,23 @@ export const SCHEMA_VERSION = 1 as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 /**
- * `POST /api/v1/auth/token` (device-flow mint) response. `github_id` is the stable GitHub account
- * id the minted token is bound to; the CLI stores it and compares it across a re-login, because a
- * handle string can change hands (rename + reclaim) while the id cannot. Not versioned by
- * SCHEMA_VERSION — that governs the Profile payload only.
+ * `GET /api/v1/auth/whoami` response: the identity a bearer token resolves to. `github_id` is the
+ * stable GitHub account id; `handle` is the handle currently bound to it, or null when none is
+ * (a reserved GitHub username, or a handle another account has since proven ownership of). Not
+ * versioned by SCHEMA_VERSION — that governs the Profile payload only.
  */
-export interface MintResult {
-  token: string;
-  handle: string | null;
+export interface WhoamiResult {
   github_id: number;
+  handle: string | null;
+}
+
+/**
+ * `POST /api/v1/auth/token` (device-flow mint) response: the minted token plus the identity it is
+ * bound to. The CLI stores `github_id` and compares it across a re-login, because a handle string
+ * can change hands (rename + reclaim) while the id cannot. Not versioned by SCHEMA_VERSION.
+ */
+export interface MintResult extends WhoamiResult {
+  token: string;
 }
 
 /** A single curated key/value pair. */
