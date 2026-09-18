@@ -70,15 +70,18 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
 - `NO_COLOR` disables color output (and `FORCE_COLOR=0`/`false` force-disables it).
 - `YMMV_API` points the CLI at a different Worker (development/staging). Bare origin only. That
   Worker must be deployed with or after this CLI release: `ymmv login` requires the account id the
-  login response carries and refuses (revoking what it minted) otherwise.
+  login response carries and refuses (revoking what it minted) otherwise, and `YMMV_TOKEN` needs
+  the server's account lookup.
 - `YMMV_TOKEN` authenticates without a browser (CI and scripts, below). Takes precedence over
   the stored login and is read-only: the CLI never writes, revokes, or deletes it, and
-  `ymmv login` / `ymmv logout` keep acting on the stored login. Viewing (`ymmv <handle>`) also
-  keeps using the stored login for the you-side of a diff. The token is sent to the server
-  `YMMV_API` selects, so set the two together.
-- `YMMV_HANDLE` names the GitHub username `YMMV_TOKEN` belongs to. Required for `ymmv -y` and
-  `ymmv set`/`unset` under an env token (there is no server lookup for it); ignored without
-  `YMMV_TOKEN`.
+  `ymmv login` / `ymmv logout` keep acting on the stored login. The CLI asks the server which
+  account the token belongs to, so every command, including the you-side of a `ymmv <handle>`
+  diff, runs as that account. The token is sent to the server `YMMV_API` selects, so set the
+  two together.
+- `YMMV_HANDLE` is optional. When set, it must name the GitHub username `YMMV_TOKEN` belongs
+  to: if the server reports a different account, `ymmv -y`, `ymmv set`/`unset`, and
+  `ymmv delete` refuse before sending anything, and `ymmv <handle>` shows the profile without
+  a diff. Ignored without `YMMV_TOKEN`.
 - `YMMV_NO_UPDATE_CHECK` disables the startup check for newer releases (the ecosystem-standard
   `NO_UPDATE_NOTIFIER` works too). The check is also off automatically under `CI`, in pipes,
   and in dev builds; it never blocks or fails a command.
@@ -91,7 +94,8 @@ Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full c
 2. Copy the `token` value from the token file:
    `~/.config/ymmv/token.json` (Linux), `~/Library/Preferences/ymmv/token.json` (macOS),
    `%APPDATA%\ymmv\Config\token.json` (Windows).
-3. Set it as a CI secret named `YMMV_TOKEN`, and set `YMMV_HANDLE` to your GitHub username.
+3. Set it as a CI secret named `YMMV_TOKEN`. Setting `YMMV_HANDLE` to your GitHub username is
+   optional, and makes the job fail if the secret ever holds another account's token.
 4. Run `npx ymmv-cli@latest -y` in the job.
 
 Two things to know:
@@ -100,9 +104,12 @@ Two things to know:
   runs on. Values you already published always win, but curated keys you have never set get the
   CI runner's detected values (its OS, shell, and so on). For targeted updates from CI, prefer
   `ymmv set <key> <value>`.
-- A rejected or revoked `YMMV_TOKEN` fails with an error naming the variable; nothing falls back
-  to an interactive login, and the stored login file on the runner (if any) is left untouched.
-  `ymmv delete` acts on the account the token is bound to, regardless of `YMMV_HANDLE`.
+- A rejected or revoked `YMMV_TOKEN` fails `ymmv -y`, `ymmv set`/`unset`, and `ymmv delete` with
+  an error naming the variable; nothing falls back to an interactive login, and the stored login
+  file on the runner (if any) is left untouched. `ymmv <handle>` still shows the profile, with the
+  reason there is no diff on stderr, and exits 0.
+  `ymmv delete` acts on the account the token is bound to and names that account's page when
+  it asks for confirmation.
 
 ## License
 

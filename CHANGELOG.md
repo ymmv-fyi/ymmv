@@ -2,6 +2,18 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **`YMMV_TOKEN` no longer needs `YMMV_HANDLE`.** The CLI asks the server which account the token
+  belongs to (`GET /api/v1/auth/whoami`) and runs every command as that account. Under an env
+  token, `ymmv <handle>` now diffs against your profile, and `ymmv delete` names your page when
+  it asks for confirmation. `YMMV_HANDLE` stays as an optional check: when it names a different
+  account than the token, `ymmv -y`, `ymmv set`/`unset`, and `ymmv delete` refuse before sending
+  anything, and `ymmv <handle>` shows the profile without a diff. Against a Worker older than
+  this release (no lookup endpoint), `ymmv -y`, `set`/`unset`, and `delete` under an env token
+  fail with an error saying so; `ymmv <handle>` still shows the profile.
+
 ## [0.10.0] - 2026-09-16
 
 ### Fixed
