@@ -967,6 +967,18 @@ describe("delete", () => {
     expect(logs).toContain("\n  Cancelled. Nothing deleted.");
   });
 
+  it("a file login with NO handle bound names no page, and never the env binding's copy", async () => {
+    // The third leaf of the consent-target choice (handle → page URL, env → the binding, file →
+    // neither): a reserved GitHub username binds to a null handle, and there is no page to name.
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
+    await runDelete({ interactive: false, yes: true });
+    const out = logs.join("\n");
+    expect(out).toContain("Deleted your profile.");
+    expect(out).not.toContain("YMMV_TOKEN");
+    expect(deleteToken).toHaveBeenCalledTimes(1); // a FILE credential still drops the dead token
+  });
+
   it("Ctrl+C at the delete confirm: Cancelled line, exit 130, nothing touched", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn();
@@ -980,23 +992,33 @@ describe("delete", () => {
   });
 });
 
-// The CI persona: YMMV_TOKEN (+ YMMV_HANDLE) instead of a stored login. The credential is
+/// The CI persona: YMMV_TOKEN (+ optional YMMV_HANDLE) instead of a stored login. The credential is
 // read-only config — commands must work without a device flow, and never touch the token FILE.
+// Its identity comes from GET /api/v1/auth/whoami, so every env command's FIRST fetch is that
+// lookup (view's is its second: the target profile is fetched before any credential is touched).
 describe("env credential (YMMV_TOKEN) command flows", () => {
-  const envCred = (handle: string | null) => ({
+  /** The RAW env credential, exactly as loadCredential() returns it: `handle` is whatever
+   *  YMMV_HANDLE claims (null when unset) and there is no id until whoami supplies one. */
+  const envCred = (ymmvHandle: string | null) => ({
     base: "B",
     token: "ymmv_env",
-    handle,
+    handle: ymmvHandle,
     github_id: null,
     source: "env" as const,
   });
+  const whoami = (handle: string | null, github_id = 2002) => jsonRes({ github_id, handle });
+  const urlOf = (fetchFn: { mock: { calls: unknown[][] } }, call: number) =>
+    String(fetchFn.mock.calls[call]?.[0]);
+  const initOf = (fetchFn: { mock: { calls: unknown[][] } }, call: number) =>
+    fetchFn.mock.calls[call]?.[1] as RequestInit;
 
-  it("headline: non-interactive `ymmv -y` publishes under the env credential with NO device flow", async () => {
-    // The finding's trigger: `ymmv -y` in CI previously dead-ended at the interactive-terminal
-    // refusal (after a 401 even deleted the seeded token file first).
-    vi.mocked(loadCredential).mockResolvedValue(envCred("me"));
+  it("headline: `ymmv -y` publishes with YMMV_HANDLE UNSET, under the whoami handle, with NO device flow", async () => {
+    // Regression pin for the drift guard: publishProfile used to re-read the RAW credential
+    // (handle null here), which would refuse every publish that leaves YMMV_HANDLE unset.
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
     const fetchFn = vi
       .fn()
+      .mockResolvedValueOnce(whoami("me"))
       .mockResolvedValueOnce(missing()) // no existing profile
       .mockResolvedValueOnce(jsonRes({ handle: "me" })); // POST commits
     vi.stubGlobal("fetch", fetchFn);
@@ -1004,61 +1026,302 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     expect(login).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
     expect(logs.join("\n")).toContain("Published me");
+    expect(urlOf(fetchFn, 0)).toContain("/api/v1/auth/whoami");
+    expect(initOf(fetchFn, 0).redirect).toBe("manual");
+    expect(urlOf(fetchFn, 1)).toContain("/api/v1/u/me"); // read under the VERIFIED handle
+    expect(posted(fetchFn, 2).handle).toBe("me");
   });
 
-  it("env credential without YMMV_HANDLE gets the YMMV_HANDLE copy, not the reserved-word lie", async () => {
-    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
-    const fetchFn = vi.fn();
-    vi.stubGlobal("fetch", fetchFn);
-    await publish({ interactive: false, yes: true });
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    const out = errs.join("\n");
-    expect(out).toContain("YMMV_HANDLE");
-    expect(out).not.toContain("reserved word");
-  });
-
-  it("delete: copy names the token binding, never the unverified YMMV_HANDLE, and keeps the file", async () => {
-    // Delete acts on the TOKEN's account (the request carries no handle). If YMMV_HANDLE pointed
-    // at someone else, a handle-derived URL here would confirm deletion of the wrong profile.
-    vi.mocked(loadCredential).mockResolvedValue(envCred("carol"));
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
-    await runDelete({ interactive: false, yes: true });
-    expect(deleteToken).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
-    const out = logs.join("\n");
-    expect(out).toContain("Deleted the profile bound to YMMV_TOKEN.");
-    expect(out).not.toContain("carol");
-  });
-
-  it("delete refusal (non-TTY, no -y) also names the binding, not the handle", async () => {
-    vi.mocked(loadCredential).mockResolvedValue(envCred("carol"));
-    const fetchFn = vi.fn();
-    vi.stubGlobal("fetch", fetchFn);
-    await runDelete({ interactive: false, yes: false });
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    const out = errs.join("\n");
-    expect(out).toContain("the profile bound to YMMV_TOKEN");
-    expect(out).not.toContain("carol");
-  });
-
-  it("view stays file-only: an env credential never labels a fetched profile as 'you'", async () => {
-    // No trusted identity exists for YMMV_HANDLE (no whoami endpoint), so view deliberately does
-    // NOT consume env credentials — a mislabeled "you" diff would be confidently wrong output.
-    vi.mocked(loadToken).mockResolvedValue(null); // no file login
-    vi.mocked(loadCredential).mockResolvedValue(envCred("carol")); // env set, must be ignored
+  it("a matching YMMV_HANDLE passes, compared case-insensitively, and the whoami casing wins", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("ME"));
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])));
+      .mockResolvedValueOnce(whoami("Me"))
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ handle: "Me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(process.exitCode).toBeUndefined();
+    expect(posted(fetchFn, 2).handle).toBe("Me");
+  });
+
+  it("a YMMV_HANDLE naming a different account refuses before any read or POST, naming both", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("bob"));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami("alice"));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publish({ interactive: false, yes: true })).rejects.toThrow(
+      'YMMV_HANDLE is "bob" but YMMV_TOKEN belongs to "alice". Fix or unset YMMV_HANDLE.',
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1); // whoami only
+  });
+
+  it("YMMV_HANDLE set while the token's account has NO handle is a mismatch too", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("bob"));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami(null));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runSet({ kind: "curated", key: "editor", value: "vim" })).rejects.toThrow(
+      'YMMV_HANDLE is "bob" but the YMMV_TOKEN account has no handle bound.',
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("no handle bound + YMMV_HANDLE unset: the two-cause copy, not the file login's reserved-word diagnosis", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami(null));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(fetchFn).toHaveBeenCalledTimes(1); // whoami only, never a read or POST
+    expect(process.exitCode).toBe(1);
+    const out = errs.join("\n");
+    expect(out).toContain("The account behind YMMV_TOKEN has no handle bound.");
+    expect(out).toContain("`ymmv login`"); // fixes a handle another account has since proven
+    expect(out).toContain("rename on GitHub first"); // the only fix for a reserved username
+    expect(out).not.toContain("—");
+  });
+
+  it("a whoami failure fails the write command with its own copy and sends nothing else", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // a Worker without the endpoint
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(
+      "has no identity lookup for YMMV_TOKEN",
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(login).not.toHaveBeenCalled(); // never falls back to a device flow
+  });
+
+  it("delete names the VERIFIED page, keeps the token file, and sends the env bearer", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami("carol"))
+      .mockResolvedValueOnce(jsonRes({ ok: true }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runDelete({ interactive: false, yes: true });
+    expect(deleteToken).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
+    expect(logs.join("\n")).toContain("Deleted ymmv.fyi/carol.");
+    expect(initOf(fetchFn, 1).method).toBe("DELETE");
+    expect((initOf(fetchFn, 1).headers as Record<string, string>).authorization).toBe(
+      "Bearer ymmv_env",
+    );
+  });
+
+  it("delete refusal (non-TTY, no -y) names the verified page and sends no DELETE", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami("carol"));
+    vi.stubGlobal("fetch", fetchFn);
+    await runDelete({ interactive: false, yes: false });
+    expect(fetchFn).toHaveBeenCalledTimes(1); // whoami only
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("Refusing to delete ymmv.fyi/carol");
+  });
+
+  it("delete with no handle bound still names the binding it is about to act on", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami(null))
+      .mockResolvedValueOnce(jsonRes({ ok: true }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runDelete({ interactive: false, yes: true });
+    expect(logs.join("\n")).toContain("Deleted the profile bound to YMMV_TOKEN.");
+  });
+
+  // The guard on a permanent delete: the secret pair says bob, the token is alice's. Nothing may
+  // leave the machine after the lookup, with -y or at the interactive prompt.
+  it("delete with a mismatched YMMV_HANDLE refuses BEFORE any DELETE request (-y)", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("bob"));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami("alice"));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runDelete({ interactive: false, yes: true })).rejects.toThrow(
+      'YMMV_TOKEN belongs to "alice"',
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(deleteToken).not.toHaveBeenCalled();
+  });
+
+  it("delete with a mismatched YMMV_HANDLE never reaches the confirm prompt (interactive)", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("bob"));
+    const fetchFn = vi.fn().mockResolvedValueOnce(whoami("alice"));
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(true) });
+    await expect(runDelete({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      "Fix or unset YMMV_HANDLE",
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("view: a verified env credential diffs as 'you'", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])))
+      .mockResolvedValueOnce(whoami("me"))
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "helix" }])));
     vi.stubGlobal("fetch", fetchFn);
     await view("them");
-    // The load-bearing pins: view must never CONSULT the env-aware reader (a regression that
-    // did would exhaust the one-response fetch queue and degrade silently to the same card).
-    expect(loadCredential).not.toHaveBeenCalled();
-    expect(fetchFn).toHaveBeenCalledTimes(1); // the target profile only, never a "mine" fetch
+    expect(urlOf(fetchFn, 1)).toContain("/api/v1/auth/whoami");
+    expect(urlOf(fetchFn, 2)).toContain("/api/v1/u/me"); // "mine" is the VERIFIED handle
     const out = logs.join("\n");
-    expect(out).toContain("them"); // plain card
-    expect(out).not.toContain("you"); // never a diff labeled against YMMV_HANDLE
-    expect(errs.join("\n")).not.toContain("couldn't load"); // no degraded-diff diagnostic either
+    expect(out).toContain("you");
+    expect(out).toContain("helix");
+    expect(errs).toEqual([]);
+  });
+
+  it("view: viewing the token's own handle shows the card, never a self-diff", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const mine = prof("me", [{ key: "editor", value: "helix" }]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(mine))
+      .mockResolvedValueOnce(whoami("Me")) // casing differs; still the same profile
+      .mockResolvedValueOnce(jsonRes(mine));
+    vi.stubGlobal("fetch", fetchFn);
+    await view("me");
+    const out = logs.join("\n");
+    expect(out).toContain("helix");
+    expect(out).not.toContain("you");
+  });
+
+  it("view: a verified env credential with NO handle bound shows the card and says why there is no diff", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])))
+      .mockResolvedValueOnce(whoami(null));
+    vi.stubGlobal("fetch", fetchFn);
+    await view("them");
+    expect(fetchFn).toHaveBeenCalledTimes(2); // no "mine" fetch: there is no handle to fetch
+    expect(process.exitCode).toBeUndefined();
+    expect(logs.join("\n")).toContain("vim");
+    expect(logs.join("\n")).not.toContain("you");
+    expect(errs.join("\n")).toContain(
+      "(no diff: the account behind YMMV_TOKEN has no handle bound)",
+    );
+  });
+
+  it("set and unset complete under a verified env credential, reading and writing the whoami handle", async () => {
+    // The common CI path after publish: requireHandle takes the whoami handle, the read goes to
+    // it, assertHandleUnchanged compares against it, and publishProfile reuses the credential.
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const existing = () => jsonRes(prof("me", [{ key: "editor", value: "vim" }]));
+    let fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami("me"))
+      .mockResolvedValueOnce(existing())
+      .mockResolvedValueOnce(jsonRes({ handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "shell", value: "fish" });
+    expect(process.exitCode).toBeUndefined();
+    expect(urlOf(fetchFn, 1)).toContain("/api/v1/u/me");
+    expect(posted(fetchFn, 2).handle).toBe("me");
+    expect(logs.join("\n")).toContain("Set Shell = fish.");
+
+    fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami("me"))
+      .mockResolvedValueOnce(existing())
+      .mockResolvedValueOnce(jsonRes({ handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "editor" });
+    expect(process.exitCode).toBeUndefined();
+    expect(posted(fetchFn, 2).entries.find((e) => e.key === "editor")).toBeUndefined();
+    expect(logs.join("\n")).toContain('Removed Editor (was "vim").');
+  });
+
+  it("a renamed profile under an env credential says re-run, never `ymmv login` (which YMMV_TOKEN shadows)", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami("old"))
+      .mockResolvedValueOnce(jsonRes(prof("new"))); // the read followed a rename 301
+    vi.stubGlobal("fetch", fetchFn);
+    const err = await runSet({ kind: "curated", key: "shell", value: "fish" }).catch(
+      (e: Error) => e,
+    );
+    expect((err as Error).message).toContain("Re-run the command.");
+    expect((err as Error).message).not.toContain("ymmv login");
+    expect(fetchFn).toHaveBeenCalledTimes(2); // no POST
+  });
+
+  it("view: a target 404 returns before any credential is touched, so the token is never sent", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await view("ghost");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(loadCredential).not.toHaveBeenCalled();
+  });
+
+  it("view: a whoami failure degrades to the plain card with the REAL reason on stderr, exit 0", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])))
+      .mockResolvedValueOnce(new Response("", { status: 401 }));
+    vi.stubGlobal("fetch", fetchFn);
+    await view("them");
+    expect(fetchFn).toHaveBeenCalledTimes(2); // never a "mine" fetch under an unverified identity
+    expect(process.exitCode).toBeUndefined(); // the requested profile DID render
+    expect(logs.join("\n")).toContain("vim");
+    expect(logs.join("\n")).not.toContain("you");
+    const err = errs.join("\n");
+    expect(err).toContain("No diff: The server rejected the token in YMMV_TOKEN");
+    expect(err).not.toContain("(No diff"); // whole sentences are never wrapped in parens
+    expect(err).not.toContain("ymmv_env"); // the token never prints
+  });
+
+  it("view: a mismatched YMMV_HANDLE never labels anyone 'you'; stderr names both handles, exit 0", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("bob"));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("them", [{ key: "editor", value: "vim" }])))
+      .mockResolvedValueOnce(whoami("alice"));
+    vi.stubGlobal("fetch", fetchFn);
+    await view("them");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(process.exitCode).toBeUndefined();
+    expect(logs.join("\n")).not.toContain("you");
+    expect(errs.join("\n")).toContain('YMMV_HANDLE is "bob" but YMMV_TOKEN belongs to "alice"');
+  });
+});
+
+// A stored login's identity was server-minted at login: it must never cost a whoami round trip.
+describe("file credential never triggers the identity lookup", () => {
+  it("publish, set, unset, view, and delete send no whoami request", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (init?.method === "POST") return jsonRes({ handle: "me" });
+      if (init?.method === "DELETE") return jsonRes({ ok: true });
+      return String(input).endsWith("/u/them")
+        ? jsonRes(prof("them"))
+        : jsonRes(prof("me", [{ key: "editor", value: "vim" }]));
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    await runSet({ kind: "curated", key: "shell", value: "fish" });
+    await runUnset({ kind: "curated", key: "editor" });
+    await view("them");
+    expect(loadCredential).toHaveBeenCalled(); // view reads the env-aware store, as a FILE login
+    await runDelete({ interactive: false, yes: true });
+    // Every command RAN to completion (a refusal or early return would make the whoami check
+    // below pass vacuously): exit 0 throughout, and the exact request sequence.
+    expect(process.exitCode).toBeUndefined();
+    const sent = fetchFn.mock.calls.map(
+      (c) =>
+        `${(c[1] as RequestInit | undefined)?.method ?? "GET"} ${String(c[0]).replace(/^.*\/api/, "/api")}`,
+    );
+    expect(sent).toEqual([
+      "GET /api/v1/u/me", // publish read
+      "POST /api/v1/profile",
+      "GET /api/v1/u/me", // set read
+      "POST /api/v1/profile",
+      "GET /api/v1/u/me", // unset read
+      "POST /api/v1/profile",
+      "GET /api/v1/u/them", // view target
+      "GET /api/v1/u/me", // view "mine"
+      "DELETE /api/v1/profile",
+    ]);
   });
 });

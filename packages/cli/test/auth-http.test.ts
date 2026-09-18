@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MintRejected, mintYmmvToken, revokeYmmvToken } from "../src/auth-http.js";
+import {
+  fetchWhoami,
+  MintRejected,
+  mintYmmvToken,
+  parseIdentity,
+  revokeYmmvToken,
+} from "../src/auth-http.js";
 import { REVOKE_CAP_MS } from "../src/http.js";
 
 // Real mintYmmvToken (NOT mocked here — other CLI suites mock auth-http.js; Vitest isolates files, so
@@ -292,5 +298,183 @@ describe("revokeYmmvToken", () => {
     await expect(revokeYmmvToken("ymmv_x")).rejects.toSatisfy(
       (e: unknown) => e instanceof Error && e.name === "TimeoutError",
     );
+  });
+});
+
+// The one identity shape-check, shared by the mint reply and whoami (the mint suite above keeps
+// exercising it through mintYmmvToken, including the revoke-on-refusal that wraps it there).
+describe("parseIdentity", () => {
+  it("accepts a valid handle + GitHub id, and a null handle", () => {
+    expect(parseIdentity({ github_id: 4242, handle: "carol" })).toEqual({
+      github_id: 4242,
+      handle: "carol",
+    });
+    expect(parseIdentity({ github_id: 50, handle: null })).toEqual({ github_id: 50, handle: null });
+  });
+
+  it("carries nothing but the two identity fields (a mint reply's token never rides along)", () => {
+    expect(parseIdentity({ github_id: 1, handle: "a", token: "ymmv_x", extra: true })).toEqual({
+      github_id: 1,
+      handle: "a",
+    });
+  });
+
+  it("sanitizes the handle BEFORE validating, so a control-char-wrapped name comes out clean", () => {
+    const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
+    expect(parseIdentity({ github_id: 1, handle: `car${esc}[31mol` })).toEqual({
+      github_id: 1,
+      handle: "carol",
+    });
+  });
+
+  it("refuses anything a real Worker never sends", () => {
+    const esc = String.fromCharCode(0x1b);
+    for (const bad of [
+      null,
+      undefined,
+      "carol",
+      42,
+      [],
+      {},
+      { github_id: 4242 }, // handle absent (undefined is not null)
+      { handle: "carol" }, // id absent
+      { github_id: 4242, handle: "" },
+      { github_id: 4242, handle: esc },
+      { github_id: 4242, handle: "a/b" },
+      { github_id: 4242, handle: "-bad-" },
+      { github_id: 4242, handle: 7 },
+      { github_id: "4242", handle: "carol" },
+      { github_id: 0, handle: "carol" },
+      { github_id: 1.5, handle: "carol" },
+      { github_id: 2 ** 53, handle: "carol" },
+    ]) {
+      expect(parseIdentity(bad)).toBeNull();
+    }
+  });
+});
+
+describe("fetchWhoami", () => {
+  const TOKEN = "ymmv_secret_bearer";
+  /** Every failure path: the message must never carry the bearer. */
+  async function failure(): Promise<Error> {
+    const err = await fetchWhoami(TOKEN).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain(TOKEN);
+    return err as Error;
+  }
+
+  it("GETs /api/v1/auth/whoami with the bearer and redirect:manual, returning the identity", async () => {
+    stubFetch({ github_id: 4242, handle: "carol" }, 200);
+    expect(await fetchWhoami(TOKEN)).toEqual({ github_id: 4242, handle: "carol" });
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/api/v1/auth/whoami");
+    expect(init.method).toBeUndefined(); // a GET
+    expect(init.redirect).toBe("manual");
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("preserves a null handle (no handle bound to the account)", async () => {
+    stubFetch({ github_id: 50, handle: null }, 200);
+    expect(await fetchWhoami(TOKEN)).toEqual({ github_id: 50, handle: null });
+  });
+
+  it("401 names YMMV_TOKEN and the way out", async () => {
+    stubFetch({ error: "unauthorized" }, 401);
+    const err = await failure();
+    expect(err.message).toContain("The server rejected the token in YMMV_TOKEN");
+    expect(err.message).toContain("`ymmv login`");
+    expect(err.message).toContain("update YMMV_TOKEN");
+  });
+
+  it("404 is diagnosed as a server without the endpoint; the next step depends on who runs it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>404</html>", { status: 404 })),
+    );
+    // A YMMV_API override names a Worker the user can update.
+    vi.stubEnv("YMMV_API", "https://staging.example");
+    let err = await failure();
+    expect(err.message).toContain("has no identity lookup for YMMV_TOKEN");
+    expect(err.message).toContain("Point YMMV_API at an up-to-date server.");
+    // The default base is ymmv.fyi itself: never prescribe a variable the user has not set.
+    vi.stubEnv("YMMV_API", "");
+    err = await failure();
+    expect(err.message).toContain("has no identity lookup for YMMV_TOKEN");
+    expect(err.message).not.toContain("YMMV_API");
+    expect(err.message).toContain("behind this CLI release");
+    vi.unstubAllEnvs();
+  });
+
+  it("429 surfaces the server message + retry hint; a bodyless one falls back", async () => {
+    stubFetch({ error: "rate_limited", message: "Slow down." }, 429, { "retry-after": "60" });
+    expect((await failure()).message).toMatch(/Slow down.*retry in 60s/i);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("blocked", { status: 429 })));
+    expect((await failure()).message).toMatch(/rate limited/i);
+  });
+
+  it("a 5xx carries the server's message when there is one, else finished retry copy with the status", async () => {
+    // Every env-token command depends on this call: an outage must read as one, with a next step.
+    stubFetch({ error: "internal_error", message: "D1 is having a moment." }, 503, {
+      "retry-after": "30",
+    });
+    expect((await failure()).message).toMatch(/D1 is having a moment\..*retry in 30s/i);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>502</html>", { status: 502 })),
+    );
+    const err = await failure();
+    expect(err.message).toContain("couldn't look up your token (502)");
+    expect(err.message).toContain("Try again shortly.");
+    expect(err.message).not.toContain("<html>");
+  });
+
+  it("a redirect is a FAILURE: redirect:manual yields a non-ok response, never a followed 200", async () => {
+    // What undici hands back for a 30x under redirect:"manual".
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 302, headers: new Headers() }),
+    );
+    expect((await failure()).message).toContain("couldn't look up your token (302)");
+  });
+
+  it("a thrown fetch reads as can't-reach, never a raw TypeError", async () => {
+    const thrown = new TypeError("fetch failed");
+    (thrown as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND ymmv.fyi");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(thrown));
+    expect((await failure()).message).toMatch(/Can't reach .*Check your connection.*ENOTFOUND/);
+  });
+
+  it("a body-read TIMEOUT propagates as a timeout, never 'unexpected response'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.reject(
+            new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+          ),
+      }),
+    );
+    await expect(fetchWhoami(TOKEN)).rejects.toSatisfy(
+      (e: unknown) => e instanceof Error && e.name === "TimeoutError",
+    );
+  });
+
+  it("a 200 that is not JSON, or not an identity, is refused", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json", { status: 200 })));
+    expect((await failure()).message).toMatch(/^Unexpected response from /);
+    for (const bad of [{}, { github_id: 4242 }, { github_id: "1", handle: "carol" }]) {
+      stubFetch(bad, 200);
+      expect((await failure()).message).toMatch(/^Unexpected response from /);
+    }
+  });
+
+  it("refuses a handle that could smuggle terminal escapes or a path into a delete prompt", async () => {
+    const esc = String.fromCharCode(0x1b);
+    for (const handle of [`${esc}]0;pwned`, "a/b", "", "../x"]) {
+      stubFetch({ github_id: 4242, handle }, 200);
+      expect((await failure()).message).toMatch(/^Unexpected response from /);
+    }
   });
 });

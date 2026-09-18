@@ -18,6 +18,7 @@ import {
   PublishRefusal,
   type PublishResult,
   publishProfile,
+  verifyEnvCredential,
 } from "./api.js";
 import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
@@ -43,7 +44,7 @@ import {
   sanitizeValue,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
-import { type Credential, deleteToken, loadToken } from "./token-store.js";
+import { type Credential, deleteToken, loadCredential } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
 // token store. Each command keeps its IO at the edges so the branching logic stays testable.
@@ -57,16 +58,18 @@ export interface InteractiveIO {
 /**
  * The bound handle, or null after printing the canonical "no handle" error + setting the exit code.
  * A reserved GitHub username binds to a null handle; publish/set both refuse. An env credential
- * without YMMV_HANDLE is a different diagnosis: the token may be fine, the handle is just unset —
- * the reserved-word copy would be a lie there.
+ * gets its own copy: whoami said the token's account has no handle, which has TWO causes the CLI
+ * can't tell apart, a reserved username (rename first) or a handle another account has since
+ * proven (a login rebinds the current username, and the existing token works again after it).
  */
 function requireHandle(cred: Credential): string | null {
   if (cred.handle) return cred.handle;
   console.error(
     message(
       cred.source === "env"
-        ? "YMMV_TOKEN is set but YMMV_HANDLE is not. Set YMMV_HANDLE to the GitHub username " +
-            "the token belongs to."
+        ? "The account behind YMMV_TOKEN has no handle bound. Run `ymmv login` on an interactive " +
+            "machine, as the same GitHub account, to rebind it. If that GitHub username is a " +
+            "reserved word, rename on GitHub first."
         : "Your GitHub username is a reserved word, so no handle is bound. " +
             "Rename on GitHub, then run `ymmv login` again.",
     ),
@@ -79,12 +82,17 @@ function requireHandle(cred: Credential): string | null {
  * Refuse a read-modify-write when the pre-write read resolved to a DIFFERENT handle than the
  * login-bound one (fetchProfileJson follows the 301 a GitHub rename leaves behind). Republishing
  * would silently rebind the account to the stale handle — re-login is the only sanctioned rebind.
+ * Under an env credential the handle came from whoami moments ago, so the mismatch is a bind that
+ * changed in between; `ymmv login` would only write a file token YMMV_TOKEN keeps shadowing, and
+ * a fresh run looks the handle up again.
  */
-function assertHandleUnchanged(existing: Profile | null, handle: string): void {
+function assertHandleUnchanged(existing: Profile | null, cred: Credential, handle: string): void {
   if (existing && existing.handle.toLowerCase() !== handle.toLowerCase()) {
     throw new Error(
       `This login is bound to "${handle}" but your profile now lives at ` +
-        `"${sanitizeValue(existing.handle)}". Run \`ymmv login\` to refresh, then retry.`,
+        `"${sanitizeValue(existing.handle)}". ${
+          cred.source === "env" ? "Re-run the command." : "Run `ymmv login` to refresh, then retry."
+        }`,
     );
   }
 }
@@ -199,7 +207,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // read failure. Swallowing the throw would let a transient error look like "no profile", and the
   // upsert (server does delete-then-insert) would then clobber every curated key + extra. Abort.
   const existing = await fetchProfileJson(handle);
-  assertHandleUnchanged(existing, handle);
+  assertHandleUnchanged(existing, cred, handle);
   const defaults = buildDefaults(existing, detected);
   // Keys a newer taxonomy published that this build doesn't know: carried through verbatim (the
   // upsert is a full replace — rebuilding from our compiled-in key list alone would delete them).
@@ -334,12 +342,38 @@ export async function view(handle: string): Promise<void> {
     console.log(notFound(handle, c, BASE));
     return;
   }
+  // The plain card, optionally with a diff-degradation diagnostic. The note goes to stderr so
+  // piped stdout stays deterministic (the card only), and exit stays 0: the requested profile DID
+  // render. Faint, never amber: it repeats on every degraded view. A short fragment is wrapped in
+  // parens; an error message (whole sentences, often with parens of its own) is not.
+  const plainCard = (note?: string, wrap = true): void => {
+    console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
+    if (note) {
+      const codes = palette(c);
+      console.error(message(`${codes.faint}${wrap ? `(${note})` : note}${codes.reset}`));
+    }
+  };
 
-  // view never forces a login, and stays ENV-BLIND on purpose (loadToken, not loadCredential):
-  // YMMV_HANDLE is unverified input, so an env credential must never label a fetched profile as
-  // "you" — a mislabeled diff is confidently wrong output (pinned in commands.test.ts; issue #64
-  // tracks the trusted-identity path, a whoami lookup, that would lift this).
-  const cred = await loadToken();
+  // view never forces a login. An env credential labels a fetched profile as "you" only once
+  // whoami has VERIFIED it: YMMV_HANDLE alone is unverified input, and a mislabeled diff is
+  // confidently wrong output. A failed verification (dead token, stale YMMV_HANDLE, old Worker,
+  // network) degrades to the plain card with the real reason on stderr, never a guess and never a
+  // hidden failure. The lookup sits AFTER the 404 return above, so a miss never sends the token.
+  let cred = await loadCredential();
+  if (cred?.source === "env") {
+    try {
+      cred = await verifyEnvCredential(cred);
+    } catch (e) {
+      plainCard(`No diff: ${displayError(e)}`, false);
+      return;
+    }
+    if (cred.handle === null) {
+      // Verified, but the account has no handle to diff under (the two causes requireHandle
+      // names). Say so: a silent plain card here would read exactly like being logged out.
+      plainCard("no diff: the account behind YMMV_TOKEN has no handle bound");
+      return;
+    }
+  }
   if (cred?.handle) {
     // A transient failure fetching MY profile degrades to a plain view (read-only path, no
     // writes) — but it must NOT be conflated with the genuine 404 null below: telling a published
@@ -357,21 +391,18 @@ export async function view(handle: string): Promise<void> {
       return;
     }
     if (!mine) {
-      console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
       if (mineFailed) {
-        // Degradation diagnostic, so stderr: piped stdout stays deterministic (the card only),
-        // and exit stays 0 — the requested profile DID render.
-        const codes = palette(c);
-        console.error(message(`${codes.faint}(couldn't load your profile to diff)${codes.reset}`));
+        plainCard("couldn't load your profile to diff");
       } else {
         // Logged in but genuinely never published — the one amber nudge.
+        plainCard();
         console.log(nudge(c));
       }
       return;
     }
     // Viewing your own handle: just show it (no self-diff).
   }
-  console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
+  plainCard();
 }
 
 /** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish. */
@@ -382,7 +413,7 @@ export async function runSet(target: SetTarget): Promise<void> {
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
   // truncated profile. fetchProfileJson returns null only for a genuine 404.
   const existing = await fetchProfileJson(handle);
-  assertHandleUnchanged(existing, handle);
+  assertHandleUnchanged(existing, cred, handle);
   const { entries, extras } = applySet(existing, target);
   // Count pre-flight needs the merged profile, so it lives here, not in parseSet. Only a genuine
   // 33rd extra trips it — applySet replaces an existing label in place, so editing at the cap
@@ -414,7 +445,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
   // truncated profile. fetchProfileJson returns null only for a genuine 404.
   const existing = await fetchProfileJson(handle);
-  assertHandleUnchanged(existing, handle);
+  assertHandleUnchanged(existing, cred, handle);
   if (!existing) {
     // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
     console.log(message("No profile yet. Run `ymmv` to publish one."));
@@ -444,16 +475,17 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
 export async function runDelete(io: InteractiveIO): Promise<void> {
   const cred = await ensureLogin();
   // BASE-derived like every other printed page reference — consent for a permanent delete must
-  // name the host actually being hit (YMMV_API can point this at a dev/staging Worker). But delete
-  // acts on the TOKEN's account (the request carries no handle), and an env credential's handle is
-  // unverified YMMV_HANDLE input — echoing it could confirm deletion of a profile the token does
-  // not own. Name the binding instead; a file credential's handle was server-minted at login.
-  const target =
-    cred.source === "env"
+  // name the host actually being hit (YMMV_API can point this at a dev/staging Worker). Delete acts
+  // on the TOKEN's account (the request carries no handle), so the handle named here must be one
+  // the server vouched for: minted at login for a file credential, looked up by whoami for an env
+  // one (ensureLogin already refused a YMMV_HANDLE that names a different account). With no handle
+  // bound there is no page to name; an env credential still names its binding, so the consent line
+  // for a permanent delete says WHICH account is about to lose every session.
+  const target = cred.handle
+    ? `${displayUrl(BASE)}/${sanitizeValue(cred.handle)}`
+    : cred.source === "env"
       ? "the profile bound to YMMV_TOKEN"
-      : cred.handle
-        ? `${displayUrl(BASE)}/${sanitizeValue(cred.handle)}`
-        : "your profile";
+      : "your profile";
 
   // Destructive: require explicit consent. Interactive → confirm prompt; non-interactive (pipe / CI
   // / no TTY) → REFUSE unless -y was passed. Never hard-delete a profile with neither a prompt nor an

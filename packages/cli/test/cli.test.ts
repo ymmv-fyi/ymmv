@@ -417,13 +417,20 @@ describe("publish auto-reauth", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("an env credential passed as `expected` compares handle only (it carries no trusted id)", async () => {
-    const env = { ...stored({ token: "ymmv_env", github_id: null }), source: "env" as const };
-    vi.mocked(loadCredential).mockResolvedValue(env);
+  it("a VERIFIED env credential passed as `expected` is sent as-is, never re-read from the store", async () => {
+    // The store only ever returns the RAW env credential: YMMV_HANDLE (unset here, so null) and no
+    // id. Re-reading it would trip the drift guard on every publish that leaves YMMV_HANDLE
+    // unset. process.env cannot drift inside one process, so the verified `expected` is the truth.
+    const verified = { ...stored({ token: "ymmv_env", github_id: 2002 }), source: "env" as const };
+    vi.mocked(loadCredential).mockResolvedValue({ ...verified, handle: null, github_id: null });
     const fetchFn = vi.fn().mockResolvedValue(ok({ handle: "carol" }));
     vi.stubGlobal("fetch", fetchFn);
-    expect((await publishProfile(PROFILE, env)).handle).toBe("carol");
+    expect((await publishProfile(PROFILE, verified)).handle).toBe("carol");
     expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(loadCredential).not.toHaveBeenCalled();
+    const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer ymmv_env");
+    expect(JSON.parse(init.body as string).handle).toBe("carol");
   });
 
   it("a 200 with an unreadable body still reports SUCCESS (the commit already happened)", async () => {
@@ -866,13 +873,45 @@ describe("write rate limit (429)", () => {
 // An env credential is read-only config: it must never enter the file-token heal paths
 // (deleteToken / device-flow re-login), and its error copy names the VARIABLE — never the value.
 describe("env credential (YMMV_TOKEN) API paths", () => {
+  // As verifyEnvCredential returns it: the handle and id came from whoami.
   const envCred = {
     base: "B",
     token: "ymmv_env",
     handle: "carol",
-    github_id: null,
+    github_id: 2002,
     source: "env" as const,
   };
+
+  it("an UNVERIFIED env credential (no whoami id) is refused before any request, publish and delete", async () => {
+    // The raw shape loadCredential() returns: YMMV_HANDLE's claim, no id. Only verifyEnvCredential
+    // ever sets an env credential's github_id, so null here means a call site skipped ensureLogin
+    // and would act on an unverified handle. Structural, not a comment: it must fail loudly.
+    const raw = { ...envCred, github_id: null };
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const err: unknown = await publishProfile(PROFILE, raw).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect(String(err)).toContain("was not verified");
+    await expect(deleteProfile(raw)).rejects.toThrow("was not verified");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(deleteToken).not.toHaveBeenCalled();
+  });
+
+  it("a FILE `expected` whose store re-read comes back RAW env is refused before the POST", async () => {
+    // The SECOND guard, not the one on `expected`: the caller merged under a file login, and the
+    // re-read resolved to YMMV_TOKEN instead (set mid-command, or a call site that skipped
+    // ensureLogin). That credential is unverified, so it must not go out under the file handle.
+    vi.mocked(loadCredential).mockResolvedValue({ ...envCred, github_id: null });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const err: unknown = await publishProfile(PROFILE, MINE).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect(String(err)).toContain("was not verified");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(deleteToken).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+  });
 
   it("publish 401 refuses naming YMMV_TOKEN: one POST, file token kept, no re-login", async () => {
     vi.mocked(loadCredential).mockResolvedValue(envCred);
@@ -889,13 +928,16 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     expect(login).not.toHaveBeenCalled();
   });
 
-  it("publish 409 refuses naming YMMV_HANDLE (identity is not healable from here)", async () => {
+  it("publish 409 refuses with re-run advice: the handle came from whoami, so the bind just changed", async () => {
     vi.mocked(loadCredential).mockResolvedValue(envCred);
     const fetchFn = vi.fn().mockResolvedValueOnce(status(409, { error: "handle_not_bound" }));
     vi.stubGlobal("fetch", fetchFn);
     const err: unknown = await publishProfile(PROFILE, envCred).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PublishRefusal);
-    expect(String(err)).toContain("YMMV_HANDLE");
+    expect(String(err)).toContain("YMMV_TOKEN");
+    expect(String(err)).toContain("Re-run the command.");
+    // YMMV_HANDLE is no longer an input here; blaming it would send the user to the wrong fix.
+    expect(String(err)).not.toContain("YMMV_HANDLE");
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(deleteToken).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();

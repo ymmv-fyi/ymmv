@@ -1,5 +1,10 @@
 import { type Profile, parseProfile } from "@ymmv/shared";
-import { MintRejected } from "./auth-http.js";
+import {
+  ENV_TOKEN_REJECTED,
+  ENV_TOKEN_REJECTED_MINT_AGAIN,
+  fetchWhoami,
+  MintRejected,
+} from "./auth-http.js";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import {
@@ -25,13 +30,23 @@ export class PublishRefusal extends Error {
   }
 }
 
-/** One diagnosis for a dead env token, shared by publish and delete so the copy can't drift;
- *  each caller appends its own next step. */
-const ENV_TOKEN_REJECTED = "The server rejected the token in YMMV_TOKEN (revoked or expired).";
-
 /** A login() that returned without a credential on disk. Thrown as a plain Error from ensureLogin
  *  (outside any retry loop) and as a PublishRefusal from the publish paths (inside one). */
 const NOT_PERSISTED = "Login did not persist a token. Run `ymmv login`.";
+
+/**
+ * Only verifyEnvCredential() ever sets an env credential's github_id, so `null` on one means a
+ * call site skipped ensureLogin() and is about to act on the unverified YMMV_HANDLE. A CLI bug,
+ * never a user error, so the copy says so.
+ */
+function assertVerified(cred: Credential): void {
+  if (cred.source === "env" && cred.github_id === null) {
+    throw new PublishRefusal(
+      "Internal error: the YMMV_TOKEN credential was not verified. This is a ymmv-cli bug; " +
+        "please report it at https://github.com/ymmv-fyi/ymmv/issues.",
+    );
+  }
+}
 
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
  *  the edge WAF block page is non-JSON, so fall back to a generic line. */
@@ -58,10 +73,35 @@ async function loginOrRefuse(): Promise<Credential> {
   return fresh;
 }
 
-/** Ensure a credential exists for the current base (YMMV_TOKEN wins), logging in if needed. */
+/**
+ * Give an env credential its identity. YMMV_TOKEN arrives with no server-proven handle or id, so
+ * the raw credential from loadCredential() carries `github_id: null` and whatever YMMV_HANDLE
+ * claims; whoami replaces both with what the token is actually bound to. YMMV_HANDLE is optional,
+ * and when set it is a cross-check, not an input: if it names a different account than the token
+ * (or the token's account has no handle at all), the secret pair is misconfigured, and acting on
+ * the token's account anyway would publish to, or delete, a profile the config never named.
+ * Refuse instead. Throws plain Errors with finished copy (fetchWhoami's, or the mismatch below).
+ */
+export async function verifyEnvCredential(cred: Credential): Promise<Credential> {
+  const identity = await fetchWhoami(cred.token);
+  const claimed = cred.handle;
+  if (claimed !== null && claimed.toLowerCase() !== identity.handle?.toLowerCase()) {
+    const shown = `YMMV_HANDLE is "${sanitizeValue(claimed)}"`;
+    throw new Error(
+      identity.handle === null
+        ? `${shown} but the YMMV_TOKEN account has no handle bound.`
+        : `${shown} but YMMV_TOKEN belongs to "${identity.handle}". Fix or unset YMMV_HANDLE.`,
+    );
+  }
+  return { ...cred, handle: identity.handle, github_id: identity.github_id };
+}
+
+/** Ensure a credential exists for the current base (YMMV_TOKEN wins), logging in if needed. An env
+ *  credential is returned VERIFIED (see verifyEnvCredential); a file credential never triggers a
+ *  lookup, its identity was server-minted at login. */
 export async function ensureLogin(): Promise<Credential> {
   const existing = await loadCredential();
-  if (existing) return existing;
+  if (existing) return existing.source === "env" ? verifyEnvCredential(existing) : existing;
   await login();
   const fresh = await loadCredential();
   if (!fresh) throw new Error(NOT_PERSISTED);
@@ -97,7 +137,11 @@ export async function publishProfile(
       BASE,
     );
 
-  let cred = await loadCredential();
+  // An env credential is reused as the caller verified it, never re-read: loadCredential() returns
+  // the RAW env credential (YMMV_HANDLE or null, no id), which would fail the guard below for every
+  // publish that leaves YMMV_HANDLE unset, and process.env cannot drift inside one process anyway.
+  assertVerified(expected);
+  let cred = expected.source === "env" ? expected : await loadCredential();
   if (!cred) {
     // Not logged in any more (token.json vanished, or a heal deleted it and its retry then failed
     // transiently): the device flow about to start needs one line of context, or an unexplained
@@ -106,15 +150,18 @@ export async function publishProfile(
     console.log(message("Not logged in. Logging in to publish."));
     cred = await loginOrRefuse();
   }
+  // The credential actually SENT, not just the one the caller merged under: a re-read that came
+  // back env-sourced (YMMV_TOKEN set while `expected` was a file login) is raw and must not go out.
+  assertVerified(cred);
   // The caller merged `profile` for the handle ITS login resolved moments ago. If the token store
   // now resolves to a different account (a concurrent `ymmv login`, or the device flow just run
   // above, which ANY GitHub account can approve), sending would publish that merge onto the wrong
   // profile — refuse instead of silently substituting the new identity. The handle string can't
   // see a same-name reclaim, so the account id decides too: a FILE credential that carried no id
   // (a pre-#57 token.json) but now resolves WITH one was rewritten by a login this run never
-  // verified, so that is unproven and refused as well. An env credential has no id to compare
-  // either way: handle-only there. Both auth-retry paths below re-check identity after their
-  // re-login.
+  // verified, so that is unproven and refused as well. An env credential is `expected` itself (see
+  // above), so it passes by construction. Both auth-retry paths below re-check identity after
+  // their re-login.
   const idDrifted =
     expected.source === "file" &&
     (expected.github_id === null ? cred.github_id !== null : cred.github_id !== expected.github_id);
@@ -132,10 +179,11 @@ export async function publishProfile(
     if (cred.source === "env") {
       throw new PublishRefusal(
         res.status === 401
-          ? `${ENV_TOKEN_REJECTED} Mint a new one with \`ymmv login\` on an interactive ` +
-              "machine and update YMMV_TOKEN."
-          : "The server no longer accepts this handle for the YMMV_TOKEN account. Update " +
-              "YMMV_HANDLE, or mint a fresh token with `ymmv login`.",
+          ? ENV_TOKEN_REJECTED_MINT_AGAIN
+          : // The handle came from whoami moments ago, so a 409 means the bind changed in between
+            // (a re-login on another machine after a GitHub rename). A fresh run looks it up again.
+            "The server no longer accepts this handle for the YMMV_TOKEN account. " +
+              "Re-run the command.",
       );
     }
     // 401: token revoked/expired. 409: the local handle went stale after a GitHub rename. Both heal
@@ -301,6 +349,7 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
  * `redirect: "manual"` so a proxy redirect to a 200 can't masquerade as a successful delete.
  */
 export async function deleteProfile(cred: Credential): Promise<void> {
+  assertVerified(cred);
   const res = await safeFetch(
     `${BASE}/api/v1/profile`,
     {
