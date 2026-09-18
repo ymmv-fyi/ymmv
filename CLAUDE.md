@@ -21,10 +21,11 @@ Workers + D1.
   together; bump `SCHEMA_VERSION` only when the **wire format** changes. Changes
   to the public JSON API response shape (`api/v1/u/[handle]`) are **breaking**
   for API consumers. `types.ts` also holds the CLI<->Worker auth contract
-  (`MintResult`), which is **outside** `SCHEMA_VERSION`: the CLI refuses a mint
-  reply missing a field, so a change there deploys the Worker **before** the
-  CLI tag (release.yml already orders it; never roll the Worker back behind a
-  published CLI).
+  (`MintResult`, `WhoamiResult`), which is **outside** `SCHEMA_VERSION`: the CLI
+  refuses a mint or whoami reply missing a field, and every `YMMV_TOKEN` command
+  needs `GET /api/v1/auth/whoami` to exist, so a change there deploys the Worker
+  **before** the CLI tag (release.yml already orders it; never roll the Worker
+  back behind a published CLI).
 - **Flag every manual step explicitly:** Cloudflare Worker secrets/env, D1
   migrations (new file in `packages/web/migrations` + apply local for tests
   **and** prod on deploy), the `RL_WRITE`/`RL_AUTH` bindings, npm publish (tag-driven OIDC
