@@ -1,4 +1,4 @@
-import { isGithubId, isValidHandle, type MintResult } from "@ymmv/shared";
+import { isGithubId, isValidHandle, type MintResult, type WhoamiResult } from "@ymmv/shared";
 import { BASE } from "./config.js";
 import {
   isTimeoutError,
@@ -24,6 +24,37 @@ async function bodyJson(res: Response): Promise<unknown | null> {
     if (isTimeoutError(err)) throw err;
     return null;
   }
+}
+
+/** One diagnosis for a dead env token, shared by whoami, publish, and delete so the copy can't
+ *  drift; each caller appends its own next step. */
+export const ENV_TOKEN_REJECTED =
+  "The server rejected the token in YMMV_TOKEN (invalid or revoked).";
+/** The rejected-token diagnosis plus the one next step that fixes it (whoami and publish). */
+export const ENV_TOKEN_REJECTED_MINT_AGAIN =
+  `${ENV_TOKEN_REJECTED} Mint a new one with \`ymmv login\` on an interactive machine ` +
+  "and update YMMV_TOKEN.";
+
+/**
+ * The one shape-check for an identity off the auth wire (the mint reply and whoami both carry it).
+ * A real Worker binds only a valid handle (or null) to a real GitHub id, so anything else, an
+ * empty or control-char-only string, a slash-bearing one from a foreign YMMV_API origin, a
+ * non-integer id, is a reply this binary refuses. The handle is sanitized HERE so every downstream
+ * print (prompts, delete confirms, "Logged in as") gets a clean value. null = refused.
+ */
+export function parseIdentity(data: unknown): WhoamiResult | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { handle: rawHandle, github_id: id } = data as { handle?: unknown; github_id?: unknown };
+  const handle =
+    rawHandle === null
+      ? null
+      : typeof rawHandle === "string"
+        ? sanitizeValue(rawHandle)
+        : undefined;
+  if (handle === undefined || (handle !== null && !isValidHandle(handle)) || !isGithubId(id)) {
+    return null;
+  }
+  return { github_id: id, handle };
 }
 
 /** A 200 the CLI refuses to store: the mint reply lacked a usable token, handle, or account id.
@@ -90,32 +121,19 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   }
   // Shape-check the mint response BEFORE it can touch the token store: a middlebox 200 with `{}`
   // (or non-JSON) must not overwrite a previously valid token.json with a token-less blob — that
-  // silently destroys an existing login. The handle is sanitized at this boundary so every
-  // downstream print (prompts, confirms, "Logged in as") gets a clean value. github_id is
-  // REQUIRED (strict, not optional): a Worker that can't say which account it minted for can't
-  // produce a credential the reauth guard in api.ts may trust, so it fails loudly here instead of
-  // silently downgrading that guard to the handle-only check — deploy the Worker before the CLI.
+  // silently destroys an existing login. The identity half goes through parseIdentity (shared
+  // with whoami). github_id is REQUIRED (strict, not optional): a Worker that can't say which
+  // account it minted for can't produce a credential the reauth guard in api.ts may trust, so it
+  // fails loudly here instead of silently downgrading that guard to the handle-only check —
+  // deploy the Worker before the CLI.
   const data = (await bodyJson(res)) as Partial<MintResult> | null;
   const unexpected = `Unexpected response from ${BASE}. Nothing was saved; run \`ymmv login\` again.`;
   // A body that isn't JSON at all is a transport event (mid-body reset, captive portal), not a
   // Worker reply this binary can't use: a plain Error, so the interactive loop keeps its answers.
   if (!data) throw new Error(unexpected);
   const token = typeof data.token === "string" && data.token.length > 0 ? data.token : null;
-  // The handle is sanitized, then validated, at this boundary: a real Worker binds only a valid
-  // handle (or null), so anything else, an empty or control-char-only string or a slash-bearing
-  // one from a foreign YMMV_API origin, is a reply this binary refuses to store.
-  const handle =
-    data.handle === null
-      ? null
-      : typeof data.handle === "string"
-        ? sanitizeValue(data.handle)
-        : undefined;
-  if (
-    token === null ||
-    handle === undefined ||
-    (handle !== null && !isValidHandle(handle)) ||
-    !isGithubId(data.github_id)
-  ) {
+  const identity = parseIdentity(data);
+  if (token === null || identity === null) {
     // A well-formed token in a reply we refuse is ALREADY live in D1 (the Worker mints before it
     // responds) and nothing local will ever hold it. Revoke it now, best-effort, or it stays an
     // orphaned active session only the server could ever see. Capped at REVOKE_CAP_MS, not
@@ -132,7 +150,59 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
       revokeFailed ? `${unexpected} The login the server minted could not be revoked.` : unexpected,
     );
   }
-  return { token, handle, github_id: data.github_id };
+  return { token, ...identity };
+}
+
+/**
+ * Look up the identity a ymmv token is bound to (GET /api/v1/auth/whoami): YMMV_TOKEN arrives with
+ * no server-proven handle or id, and this is what supplies them. Every failure is a plain Error
+ * with finished copy; nothing here prints or echoes the token.
+ */
+export async function fetchWhoami(token: string): Promise<WhoamiResult> {
+  const res = await safeFetch(
+    `${BASE}/api/v1/auth/whoami`,
+    {
+      headers: { authorization: `Bearer ${token}` },
+      // Never follow a redirect: the bearer must not travel to a redirect target, and a 30x→200
+      // must not read as a verified identity. Same guard as mint, logout, publish, and delete.
+      redirect: "manual",
+    },
+    BASE,
+  );
+  if (!res.ok) {
+    if (res.status === 401) throw new Error(ENV_TOKEN_REJECTED_MINT_AGAIN);
+    if (res.status === 404) {
+      // A Worker deployed before this endpoint existed. No fallback to the unverified YMMV_HANDLE:
+      // a forced 404 must not downgrade the identity check, so this fails with the real diagnosis.
+      // The next step depends on who runs that server: a YMMV_API override points at a staging or
+      // self-hosted Worker the user can update; the default base is ymmv.fyi itself, where the
+      // only honest advice is that the server is behind this CLI release.
+      throw new Error(
+        `${BASE} has no identity lookup for YMMV_TOKEN. ${
+          process.env.YMMV_API
+            ? "Point YMMV_API at an up-to-date server."
+            : "The server is behind this CLI release; try again later."
+        }`,
+      );
+    }
+    // 429 and everything else (5xx, an edge error page, a 30x under redirect:manual): the server's
+    // own {message} when it sent one, plus the retry-after hint. Every env-token command depends
+    // on this call, so a transient outage must read as one, not as a bare status number.
+    throw new Error(
+      withRetryHint(
+        (await serverMessage(res)) ??
+          (res.status === 429
+            ? "rate limited, too many requests"
+            : `The server couldn't look up your token (${res.status}). Try again shortly.`),
+        res,
+      ),
+    );
+  }
+  const identity = parseIdentity(await bodyJson(res));
+  if (!identity) {
+    throw new Error(`Unexpected response from ${BASE}. Check YMMV_API, or try again shortly.`);
+  }
+  return identity;
 }
 
 /** Revoke a ymmv token server-side. Returns whether a live token was actually revoked.

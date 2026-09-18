@@ -17,7 +17,8 @@ export interface StoredToken {
   /** The GitHub account id the token was minted for. Nullable on READ only: a token.json written
    *  by a CLI that predates the field has none, and must keep loading. Every WRITE carries one
    *  (saveToken takes a MintResult), so for a FILE credential `null` means exactly "legacy file".
-   *  An env Credential (loadCredential below) is also null: YMMV_TOKEN has no trusted identity. */
+   *  A RAW env Credential (loadCredential below) is also null: YMMV_TOKEN arrives with no trusted
+   *  identity until api.ts verifyEnvCredential() fills it in from whoami. */
   github_id: number | null;
 }
 
@@ -129,17 +130,19 @@ export interface Credential extends StoredToken {
 
 /**
  * The credential API calls run under: `YMMV_TOKEN` (with optional `YMMV_HANDLE`) when set, else
- * the stored file token. Env values are read at call time; empty string means unset (the YMMV_API
- * convention). The file readers above stay env-blind ON PURPOSE: login's revoke/warn flow and
- * logout must act on the FILE token only — an env token is read-only config the CLI must never
- * revoke, overwrite, or delete. Shapes are vetted by credentialEnvProblem() (config.ts) before
- * main() dispatches, so this reader trusts them.
+ * the stored file token. An env credential comes back UNVERIFIED (api.ts verifyEnvCredential()
+ * fills in its identity). Env values are read at call time; empty string means unset (the
+ * YMMV_API convention). The file readers above stay env-blind ON PURPOSE: login's revoke/warn
+ * flow and logout must act on the FILE token only — an env token is read-only config the CLI
+ * must never revoke, overwrite, or delete. Shapes are vetted by credentialEnvProblem()
+ * (config.ts) before main() dispatches, so this reader trusts them.
  */
 export async function loadCredential(): Promise<Credential | null> {
   const envToken = process.env.YMMV_TOKEN || "";
   if (envToken !== "") {
-    // github_id null: an env credential carries no trusted identity (YMMV_HANDLE is unverified and
-    // there is no whoami lookup). Env credentials never reach the reauth guard anyway.
+    // RAW and unverified: github_id null, and the handle is whatever YMMV_HANDLE claims. This
+    // reader stays network-free; api.ts verifyEnvCredential() replaces both with what whoami says
+    // the token is bound to before any command acts on them.
     return {
       base: BASE,
       token: envToken,
