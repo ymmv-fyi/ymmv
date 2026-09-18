@@ -82,6 +82,12 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
       "/api/v1/auth",
       '"POST"',
       '"DELETE"',
+      // whoami is the one GET the rule covers: bearer-authed, no-store, no binding of its own.
+      // HEAD rides with it — Astro answers HEAD by running the GET handler, so the D1 read is the
+      // same one and a GET-only rule would leave a free flood path open.
+      '"GET"',
+      '"HEAD"',
+      "/api/v1/auth/whoami",
     ]) {
       expect(script).toContain(atom);
     }

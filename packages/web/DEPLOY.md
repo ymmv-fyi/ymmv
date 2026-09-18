@@ -65,7 +65,23 @@ Remove-Item Env:\CLOUDFLARE_ENV        # critical: must not reach wrangler deplo
 Select-String packages/web/dist/server/wrangler.json -Pattern 'ymmv-production|RL_WRITE|RL_AUTH'
 ```
 
-### 4. Deploy the baked config (no `--env`)
+### 4. Zone WAF rate-limit rule, BEFORE the deploy (only when `infra/waf-ratelimit.sh` changed)
+
+The committed rule expression is the source of truth for the edge rate limit, and it is the only
+limiter in front of `GET /api/v1/auth/whoami` (no Workers binding). When the expression changed
+since the last deploy, apply it first, so the Worker never serves a new endpoint the rule does not
+yet cover; then verify. Needs a zone WAF-edit API token. Still from the repo root:
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = '...'; $env:CLOUDFLARE_ZONE_ID = '...'
+bash infra/waf-ratelimit.sh apply
+bash infra/waf-ratelimit.sh verify
+Remove-Item Env:\CLOUDFLARE_API_TOKEN
+```
+
+`verify` reports drift between the committed expression and the live rule.
+
+### 5. Deploy the baked config (no `--env`)
 
 ```powershell
 cd packages/web
