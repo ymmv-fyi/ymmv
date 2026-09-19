@@ -8,6 +8,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **Logging in again retires the previous token in the same server step that mints the new one.**
   A login interrupted after the mint can no longer leave the replaced token active, and revoking
   it no longer depends on a second request reaching the server.
+- **Link text on the profile card shows the real host.** A user name before the host
+  (`user@host`) is dropped from the shown text, the host is shown lowercased, and an
+  internationalized host appears in punycode form; the link target is unchanged. The web profile
+  and diff pages apply the same rule.
 
 ### Fixed
 - **`ymmv`, `ymmv set`, and `ymmv unset` no longer overwrite a change made from another
