@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import {
+  hasVisibleContent,
   isCuratedKey,
   isReserved,
   isValidHandle,
@@ -20,20 +21,9 @@ import { checkWriteRateLimit } from "../../../lib/rate-limit.ts";
 // enforces. Rationale unchanged: curated entries are naturally ≤ CURATED_KEYS.length (13) after
 // dedup (plus any newer-taxonomy keys a skewed client carries through verbatim), but bound the
 // pre-dedup count, the free-form extras, and any value length so one write can't bloat D1 or every
-// future read of the profile.
-
-// Code points that occupy no visual space: zero-width space/joiners, bidi marks and embedding
-// controls, variation selectors, the Arabic letter mark, and the rest of Unicode's
-// Default_Ignorable_Code_Point set — the engine-maintained property, where a hand-rolled class
-// drifts (an earlier one missed U+061C). `.trim()` does NOT remove these (it strips the Zs
-// whitespace set plus U+FEFF), so a field of only U+200B passes an emptiness check, stores, and
-// renders as a blank row. Reject a field only when NOTHING visible survives — an invisible char
-// decorating real text is the user's data and is stored verbatim.
-const INVISIBLE_RE = /\p{Default_Ignorable_Code_Point}/gu;
-
-function hasVisibleContent(s: string): boolean {
-  return s.replace(INVISIBLE_RE, "").trim() !== "";
-}
+// future read of the profile. The visibility rule (`hasVisibleContent`, `visible.ts`) is shared
+// the same way: a field of only zero-width/format code points survives `.trim()`, so both the
+// server's 422 and the CLI's pre-flight test for visible content.
 
 // Every reply here is bearer-authed, so every one is no-store (errors included).
 function err(status: number, error: string, extra?: Record<string, unknown>): Response {

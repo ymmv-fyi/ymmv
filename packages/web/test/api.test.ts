@@ -170,6 +170,16 @@ describe("POST validation", () => {
       422,
     );
   });
+  it("422 control-character-only entry value (U+0001: not Default_Ignorable, still renders blank)", async () => {
+    const soh = String.fromCodePoint(0x01);
+    expect((await publish(TOKEN, profile("alice", [{ key: "editor", value: soh }]))).status).toBe(
+      422,
+    );
+  });
+  it("200 for a control character decorating real text — stored verbatim, not the rule's target", async () => {
+    const value = `Neo${String.fromCodePoint(0x01)}vim`;
+    expect((await publish(TOKEN, profile("alice", [{ key: "editor", value }]))).status).toBe(200);
+  });
   it("422 non-string entry value", async () => {
     expect(
       (await publish(TOKEN, profile("alice", [{ key: "editor", value: 42 as unknown as string }])))

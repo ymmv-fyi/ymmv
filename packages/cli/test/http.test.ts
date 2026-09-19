@@ -171,6 +171,13 @@ describe("serverMessage", () => {
     expect(await serverMessage(res(JSON.stringify({ message: 123 })))).toBeUndefined();
   });
 
+  it("judges visibility on the untruncated message — a long invisible-only body is not a bare ellipsis", async () => {
+    // wireText appends a visible "…" past 200 chars; testing the truncated form would let 201
+    // zero-width spaces through and print "…" as the server's message.
+    const long = String.fromCodePoint(0x200b).repeat(201);
+    expect(await serverMessage(res(JSON.stringify({ message: long })))).toBeUndefined();
+  });
+
   it("returns undefined when the message sanitizes to nothing visible — never a blank error line", async () => {
     // A message of pure ANSI, whitespace, or zero-width chars would survive a truthiness check
     // and defeat every caller's `?? fallback`, throwing an empty Error.
