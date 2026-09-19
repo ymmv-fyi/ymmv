@@ -32,9 +32,24 @@ export interface WhoamiResult {
  * `POST /api/v1/auth/token` (device-flow mint) response: the minted token plus the identity it is
  * bound to. The CLI stores `github_id` and compares it across a re-login, because a handle string
  * can change hands (rename + reclaim) while the id cannot. Not versioned by SCHEMA_VERSION.
+ *
+ * The request may carry `revoke` (the raw stored token this login replaces): the
+ * Worker then revokes it in the SAME D1 batch that inserts the new token, so a login can never be
+ * interrupted between "new token live" and "old token dead". `revoked` is present iff the request
+ * carried `revoke`: true when that token was live and is now retired, false when it was unknown or
+ * already revoked. A Worker that predates the field omits it, and the CLI refuses the reply
+ * rather than assume the old token was retired.
  */
 export interface MintResult extends WhoamiResult {
   token: string;
+  revoked?: boolean;
+}
+
+/** `POST /api/v1/auth/token` request body. `access_token` is the GitHub device-flow token (the
+ *  credential; there is no ymmv bearer yet); `revoke` is the stored ymmv token this login replaces. */
+export interface MintRequest {
+  access_token: string;
+  revoke?: string;
 }
 
 /** A single curated key/value pair. */
