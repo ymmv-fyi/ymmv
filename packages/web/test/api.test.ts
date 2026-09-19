@@ -227,6 +227,24 @@ describe("POST validation", () => {
       message: "Extra 2 needs a visible label and value.",
     });
   });
+  it("422 over-cap extra names its row and both caps", async () => {
+    const res = await publish(
+      TOKEN,
+      profile(
+        "alice",
+        [],
+        [
+          { label: "Keyboard", value: "HHKB" },
+          { label: "x".repeat(65), value: "v" },
+        ],
+      ),
+    );
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "extra_too_long",
+      message: "Extra 2 is over the cap: labels at most 64 characters, values 256.",
+    });
+  });
   it("422 whitespace-only extra label/value", async () => {
     expect(
       (await publish(TOKEN, profile("alice", [], [{ label: "   ", value: " " }]))).status,

@@ -717,8 +717,14 @@ describe("publish", () => {
     // enforced the rule). Re-offering the rebased card as-is would POST it, 422, and re-offer it
     // unchanged; the loop-top gate walks the prompts first, where the re-ask names the saved value.
     vi.mocked(loadToken).mockResolvedValue(stored());
-    const before = prof("me", [{ key: "editor", value: "vim" }]);
-    const after = prof("me", [{ key: "editor", value: String.fromCodePoint(0x200b) }]);
+    // Editor comes from detection before the reload and from the saved profile after it, so the
+    // "saved value" wording is only reachable through the refreshed saved-key set.
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "vim"]]));
+    const before = prof("me", [{ key: "shell", value: "zsh" }]);
+    const after = prof("me", [
+      { key: "shell", value: "zsh" },
+      { key: "editor", value: String.fromCodePoint(0x200b) },
+    ]);
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(own(before, '"A"'))
@@ -737,7 +743,10 @@ describe("publish", () => {
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // no walk before the first card
     expect(logs.join("\n")).toMatch(/the saved value has no visible text/);
     expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
-    expect(posted(fetchFn, 3).entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
     expect(fetchFn).toHaveBeenCalledTimes(4); // no 422 round-trip
   });
 
@@ -1379,6 +1388,20 @@ describe("set", () => {
     const out = logs.join("\n");
     expect(out).toContain("Set Editor = Helix.");
     expect(out).not.toContain(esc);
+  });
+
+  it("-y: a SAVED over-cap value is named as saved, with no remove hint (that is for invisible only)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "x".repeat(300) }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(
+      /The saved Editor value is 300 characters; the cap is 256\. Set a shorter one: ymmv set editor <value>\./,
+    );
   });
 
   it("set refuses before the POST when a SAVED value no longer passes a write rule, naming that key", async () => {

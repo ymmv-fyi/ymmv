@@ -136,16 +136,16 @@ function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | 
     if (!isCuratedKey(key)) continue;
     const problem = valueProblem(value);
     if (problem === undefined) continue;
-    const what =
-      problem === "invisible"
-        ? "has no visible text. Set one"
-        : `is ${value.length} characters; the cap is ${MAX_VALUE}. Set a shorter one`;
+    const remedy = problem === "invisible" ? "Set one" : "Set a shorter one";
     const source = saved.has(key) ? "saved" : "detected";
     // A saved value with nothing visible is more likely wanted gone than replaced; unset works
     // because applyUnset drops the entry before this check sees the merge.
     const remove =
       problem === "invisible" && source === "saved" ? `, or remove it: ymmv unset ${key}` : "";
-    return `The ${source} ${KEY_LABELS[key]} value ${what}: ymmv set ${key} <value>${remove}.`;
+    return (
+      `The ${source} ${KEY_LABELS[key]} value ${ruleClause(problem, value)}. ` +
+      `${remedy}: ymmv set ${key} <value>${remove}.`
+    );
   }
   return undefined;
 }
@@ -160,8 +160,15 @@ function valueProblem(value: string): "invisible" | "over-cap" | undefined {
   return undefined;
 }
 
-/** The curated keys the saved profile carries: a failing default under one of these is the user's
- *  own stored value, anything else came from detection. */
+/** The rule half of a refusal sentence, one source for every surface; each appends its remedy. */
+function ruleClause(problem: "invisible" | "over-cap", value: string): string {
+  return problem === "invisible"
+    ? "has no visible text"
+    : `is ${value.length} characters; the cap is ${MAX_VALUE}`;
+}
+
+/** Every key the saved profile carries (curated and newer-taxonomy alike): a failing default under
+ *  one of these is the user's own stored value, anything else came from detection. */
 function savedKeys(existing: Profile | null): ReadonlySet<string> {
   return new Set((existing?.entries ?? []).map((e) => e.key));
 }
@@ -196,14 +203,10 @@ async function promptEntries(
         // Name the default's real source when it is the problem (a saved value is the user's own,
         // a detected one is their environment's), and the two ways out.
         const which = `the ${saved.has(key) ? "saved" : "detected"} value`;
-        const note =
-          problem === "invisible"
-            ? isDefault
-              ? `${which} has no visible text. Type a value or - to clear`
-              : "that value has no visible text"
-            : isDefault
-              ? `${which} is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
-              : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`;
+        const clause = ruleClause(problem, value);
+        const note = isDefault
+          ? `${which} ${clause}. Type a ${problem === "invisible" ? "value" : "shorter value"} or - to clear`
+          : `that value ${clause}`;
         console.log(message(`${c.faint}${note}${c.reset}`));
         continue;
       }
@@ -328,10 +331,10 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
   // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
   if (!io.interactive || !io.prompter || io.yes) {
-    // Detection is the one input that skips both the argv and prompt pre-flights (env-derived
-    // values land in the defaults verbatim), and this branch has no re-ask to recover with —
-    // refuse locally instead of shipping a doomed POST; the interactive path recovers through
-    // the re-prompt/edit loop instead.
+    // Detection (env-derived values land in the defaults verbatim) and a value saved before a
+    // rule existed both skip the argv and prompt pre-flights, and this branch has no re-ask to
+    // recover with — refuse locally instead of shipping a doomed POST; the interactive path
+    // recovers through the re-prompt/edit loop.
     const entries = assemble();
     const refusal = writeRuleRefusal(entries, existing);
     if (refusal !== undefined) {
