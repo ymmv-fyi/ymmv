@@ -1,4 +1,10 @@
-import { isGithubId, isValidHandle, type MintResult, type WhoamiResult } from "@ymmv/shared";
+import {
+  isGithubId,
+  isValidHandle,
+  type MintRequest,
+  type MintResult,
+  type WhoamiResult,
+} from "@ymmv/shared";
 import { BASE } from "./config.js";
 import {
   isTimeoutError,
@@ -57,6 +63,15 @@ export function parseIdentity(data: unknown): WhoamiResult | null {
   return { github_id: id, handle };
 }
 
+/** The next step when the Worker predates something this CLI needs, by who runs that server: a
+ *  YMMV_API override points at a staging or self-hosted Worker the user can update; the default
+ *  base is ymmv.fyi itself, where the only honest advice is that the server is behind this release. */
+function serverBehindHint(): string {
+  return process.env.YMMV_API
+    ? "Point YMMV_API at an up-to-date server."
+    : "The server is behind this CLI release; try again later.";
+}
+
 /** A 200 the CLI refuses to store: the mint reply lacked a usable token, handle, or account id.
  *  Deterministic for this binary against this Worker (an older Worker never grows the field), so
  *  api.ts turns it into a PublishRefusal: the interactive loop must exit, not re-run the device
@@ -69,8 +84,13 @@ export class MintRejected extends Error {
 }
 
 /** Exchange a GitHub access token for a minted ymmv token (the Worker verifies the token's audience
- *  via GitHub token introspection). */
-export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
+ *  via GitHub token introspection). `revoke` is the stored token this login replaces: the Worker
+ *  retires it in the same D1 batch as the mint; the CLI only checks that the reply acknowledged the
+ *  retire (`revoked` present), it never surfaces the flag. */
+export async function mintYmmvToken(
+  accessToken: string,
+  revoke?: string,
+): Promise<Omit<MintResult, "revoked">> {
   // safeFetch: the mint runs right after the user approved on GitHub — a wifi blip here must say
   // "can't reach", not leak a raw fetch TypeError.
   const res = await safeFetch(
@@ -78,7 +98,8 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
+      // JSON.stringify drops an undefined `revoke`: no key on the wire when there is nothing to retire.
+      body: JSON.stringify({ access_token: accessToken, revoke } satisfies MintRequest),
       // Never follow a redirect: a 30x must fail (the existing `!res.ok` guard rejects the resulting
       // opaqueredirect), not re-POST the GitHub access_token to the redirect target or read a
       // redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
@@ -107,7 +128,7 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
     const slug = typeof body.error === "string" ? body.error : "";
     // Map the two server slugs a real user can hit at this moment — right after approving the
     // device flow, the highest-stakes step of onboarding — to human copy with a next step. The
-    // 400 slugs (bad_json, missing_access_token) are unreachable from a well-formed CLI, and any
+    // 400 slugs (bad_json, missing_access_token, bad_revoke) are unreachable from a well-formed CLI, and any
     // unknown code keeps the raw form: for those, the slug IS the most useful thing to print.
     if (res.status === 401 && slug === "github_auth_failed") {
       throw new Error("GitHub rejected the authorization. Run `ymmv login` to try again.");
@@ -127,13 +148,29 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   // fails loudly here instead of silently downgrading that guard to the handle-only check —
   // deploy the Worker before the CLI.
   const data = (await bodyJson(res)) as Partial<MintResult> | null;
-  const unexpected = `Unexpected response from ${BASE}. Nothing was saved; run \`ymmv login\` again.`;
+  // With a `revoke` in flight the Worker may have committed the rotate before the reply was lost or
+  // mangled: the stored login is then already retired even though nothing local changed. Say so,
+  // or "nothing was saved" reads as "nothing happened".
+  const unexpected =
+    `Unexpected response from ${BASE}. Nothing was saved` +
+    (revoke === undefined ? "" : " (the previous login on this machine may have been signed out)") +
+    "; run `ymmv login` again.";
   // A body that isn't JSON at all is a transport event (mid-body reset, captive portal), not a
   // Worker reply this binary can't use: a plain Error, so the interactive loop keeps its answers.
   if (!data) throw new Error(unexpected);
   const token = typeof data.token === "string" && data.token.length > 0 ? data.token : null;
   const identity = parseIdentity(data);
-  if (token === null || identity === null) {
+  const revoked = typeof data.revoked === "boolean" ? data.revoked : undefined;
+  // A retire the CLI asked for that an otherwise sound reply doesn't confirm is a Worker that
+  // predates the field and silently ignored it: the stored token is still live, and storing this
+  // reply would strand it with no local reference left. Same strictness as github_id (deploy the
+  // Worker before the CLI); the stored login stays untouched, so "nothing was saved" holds.
+  const behind =
+    token !== null && identity !== null && revoke !== undefined && revoked === undefined
+      ? `${BASE} did not retire the previous login. ${serverBehindHint()} Nothing was saved; ` +
+        "to log in anyway, run `ymmv logout` first."
+      : null;
+  if (token === null || identity === null || behind !== null) {
     // A well-formed token in a reply we refuse is ALREADY live in D1 (the Worker mints before it
     // responds) and nothing local will ever hold it. Revoke it now, best-effort, or it stays an
     // orphaned active session only the server could ever see. Capped at REVOKE_CAP_MS, not
@@ -146,25 +183,19 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
         revokeFailed = true;
       });
     }
+    const refusal = behind ?? unexpected;
     throw new MintRejected(
-      revokeFailed ? `${unexpected} The login the server minted could not be revoked.` : unexpected,
+      revokeFailed ? `${refusal} The login the server minted could not be revoked.` : refusal,
     );
   }
+  // `revoked` was only needed for the contract check above: login() has nothing to do with it.
   return { token, ...identity };
 }
 
-/** A 404 from a route this CLI release requires: a Worker deployed before it existed. The next
- *  step depends on who runs that server: a YMMV_API override points at a staging or self-hosted
- *  Worker the user can update; the default base is ymmv.fyi itself, where the only honest advice
- *  is that the server is behind this CLI release. `missing` names the route in the user's terms. */
+/** A 404 from a route this CLI release requires: a Worker deployed before it existed. `missing`
+ *  names the route in the user's terms; the next step comes from `serverBehindHint`. */
 export function missingRouteError(missing: string): Error {
-  return new Error(
-    `${BASE} has no ${missing}. ${
-      process.env.YMMV_API
-        ? "Point YMMV_API at an up-to-date server."
-        : "The server is behind this CLI release; try again later."
-    }`,
-  );
+  return new Error(`${BASE} has no ${missing}. ${serverBehindHint()}`);
 }
 
 /**

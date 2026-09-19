@@ -34,6 +34,134 @@ describe("mintYmmvToken", () => {
     });
   });
 
+  it("sends `revoke` in the body when given, and no `revoke` key otherwise", async () => {
+    stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242, revoked: true }, 200);
+    await mintYmmvToken("gho_x", "ymmv_old");
+    let init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ access_token: "gho_x", revoke: "ymmv_old" });
+    stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242 }, 200);
+    await mintYmmvToken("gho_x");
+    init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({ access_token: "gho_x" });
+  });
+
+  it("a confirmed retire, true or false, is a normal login: the flag itself stays on the wire", async () => {
+    for (const revoked of [true, false]) {
+      stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242, revoked }, 200);
+      expect(await mintYmmvToken("gho_x", "ymmv_old")).toEqual({
+        token: "ymmv_x",
+        handle: "carol",
+        github_id: 4242,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1); // nothing to revoke: the server did it
+    }
+  });
+
+  it("a retire the reply doesn't confirm (older Worker) is MintRejected: the minted token is revoked, the stored one stays", async () => {
+    // A Worker without the field ignores `revoke` and mints anyway. Storing that reply would
+    // strand the previous token live with no local reference left; refuse instead, like a
+    // missing github_id. Copy names the next step by who runs the server (same split as whoami).
+    for (const reply of [
+      { token: "ymmv_x", handle: "carol", github_id: 4242 },
+      { token: "ymmv_x", handle: "carol", github_id: 4242, revoked: "yes" },
+    ]) {
+      stubFetch(reply, 200);
+      const err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(MintRejected);
+      expect((err as Error).message).toMatch(/did not retire the previous login/);
+      expect((err as Error).message).toMatch(/behind this CLI release/);
+      expect((err as Error).message).toMatch(/Nothing was saved/);
+      expect((err as Error).message).toMatch(/run `ymmv logout` first/); // the escape hatch
+      expect(fetch).toHaveBeenCalledTimes(2); // mint + revoke of what it minted
+      const [url, init] = vi.mocked(fetch).mock.calls[1] as [string, RequestInit];
+      expect(url).toContain("/api/v1/auth/logout");
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer ymmv_x");
+    }
+    vi.stubEnv("YMMV_API", "https://staging.example");
+    try {
+      stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242 }, 200);
+      await expect(mintYmmvToken("gho_x", "ymmv_old")).rejects.toThrow(
+        /Point YMMV_API at an up-to-date server/,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("the older-Worker refusal says when the minted token could not be revoked, and stays plain when it could", async () => {
+    // stubFetch hands out ONE Response: the mint parse drains it, so the revoke's body read fails
+    // (same trick as the cap test below). Both facts must reach the user: the previous login is
+    // still live AND so is the one just minted.
+    stubFetch({ token: "ymmv_x", handle: "carol", github_id: 4242 }, 200);
+    let err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).toMatch(/did not retire the previous login/);
+    expect((err as Error).message).toMatch(/could not be revoked/);
+    const mint = new Response(
+      JSON.stringify({ token: "ymmv_x", handle: "carol", github_id: 4242 }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const revoked = new Response(JSON.stringify({ revoked: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(mint).mockResolvedValueOnce(revoked));
+    err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).toMatch(/did not retire the previous login/);
+    expect((err as Error).message).not.toMatch(/could not be revoked/);
+  });
+
+  it("a token-less reply to a retire request is the plain refusal, with nothing to revoke", async () => {
+    // The older-Worker diagnosis needs a usable token: with none there is no minted login to
+    // strand, so the generic copy applies and no revoke request goes out.
+    for (const reply of [
+      { handle: "carol", github_id: 4242 },
+      { token: "", handle: "carol", github_id: 4242 },
+    ]) {
+      stubFetch(reply, 200);
+      const err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(MintRejected);
+      expect((err as Error).message).toMatch(/Unexpected response from/);
+      expect((err as Error).message).not.toMatch(/did not retire/);
+      // The Worker may have committed the rotate before mangling the reply: say so.
+      expect((err as Error).message).toMatch(/may have been signed out/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("a confirmed retire never rescues an identity-less reply: still the plain refusal", async () => {
+    stubFetch({ token: "ymmv_x", handle: "carol", revoked: true }, 200);
+    const err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).toMatch(/Unexpected response from/);
+    expect((err as Error).message).not.toMatch(/did not retire/);
+    expect((err as Error).message).toMatch(/may have been signed out/);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("without a `revoke`, a refused reply never claims the previous login may be gone", async () => {
+    stubFetch({ token: "ymmv_x", handle: "carol" }, 200);
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).not.toMatch(/signed out/);
+  });
+
+  it("a non-JSON 200 to a retire request is still a TRANSIENT plain Error, with the sign-out hint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("<html>portal</html>", { status: 200 })),
+    );
+    const err = await mintYmmvToken("gho_x", "ymmv_old").catch((e: Error) => e);
+    expect(err).not.toBeInstanceOf(MintRejected);
+    expect((err as Error).message).toMatch(/Unexpected response from/);
+    expect((err as Error).message).toMatch(/may have been signed out/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("a 200 WITHOUT github_id throws MintRejected AND revokes the token the Worker already minted", async () => {
     // Tolerating a missing id would store null and silently drop the reauth guard back to the
     // handle-only check — the exact hole issue #57 closes. Deploy the Worker before the CLI.

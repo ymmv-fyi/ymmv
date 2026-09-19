@@ -178,6 +178,16 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   throw new Error("Device code expired. Run `ymmv login` again.");
 }
 
+/** A stored credential login and logout can retire on THIS server: same base, and a token that is
+ *  more than whitespace (a hand-edited file). Sent as `revoke`, a blank token would draw a 400
+ *  from the Worker and wedge every login; sent to logout, it parses as no bearer at all. Shared
+ *  with `ymmv logout` so the two commands agree on what counts as a stored login. */
+export function retirable(
+  cred: { base: string; token: string } | null | undefined,
+): cred is { base: string; token: string } {
+  return cred != null && cred.base === BASE && cred.token.trim() !== "";
+}
+
 /**
  * Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
  * `deps` is for tests (inject sleep/now/fetch); production calls login() with real timers.
@@ -186,13 +196,21 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
  * unrevoked predecessor stays live with no local reference left to revoke it by):
  *
  *   peek ── other base? ─► warn (stderr): the file will be replaced, log out there first
- *   device flow ─► mint ─► RE-peek (the flow took minutes; a concurrent login may have
- *   written a fresh token) ─► saveToken ─┬─ ok ───► revoke REPLACED, best effort (fail: faint note)
- *                                        └─ fail ─► revoke NEW; old file survives (atomic rename)
+ *   device flow ─► peek R (the flow took minutes; a concurrent login may have written a fresh
+ *   token) ─► mint, revoke: R (the Worker retires R in the SAME D1 batch that inserts the new
+ *   token N: no window where both are live) ─► RE-peek R2 ─► saveToken
+ *     ├─ ok ───► R2 is a same-base token other than R or N (a login raced us between the two
+ *     │          peeks)? revoke R2 client-side, best effort (fail: faint note)
+ *     └─ fail ─► revoke NEW; the file is left as it was (R is already retired, so its next 401
+ *                heals it; a racer's R2 stays live on purpose)
  *
- * Revoke runs AFTER the save so a failed save never leaves the user credential-less, and a failed
- * revoke never blocks the login. peekCredential (not loadToken) on purpose: a corrupt handle in
- * the file reads as logged-out everywhere else, but the token inside may still be live.
+ * The client-side revoke is the leftover for racing logins only; the normal path is atomic on the
+ * server. It runs AFTER the save so a failed save adds no second orphan, and a failed revoke never
+ * blocks the login. A login that writes between the RE-peek and the rename is still overwritten
+ * live: that residual window (two logins racing AND a kill in it) is what issue #58 leaves open,
+ * closable only by a lock file around peek → mint → save. peekCredential (not loadToken) on
+ * purpose: a corrupt handle in the file reads as logged-out everywhere else, but the token inside
+ * may still be live.
  */
 export async function login(deps: PollDeps = {}): Promise<void> {
   // The device flow needs a human to read a code and visit a URL, so it cannot complete without a
@@ -244,26 +262,36 @@ export async function login(deps: PollDeps = {}): Promise<void> {
     ),
   );
   const accessToken = await pollForToken(dc, deps);
-  const minted = await mintYmmvToken(accessToken);
   // The device flow takes minutes: a concurrent login may have replaced the stored token since
-  // the pre-flow peek. Re-read so the revoke targets what the file ACTUALLY holds at overwrite
-  // time (the pre-flow `prior` still owns the cross-base warn); the leftover race is the
-  // save-to-revoke gap, tracked in issue #58 (atomic login token rotate).
-  const replaced = await peekCredential();
+  // the pre-flow peek. Re-read right before the mint so the server retires what the file ACTUALLY
+  // holds (the pre-flow `prior` still owns the cross-base warn; `retirable` owns what counts).
+  const before = await peekCredential();
+  const revoke = retirable(before) ? before.token : undefined;
+  const minted = await mintYmmvToken(accessToken, revoke);
+  // Between that peek and the mint reply another login may have written its own fresh token; the
+  // server never saw it, so it is this process's leftover to retire (below, after the save).
+  const after = await peekCredential();
   try {
     await saveToken(minted);
   } catch (e) {
     // Don't strand a minted token we couldn't persist — the user would have no way to revoke it.
-    await revokeYmmvToken(minted.token).catch(() => {});
+    // The file is left as it was (the token the server just retired: the next command's 401 clears
+    // it). If even the revoke fails, say so: the fs error alone would claim a clean slate the
+    // server doesn't have.
+    await revokeYmmvToken(minted.token).catch(() => {
+      console.error(
+        message(`${c.faint}(the login the server minted could not be revoked)${c.reset}`),
+      );
+    });
     throw e;
   }
-  if (replaced && replaced.base === BASE && replaced.token !== minted.token) {
-    // The new token is safely on disk; retire the one it replaced. Best effort — a failed revoke
-    // must never block a login that already succeeded, but say so (the old token stays live and
-    // this CLI no longer holds a reference to it). The !== guard is defensive: if a server ever
-    // echoed the stored token back, revoking "the old one" would kill the login just saved.
+  if (retirable(after) && after.token !== revoke && after.token !== minted.token) {
+    // Racing logins only: the normal replacement was retired in the mint batch. Best effort — a
+    // failed revoke must never block a login that already succeeded, but say so (that token stays
+    // live and this CLI no longer holds a reference to it). The !== minted guard is defensive: if a
+    // server ever echoed the stored token back, revoking it would kill the login just saved.
     try {
-      await revokeYmmvToken(replaced.token);
+      await revokeYmmvToken(after.token);
     } catch {
       console.error(message(`${c.faint}(couldn't revoke the previous session's token)${c.reset}`));
     }

@@ -401,7 +401,7 @@ describe("login() orchestration", () => {
     await withTTY(true, async () => {
       await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
     });
-    expect(mintYmmvToken).toHaveBeenCalledWith("gho_x");
+    expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined); // nothing stored to retire
     expect(saveToken).toHaveBeenCalledWith({ token: "ymmv_abc", handle: "carol", github_id: 4242 });
     logSpy.mockRestore();
   });
@@ -534,9 +534,11 @@ describe("login() orchestration", () => {
   });
 
   // Re-login and the token it replaces. auth-http is mocked, so these assert the ORCHESTRATION
-  // contract (which token, in what order, blocking what) against the mocked revokeYmmvToken —
-  // the transport (POST /auth/logout + bearer) is pinned in auth-http.test.ts. The lenient
-  // peekCredential read (corrupt handle still revocable) is pinned in token-store.test.ts.
+  // contract (which token goes to the server as `revoke`, what the client-side leftover revoke
+  // targets, in what order, blocking what) against the mocked mint/revoke — the transport (the
+  // `revoke` body field, the older-Worker refusal, POST /auth/logout + bearer) is pinned in
+  // auth-http.test.ts. The lenient peekCredential read (corrupt handle still revocable) is pinned
+  // in token-store.test.ts.
   describe("previous-token handling", () => {
     let logs: string[];
     let errs: string[];
@@ -571,21 +573,57 @@ describe("login() orchestration", () => {
         await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
       });
 
-    it("same-base: revokes the replaced token AFTER the save, silently on success", async () => {
+    it("same-base: the stored token goes to the server as `revoke`; no client-side revoke, silent success", async () => {
+      // Whether the server found that token live or already dead is its business (the wire flag
+      // never reaches login()): either way the retire is done and nothing is left to revoke here.
       vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
-      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
       await run();
-      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
-      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_old");
-      const saved = vi.mocked(saveToken).mock.invocationCallOrder[0] as number;
-      const revoked = vi.mocked(revokeYmmvToken).mock.invocationCallOrder[0] as number;
-      expect(revoked).toBeGreaterThan(saved); // a failed save must keep the OLD login working
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_old");
+      expect(revokeYmmvToken).not.toHaveBeenCalled(); // retired in the mint batch, nothing left
+      expect(saveToken).toHaveBeenCalledWith({
+        token: "ymmv_new",
+        handle: "carol",
+        github_id: 4242,
+      });
       expect(logs.at(-1)).toBe("\n  Logged in as carol.");
       expect(errs).toEqual([]); // success is silent: no warn, no note
     });
 
-    it("a failed revoke never blocks the login: token saved, faint note, no throw", async () => {
-      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+    it("sends what the file holds right BEFORE the mint, not the pre-flow snapshot (racing logins)", async () => {
+      // The device flow takes minutes; a concurrent login may have replaced the stored token
+      // mid-poll. Retiring the stale pre-flow token would permanently orphan the fresh one.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_preflow" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_written_mid_poll" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_written_mid_poll" });
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_written_mid_poll");
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+    });
+
+    it("a token written between the pre-mint peek and the save is revoked client-side, AFTER the save", async () => {
+      // The server only retired what it was told about. Whatever a racing login wrote in the
+      // meantime is this process's leftover: it would otherwise be overwritten while still live.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_raced" });
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_old");
+      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_raced");
+      const saved = vi.mocked(saveToken).mock.invocationCallOrder[0] as number;
+      const revoked = vi.mocked(revokeYmmvToken).mock.invocationCallOrder[0] as number;
+      expect(revoked).toBeGreaterThan(saved); // a failed save must not add a second orphan
+      expect(errs).toEqual([]);
+    });
+
+    it("a failed leftover revoke never blocks the login: token saved, faint note, no throw", async () => {
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_raced" });
       vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("logout failed: 503"));
       await run();
       expect(saveToken).toHaveBeenCalledWith({
@@ -597,29 +635,43 @@ describe("login() orchestration", () => {
       expect(errs.join("\n")).toContain("(couldn't revoke the previous session's token)");
     });
 
-    it("a mint the CLI refuses (older Worker, no github_id) leaves the stored login untouched", async () => {
+    it("the post-mint peek showing the token just minted, or the one already sent, is not a leftover", async () => {
+      // Defensive guard pin: if a server ever echoed the stored token back, revoking it would
+      // revoke the login just saved; and the token the server already retired needs no second call.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_new" });
+      await run();
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+    });
+
+    it("a mint the CLI refuses (older Worker) leaves the stored login untouched", async () => {
       // The refusal copy promises "Nothing was saved"; only statement order in login() backs it.
-      // Pin it: no save, no revoke of the OLD token — the working login survives on disk.
+      // Pin it: no save, no client-side revoke — the working login survives on disk (an older
+      // Worker ignored `revoke`, so that token is still live).
       vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
       vi.mocked(mintYmmvToken).mockRejectedValue(
         new MintRejected(
-          "Unexpected response from https://x.test. Nothing was saved; run `ymmv login` again.",
+          "https://x.test did not retire the previous login. The server is behind this CLI release; try again later. Nothing was saved; to log in anyway, run `ymmv logout` first.",
         ),
       );
       const err = await run().catch((e: Error) => e);
       expect(err).toBeInstanceOf(MintRejected); // propagates AS the class api.ts branches on
-      expect((err as Error).message).toMatch(/Unexpected response from/);
+      expect((err as Error).message).toMatch(/did not retire the previous login/);
       expect(saveToken).not.toHaveBeenCalled();
       expect(revokeYmmvToken).not.toHaveBeenCalled();
     });
 
-    it("cross-base: warns (sanitized, prose recovery, no runnable command) and does NOT revoke", async () => {
+    it("cross-base: warns (sanitized, prose recovery, no runnable command) and retires nothing", async () => {
       const esc = String.fromCharCode(0x1b);
       vi.mocked(peekCredential).mockResolvedValue({
         base: `https://other.example${esc}[31m`,
         token: "ymmv_other",
       });
       await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined); // wrong server to retire it on
       expect(revokeYmmvToken).not.toHaveBeenCalled();
       const err = errs.join("\n");
       expect(err).toContain("You're logged in to https://other.example");
@@ -632,35 +684,109 @@ describe("login() orchestration", () => {
       expect(logs.at(-1)).toBe("\n  Logged in as carol."); // warn-only: the flow proceeds
     });
 
-    it("revokes what the file holds at SAVE time, not the pre-flow snapshot (racing logins)", async () => {
-      // The device flow takes minutes; a concurrent login may have replaced the stored token
-      // mid-poll. Revoking the stale pre-flow token would permanently orphan the fresh one.
-      vi.mocked(peekCredential)
-        .mockResolvedValueOnce({ base: BASE, token: "ymmv_preflow" })
-        .mockResolvedValueOnce({ base: BASE, token: "ymmv_written_mid_poll" });
-      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
-      await run();
-      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
-      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_written_mid_poll");
+    it("a foreign-base or blank token in the post-mint peek is not a leftover: no revoke, save proceeds", async () => {
+      // A login to another Worker, or a hand edit, between the two peeks: wrong server (or no
+      // bearer at all) to revoke against, and only the pre-flow peek owns the cross-base warn.
+      for (const after of [
+        { base: "https://other.example", token: "ymmv_other" },
+        { base: BASE, token: "   " },
+      ]) {
+        vi.mocked(peekCredential).mockReset();
+        vi.mocked(peekCredential)
+          .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+          .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+          .mockResolvedValueOnce(after);
+        vi.mocked(mintYmmvToken).mockClear();
+        vi.mocked(saveToken).mockClear();
+        await run();
+        expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_old");
+        expect(revokeYmmvToken).not.toHaveBeenCalled();
+        expect(saveToken).toHaveBeenCalledTimes(1);
+        expect(errs).toEqual([]);
+        expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+      }
     });
 
-    it("no stored token: exactly one mint, zero revoke calls", async () => {
-      vi.mocked(peekCredential).mockResolvedValue(null);
+    it("a whitespace-only stored token is nothing to retire: mint without `revoke`, login succeeds", async () => {
+      // peekCredential only rejects the empty string; sent as `revoke`, "   " would draw a 400
+      // from the Worker and wedge every login until token.json is deleted by hand.
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "   " });
       await run();
-      expect(mintYmmvToken).toHaveBeenCalledTimes(1);
-      expect(revokeYmmvToken).not.toHaveBeenCalled();
-    });
-
-    it("same-base with an identical echoed token: no revoke (would kill the fresh login)", async () => {
-      // Defensive guard pin: if a server ever echoed the stored token back, revoking "the old
-      // one" would revoke the login just saved.
-      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_new" });
-      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined);
       expect(revokeYmmvToken).not.toHaveBeenCalled();
       expect(logs.at(-1)).toBe("\n  Logged in as carol.");
     });
 
-    it("a failed save revokes the NEW token, not the old one (old file survives)", async () => {
+    it("no stored token: exactly one mint with nothing to retire, zero revoke calls", async () => {
+      vi.mocked(peekCredential).mockResolvedValue(null);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledTimes(1);
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined);
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+    });
+
+    it("a concurrent logout that empties the file BEFORE the mint: nothing to retire, no warn", async () => {
+      // The pre-flow peek saw a token; by the time the user approves it is gone (`ymmv logout` in
+      // another terminal). The file holds nothing to replace, so the mint asks for nothing.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined);
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      expect(saveToken).toHaveBeenCalledTimes(1);
+      expect(errs).toEqual([]);
+    });
+
+    it("a concurrent logout that empties the file AFTER the mint: no client-side revoke, the save proceeds", async () => {
+      // The server already retired the token the file held; the null post-mint peek is not a
+      // leftover, and the new login still lands on disk.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_old" })
+        .mockResolvedValueOnce(null);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_old");
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      expect(saveToken).toHaveBeenCalledTimes(1);
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+    });
+
+    it("a mint that fails on the wire (429, GitHub refused) leaves the stored login untouched: plain Error, no save, no revoke", async () => {
+      // The Worker refuses before its token batch, so the stored token is still live and the file
+      // still holds it. Nothing to undo client-side; the error is transient (not MintRejected).
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(mintYmmvToken).mockRejectedValue(
+        new Error("Too many login attempts. Slow down and try again shortly (retry in 60s)."),
+      );
+      const err = await run().catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(MintRejected);
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_old");
+      expect(saveToken).not.toHaveBeenCalled();
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+    });
+
+    it("nothing stored before the mint, but a racing login wrote a same-base token before the save: revoked client-side", async () => {
+      // `after.token !== revoke` is vacuously true with no `revoke`; the leftover path must not be
+      // gated on having sent one, or that racing token is overwritten live.
+      vi.mocked(peekCredential)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ base: BASE, token: "ymmv_raced" });
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined);
+      expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
+      expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_raced");
+      const saved = vi.mocked(saveToken).mock.invocationCallOrder[0] as number;
+      const revoked = vi.mocked(revokeYmmvToken).mock.invocationCallOrder[0] as number;
+      expect(revoked).toBeGreaterThan(saved);
+    });
+
+    it("a failed save revokes the NEW token only (the old one was retired in the mint batch)", async () => {
+      // The file keeps the just-retired token; the next command's 401 clears it and re-logins.
       vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
       vi.mocked(saveToken).mockRejectedValue(new Error("EDQUOT"));
       vi.mocked(revokeYmmvToken).mockResolvedValue(true);
@@ -671,6 +797,21 @@ describe("login() orchestration", () => {
       });
       expect(revokeYmmvToken).toHaveBeenCalledTimes(1);
       expect(revokeYmmvToken).toHaveBeenCalledWith("ymmv_new");
+      expect(errs).toEqual([]); // the revoke succeeded: only the fs error reaches the user
+    });
+
+    it("a failed save whose revoke of the NEW token also fails says so on stderr", async () => {
+      // The previous login is already retired server-side and the minted one is now live with no
+      // holder; the fs error alone would claim a clean slate the server doesn't have.
+      vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "ymmv_old" });
+      vi.mocked(saveToken).mockRejectedValue(new Error("EDQUOT"));
+      vi.mocked(revokeYmmvToken).mockRejectedValue(new Error("logout failed: 503"));
+      await withTTY(true, async () => {
+        await expect(
+          login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 }),
+        ).rejects.toThrow("EDQUOT");
+      });
+      expect(errs.join("\n")).toContain("(the login the server minted could not be revoked)");
     });
   });
 });
