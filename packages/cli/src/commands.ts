@@ -3,6 +3,7 @@ import {
   CURATED_KEYS,
   type CuratedKey,
   diff,
+  displayUrl,
   type Entry,
   isCuratedKey,
   KEY_LABELS,
@@ -35,7 +36,6 @@ import {
 import { PromptAborted, type Prompter } from "./prompt.js";
 import {
   colorEnabled,
-  displayUrl,
   link,
   message,
   notFound,

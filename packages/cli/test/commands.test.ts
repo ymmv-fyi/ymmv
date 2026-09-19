@@ -965,6 +965,24 @@ describe("set", () => {
     expect(logs.join("\n")).not.toMatch(/Published/);
   });
 
+  it("curated: with color on, the pointer shows the site host, not the scheme", async () => {
+    vi.stubEnv("FORCE_COLOR", "1");
+    try {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }]))) // GET existing
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet({ kind: "curated", key: "shell", value: "zsh" });
+      const out = logs.join(" ");
+      expect(out).toContain("→ ymmv.fyi/me");
+      expect(out).not.toContain("https://ymmv.fyi/me");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("extra: adds a free-form extra even with no existing profile", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi

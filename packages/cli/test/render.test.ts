@@ -1,7 +1,6 @@
 import type { DiffResult, Profile } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import {
-  displayUrl,
   isHttpUrl,
   link,
   message,
@@ -72,22 +71,17 @@ describe("useColor", () => {
   });
 });
 
-describe("displayUrl / isHttpUrl", () => {
-  it("strips only the leading https:// for display", () => {
-    expect(displayUrl("https://git.io/etc")).toBe("git.io/etc");
-    expect(displayUrl("  https://git.io/etc  ")).toBe("git.io/etc");
-  });
-  it("keeps http:// (it is information) and a bare scheme intact", () => {
-    expect(displayUrl("http://old.example")).toBe("http://old.example");
-    expect(displayUrl("https://")).toBe("https://");
-  });
-  it("isHttpUrl accepts whole-value http(s) URLs only", () => {
+describe("isHttpUrl", () => {
+  it("accepts whole-value http(s) URLs only", () => {
     expect(isHttpUrl("https://git.io/etc")).toBe(true);
     expect(isHttpUrl("http://git.io/etc")).toBe(true);
     expect(isHttpUrl(" https://git.io/etc ")).toBe(true);
     expect(isHttpUrl("git.io/etc")).toBe(false);
     expect(isHttpUrl("see https://git.io/etc")).toBe(false);
     expect(isHttpUrl("ftp://host")).toBe(false);
+    // the parser rejects these, so they are text, never a link wearing their raw spoof as label
+    expect(isHttpUrl("https://good.com@evil.com:99999")).toBe(false);
+    expect(isHttpUrl("https://good.com@[evil.com]")).toBe(false);
   });
 });
 
@@ -96,6 +90,26 @@ describe("link", () => {
     const out = link("https://git.io/etc", true, "xterm-256color");
     expect(out).toBe(
       `${OSC8_OPEN}https://git.io/etc${ESC}\\${AMBER}git.io/etc${ESC}[0m${OSC8_OPEN}${ESC}\\`,
+    );
+  });
+  it("color mode: the display shows the parsed host (userinfo dropped); the OSC-8 target keeps it", () => {
+    const out = link("https://good.com@evil.com/x", true, "xterm-256color");
+    expect(out).toBe(
+      `${OSC8_OPEN}https://good.com@evil.com/x${ESC}\\${AMBER}evil.com/x${ESC}[0m${OSC8_OPEN}${ESC}\\`,
+    );
+  });
+  it("color mode: http:// keeps its scheme in the display (a cleartext target is information)", () => {
+    const out = link("http://old.example/x", true, "xterm-256color");
+    expect(out).toBe(
+      `${OSC8_OPEN}http://old.example/x${ESC}\\${AMBER}http://old.example/x${ESC}[0m${OSC8_OPEN}${ESC}\\`,
+    );
+  });
+  it("color mode: an IDN host displays as punycode while the OSC-8 target keeps the raw URL", () => {
+    // Cyrillic а р р ӏ е: a lookalike of apple
+    const raw = `https://${String.fromCodePoint(0x430, 0x440, 0x440, 0x4cf, 0x435)}.com/x`;
+    const out = link(raw, true, "xterm-256color");
+    expect(out).toBe(
+      `${OSC8_OPEN}${raw}${ESC}\\${AMBER}xn--80ak6aa92e.com/x${ESC}[0m${OSC8_OPEN}${ESC}\\`,
     );
   });
   it("plain mode: the full URL, no ANSI, no shortening", () => {
@@ -150,6 +164,26 @@ const DIFF: DiffResult = {
 };
 
 describe("renderDiff", () => {
+  it("never shortens a URL cell, so a userinfo-only difference stays visibly different", () => {
+    const d: DiffResult = {
+      rows: [
+        {
+          key: "dotfiles",
+          label: "Dotfiles",
+          theirs: "https://good.com@evil.com",
+          mine: "https://evil.com",
+          status: "changed",
+        },
+      ],
+      extras: { mine: [], theirs: [] },
+      differ: 1,
+      shared: 0,
+    };
+    const out = renderDiff(d, { color: true, theirsLabel: "antfu", mineLabel: "you" });
+    expect(out).toContain("https://good.com@evil.com");
+    expect(out).toContain("https://evil.com");
+    expect(out).not.toContain(OSC8_OPEN);
+  });
   it("color mode: amber marks BOTH values of the differing row; footer is the thesis line", () => {
     const out = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
     expect(out).toContain(`${AMBER}fish`); // theirs column ambers too — a difference is symmetric
@@ -323,6 +357,18 @@ describe("renderProfile", () => {
     expect(plain).toContain("https://ex.io/b"); // full URL when color is off
     const color = renderProfile(p, { color: true, site: SITE, now: at(NOW) });
     expect(color).toContain(`${AMBER}ex.io/b`); // URL extras get the link treatment too
+  });
+
+  it("a userinfo-bearing URL shows the real host on the card; plain mode keeps it whole", () => {
+    const p: Profile = {
+      ...FULLISH,
+      entries: [{ key: "dotfiles", value: "https://good.com@evil.com/x" }],
+    };
+    const color = renderProfile(p, { color: true, site: SITE, now: at(NOW) });
+    expect(color).toContain(`${AMBER}evil.com/x`);
+    expect(color).not.toContain(`${AMBER}good.com`);
+    const plain = renderProfile(p, { color: false, site: SITE, now: at(NOW) });
+    expect(plain).toContain("Dotfiles  https://good.com@evil.com/x");
   });
 
   it("preview mode lists all 13 curated labels, marks gaps with —, and drops updated", () => {

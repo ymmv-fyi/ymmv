@@ -1,6 +1,7 @@
 import {
   CURATED_KEYS,
   type DiffResult,
+  displayUrl,
   type Entry,
   type ExtraDiff,
   KEY_LABELS,
@@ -107,21 +108,14 @@ export function colorEnabled(): boolean {
 const OSC = `${ESC}]`;
 const ST = `${ESC}\\`;
 
-/**
- * Display-only URL shortening: trim + strip a leading "https://" (the boring default; "http://"
- * stays deliberately — it is information). Duplicated from the web on purpose
- * (packages/web/src/lib/display-value.ts) — the web package must not become a CLI dependency and
- * @ymmv/shared stays wire-schema-only.
- */
-export function displayUrl(value: string): string {
-  return value.trim().replace(/^https:\/\/(?=.)/i, "");
-}
-
 const HTTP_URL_RE = /^https?:\/\/\S+$/i;
 
-/** Is this value a bare http(s) URL (the whole value, no whitespace)? */
+/** Is this value a bare http(s) URL (the whole value, no whitespace) that the parser accepts? The
+ *  parse half keeps this gate in step with displayUrl, which rewrites the authority only for values
+ *  the parser takes: a value it rejects must never be linked with its raw text as the label. */
 export function isHttpUrl(value: string): boolean {
-  return HTTP_URL_RE.test(value.trim());
+  const t = value.trim();
+  return HTTP_URL_RE.test(t) && URL.canParse(t);
 }
 
 // Terminals known to mishandle (not ignore) unknown OSC sequences — never emit OSC-8 there.
