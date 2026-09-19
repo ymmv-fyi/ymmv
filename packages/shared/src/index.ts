@@ -1,5 +1,6 @@
 export * from "./caps.js";
 export * from "./diff.js";
+export * from "./display-url.js";
 export * from "./github.js";
 export * from "./keys.js";
 export * from "./parse.js";
