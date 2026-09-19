@@ -2,6 +2,12 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **`ymmv unset --extra` can remove a label that contains `=`.** When nothing matches, the
+  command stays a no-op; if the part before the `=` names a stored extra, it points at that label.
+
 ## [0.11.0] - 2026-09-18
 
 ### Changed
