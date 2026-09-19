@@ -5,6 +5,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ## [Unreleased]
 
 ### Fixed
+- **`ymmv`, `ymmv set`, and `ymmv unset` no longer overwrite a change made from another
+  terminal or device in between.** The server refuses a write when the profile changed after the
+  command read it; the interactive publish reloads the profile, keeps your answers, and asks again.
+  A first-ever publish is not guarded.
 - **`ymmv unset --extra` can remove a label that contains `=`.** When nothing matches, the
   command stays a no-op; if the part before the `=` names a stored extra, it points at that label.
 
