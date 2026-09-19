@@ -8,8 +8,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **`ymmv set` and the publish prompts refuse a value made only of invisible characters before
   sending it.** A zero-width-only value or extra label is refused locally, the interactive
   publish asks again in place instead of failing after the walk, and `ymmv -y` refuses a
-  detected value with no visible text before sending, naming the key to set. A value made only
-  of control characters counts as invisible too, on the server as well as in the CLI.
+  detected value with no visible text before sending, naming the key to set. `ymmv set` and
+  `ymmv unset` name a saved value that no longer passes instead of sending it. A value made
+  only of control characters counts as invisible too, on the server as well as in the CLI, and
+  a refused extra is named by its position.
 
 ## [0.11.1] - 2026-09-18
 

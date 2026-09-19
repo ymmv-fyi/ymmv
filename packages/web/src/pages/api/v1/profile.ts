@@ -173,7 +173,7 @@ export const POST: APIRoute = async ({ request }) => {
     });
   }
   const extras: { label: string; value: string }[] = [];
-  for (const x of rawExtras) {
+  for (const [i, x] of rawExtras.entries()) {
     const rawLabel = (x as { label?: unknown })?.label;
     const rawValue = (x as { value?: unknown })?.value;
     if (typeof rawLabel !== "string" || typeof rawValue !== "string") {
@@ -182,11 +182,15 @@ export const POST: APIRoute = async ({ request }) => {
     const label = rawLabel.trim();
     const value = rawValue.trim();
     if (!hasVisibleContent(label) || !hasVisibleContent(value)) {
-      return err(422, "invalid_extra", { message: "Extras need a visible label and value." });
+      // Name the row: an invisible label cannot be quoted back, and the CLI prints only the
+      // message, so the ordinal is what lets the user find the extra to remove.
+      return err(422, "invalid_extra", {
+        message: `Extra ${i + 1} needs a visible label and value.`,
+      });
     }
     if (label.length > MAX_LABEL || value.length > MAX_VALUE) {
       return err(422, "extra_too_long", {
-        message: `Extra labels are capped at ${MAX_LABEL} characters and values at ${MAX_VALUE}.`,
+        message: `Extra ${i + 1} is over the cap: labels at most ${MAX_LABEL} characters, values ${MAX_VALUE}.`,
       });
     }
     extras.push({ label, value });

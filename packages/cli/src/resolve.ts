@@ -2,14 +2,13 @@ import {
   CLI_VERBS,
   CURATED_KEYS,
   type CuratedKey,
-  hasVisibleContent,
   isCuratedKey,
   isReserved,
   isValidHandle,
   MAX_LABEL,
   MAX_VALUE,
 } from "@ymmv/shared";
-import { sanitizeValue } from "./render.js";
+import { sanitizeValue, showsVisibleText } from "./render.js";
 
 // Argument resolution. The bare `ymmv <handle>` form stays primary, the verb words
 // (login/logout/set/unset/delete/view/help/publish/version/update) dispatch as verbs, and
@@ -91,7 +90,8 @@ function valueCapError(value: string): Command {
   };
 }
 // A value of only zero-width/format code points survives parseSet's `!value` emptiness test and
-// would be the server's `invalid_value` after the round trip (see @ymmv/shared visible.ts).
+// would be the server's `invalid_value` after the round trip (see @ymmv/shared visible.ts);
+// showsVisibleText also refuses what would render blank on the card (render.ts).
 function labelInvisibleError(): Command {
   return { kind: "error", message: "That label has no visible text." };
 }
@@ -114,8 +114,8 @@ function parseSet(rest: string[]): Command {
     // label rules on purpose: a clear is a match-only lookup, never a store, so an over-cap or
     // invisible-only label is a harmless miss there (the cap test pins this order).
     if (value === "-") return { kind: "unset", target: { kind: "extra", label } };
-    if (!hasVisibleContent(label)) return labelInvisibleError();
-    if (!hasVisibleContent(value)) return valueInvisibleError();
+    if (!showsVisibleText(label)) return labelInvisibleError();
+    if (!showsVisibleText(value)) return valueInvisibleError();
     if (label.length > MAX_LABEL) return labelCapError(label);
     if (value.length > MAX_VALUE) return valueCapError(value);
     return { kind: "set", target: { kind: "extra", label, value } };
@@ -127,7 +127,7 @@ function parseSet(rest: string[]): Command {
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
   // so multi-token values like "- foo" or "Fira-Code" stay literal sets.
   if (value === "-") return { kind: "unset", target: { kind: "curated", key: head } };
-  if (!hasVisibleContent(value)) return valueInvisibleError();
+  if (!showsVisibleText(value)) return valueInvisibleError();
   if (value.length > MAX_VALUE) return valueCapError(value);
   return { kind: "set", target: { kind: "curated", key: head, value } };
 }

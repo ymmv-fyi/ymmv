@@ -209,6 +209,24 @@ describe("POST validation", () => {
       422,
     );
   });
+  it("422 invisible extra names its row: the label cannot be quoted back, the ordinal can", async () => {
+    const res = await publish(
+      TOKEN,
+      profile(
+        "alice",
+        [],
+        [
+          { label: "Keyboard", value: "HHKB" },
+          { label: String.fromCodePoint(0x200b), value: "x" },
+        ],
+      ),
+    );
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "invalid_extra",
+      message: "Extra 2 needs a visible label and value.",
+    });
+  });
   it("422 whitespace-only extra label/value", async () => {
     expect(
       (await publish(TOKEN, profile("alice", [], [{ label: "   ", value: " " }]))).status,

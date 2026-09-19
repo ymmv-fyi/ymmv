@@ -63,8 +63,17 @@ export function causeText(err: unknown): string {
  *  (origin/middlebox bytes print raw via console.error), and capped — a proxy block page can be
  *  a whole HTML document. */
 export function wireText(text: unknown): string {
-  const clean = sanitizeValue(String(text));
-  return clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
+  return capped(sanitizeValue(String(text)));
+}
+const WIRE_TEXT_CAP = 200;
+/** The first WIRE_TEXT_CAP code points: cut between code points, never inside a surrogate pair
+ *  (a split pair prints as a replacement glyph, and a lone high surrogate reads as visible). */
+function head(clean: string): string {
+  return [...clean].slice(0, WIRE_TEXT_CAP).join("");
+}
+function capped(clean: string): string {
+  const kept = head(clean);
+  return kept.length < clean.length ? `${kept}…` : clean;
 }
 
 /** Read an error response's body as text. The ONE home of the read contract: a body-read timeout
@@ -93,12 +102,12 @@ export function wireErrorBody(raw: string): { slug?: string; message?: string } 
     if (typeof body?.error === "string") out.slug = body.error;
     if (typeof body?.message === "string") {
       // Zero-width chars sanitizeValue leaves alone (they can decorate real text) must not count
-      // as "a message" on their own. Judge the UNTRUNCATED text: wireText's own ellipsis is
-      // visible, so a long invisible-only body would otherwise print as a bare "…". Emptiness-test
-      // only: the message keeps its original chars.
-      if (hasVisibleContent(sanitizeValue(body.message))) {
-        out.message = wireText(body.message).trim();
-      }
+      // as "a message" on their own. Judge exactly what will print, minus the cap's own ellipsis:
+      // that is visible, so a long invisible-only body would pass on it, and visible text only
+      // past the cap would print as blanks plus "…". Emptiness-test only: the message keeps its
+      // original chars.
+      const clean = sanitizeValue(body.message);
+      if (hasVisibleContent(head(clean))) out.message = capped(clean).trim();
     }
     return out;
   } catch {
