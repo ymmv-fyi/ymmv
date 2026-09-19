@@ -4,11 +4,19 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 
 ## [Unreleased]
 
+### Changed
+- **Logging in again retires the previous token in the same server step that mints the new one.**
+  A login interrupted after the mint can no longer leave the replaced token active, and revoking
+  it no longer depends on a second request reaching the server.
+
 ### Fixed
 - **`ymmv`, `ymmv set`, and `ymmv unset` no longer overwrite a change made from another
   terminal or device in between.** The server refuses a write when the profile changed after the
   command read it; the interactive publish reloads the profile, keeps your answers, and asks again.
   A first-ever publish is not guarded.
+- **`ymmv logout` clears a token file it cannot fully read.** A stored login with a damaged
+  handle or account id is still revoked on the server and removed, instead of answering
+  "Not logged in" and leaving the token active.
 - **`ymmv unset --extra` can remove a label that contains `=`.** When nothing matches, the
   command stays a no-op; if the part before the `=` names a stored extra, it points at that label.
 
