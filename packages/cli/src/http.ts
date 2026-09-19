@@ -1,3 +1,4 @@
+import { hasVisibleContent } from "@ymmv/shared";
 import { sanitizeValue } from "./render.js";
 
 // The one place a network-level fetch failure becomes words. Every fetch that surfaces its own
@@ -66,12 +67,6 @@ export function wireText(text: unknown): string {
   return clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
 }
 
-// Zero-width/invisible format chars sanitizeValue deliberately leaves alone (they can decorate
-// real text) but which must not count as "a message" on their own — String.trim() misses them.
-// Any hand-rolled list misses members (U+061C, variation selectors), so use the engine's
-// complete Unicode set. Emptiness-test only; the returned message keeps its original chars.
-const INVISIBLE_RE = /\p{Default_Ignorable_Code_Point}/gu;
-
 /** Read an error response's body as text. The ONE home of the read contract: a body-read timeout
  *  is rethrown (a stalled body is a network timeout, not a malformed message, and must not be
  *  mislabeled with a caller's fallback copy); any other read failure degrades to "" so the error
@@ -97,8 +92,13 @@ export function wireErrorBody(raw: string): { slug?: string; message?: string } 
     const out: { slug?: string; message?: string } = {};
     if (typeof body?.error === "string") out.slug = body.error;
     if (typeof body?.message === "string") {
-      const clean = wireText(body.message).trim();
-      if (clean.replace(INVISIBLE_RE, "").trim()) out.message = clean;
+      // Zero-width chars sanitizeValue leaves alone (they can decorate real text) must not count
+      // as "a message" on their own. Judge the UNTRUNCATED text: wireText's own ellipsis is
+      // visible, so a long invisible-only body would otherwise print as a bare "…". Emptiness-test
+      // only: the message keeps its original chars.
+      if (hasVisibleContent(sanitizeValue(body.message))) {
+        out.message = wireText(body.message).trim();
+      }
     }
     return out;
   } catch {
