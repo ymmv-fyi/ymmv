@@ -10,15 +10,16 @@ import { env } from "cloudflare:workers";
 //     subrequests. No identity exists yet there, so the IP is the only thing to key on.
 // The WAF rule (per IP per colo, at the edge; provision/verify via infra/waf-ratelimit.sh) is the
 // volumetric shield; both bindings are in-code backstops. Mint has both halves; logout has NO
-// binding and relies on the WAF rule alone. GET /api/v1/auth/whoami likewise has no binding and
-// relies on the WAF rule alone (the rule's expression names that one GET explicitly; the rest of
-// it is POST/DELETE): its whole cost is the one query (two primary-key reads) that also
-// authenticates it, so a post-auth RL_WRITE check would protect nothing (and would spend the write budget of
-// every CI publish), and a per-IP RL_AUTH check would share the mint's 60/min bucket with CI
-// runners' shared egress IPs. The edge rule is per IP too, but in its own bucket and at a higher
-// ceiling (30/10s per colo), and it drops a junk-bearer flood before any Worker or D1 cost, which
-// matters because the reply is no-store: unlike the edge-cacheable public read, nothing else
-// absorbs repeat hits.
+// binding and relies on the WAF rule alone. The two bearer GETs, /api/v1/auth/whoami and the
+// own-profile read GET /api/v1/profile, likewise have no binding and rely on the WAF rule alone
+// (the rule's expression names those GETs explicitly; the rest of it is POST/DELETE): their whole
+// cost is the query that also authenticates them (plus one profile read for the latter), so a
+// post-auth RL_WRITE check would protect nothing (and would spend the write budget of every CI
+// publish, which now reads before it writes), and a per-IP RL_AUTH check would share the mint's
+// 60/min bucket with CI runners' shared egress IPs. The edge rule is per IP too, but in its own
+// bucket and at a higher ceiling (30/10s per colo), and it drops a junk-bearer flood before any
+// Worker or D1 cost, which matters because the reply is no-store: unlike the edge-cacheable
+// public read, nothing else absorbs repeat hits.
 //
 // NOTE: Cloudflare rate-limit bindings count per data-center (colo), so the effective ceiling is
 // ~limit×(#colos)/period for a globally-distributed caller — a backstop against runaway/abusive

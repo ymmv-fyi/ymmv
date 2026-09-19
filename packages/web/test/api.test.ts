@@ -3,8 +3,9 @@ import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
+import { noStoreJson } from "../src/lib/json.ts";
 import { handleBindStatements } from "../src/lib/users.ts";
-import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
+import { DELETE, GET as OWN, POST } from "../src/pages/api/v1/profile.ts";
 import { GET } from "../src/pages/api/v1/u/[handle].ts";
 
 const TOKEN = "test-token-1";
@@ -26,8 +27,12 @@ async function seedToken(token: string, githubId: number, opts: { revoked?: bool
     .run();
 }
 
-function postCtx(token: string | null, body: unknown): APIContext {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+function postCtx(
+  token: string | null,
+  body: unknown,
+  extraHeaders: Record<string, string> = {},
+): APIContext {
+  const headers: Record<string, string> = { "content-type": "application/json", ...extraHeaders };
   if (token !== null) headers.authorization = `Bearer ${token}`;
   return {
     request: new Request("https://ymmv.test/api/v1/profile", {
@@ -40,6 +45,15 @@ function postCtx(token: string | null, body: unknown): APIContext {
 
 function getCtx(handle: string): APIContext {
   return { params: { handle } } as unknown as APIContext;
+}
+
+/** GET /api/v1/profile — the bearer-authed own-profile read (no params: the token names the account). */
+function ownCtx(token: string | null): APIContext {
+  const headers: Record<string, string> = {};
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  return {
+    request: new Request("https://ymmv.test/api/v1/profile", { headers }),
+  } as unknown as APIContext;
 }
 
 // Returns a plain payload object; the server overwrites updated_at, so the value here is a sentinel.
@@ -58,6 +72,9 @@ function profile(
 }
 
 const publish = (token: string, p: unknown) => POST(postCtx(token, p));
+/** A conditional publish: the If-Match precondition the CLI's read-modify-write commands send. */
+const publishIfMatch = (token: string, p: unknown, tag: string) =>
+  POST(postCtx(token, p, { "if-match": tag }));
 
 // Login-equivalent authoritative bind (the exact statements POST /api/v1/auth/token runs after
 // GitHub introspection proves the handle). Publish REQUIRES a prior bind — its bound-handle guard
@@ -749,7 +766,7 @@ describe("GET error contract + CORS (the public read surface)", () => {
     expect(await res.json()).toEqual({ error: "internal_error" });
   });
 
-  it("200 carries content-type and ACAO", async () => {
+  it("200 carries content-type, ACAO, and an ETag equal to the body's quoted updated_at", async () => {
     // Dedicated identity: the RL_WRITE limiter keys on github_id and its state persists across
     // tests in this file, so new tests must not spend gid1's write budget (past flake class).
     await seedToken("cors-tok", 4104);
@@ -759,6 +776,23 @@ describe("GET error contract + CORS (the public read surface)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("application/json");
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    // The validator the write API accepts back as If-Match. Additive header, not a body change,
+    // and exposed: ETag is not CORS-safelisted, so a browser reads null without the grant.
+    const body = (await res.json()) as Profile;
+    expect(res.headers.get("etag")).toBe(`"${body.updated_at}"`);
+    expect(res.headers.get("access-control-expose-headers")).toBe("etag");
+  });
+
+  it("404 and 301 carry no ETag (only a live profile has a validator)", async () => {
+    expect((await GET(getCtx("nobody-here-xyz"))).headers.get("etag")).toBeNull();
+    await seedToken("etag-tok", 5201);
+    await bindHandle(5201, "etagold");
+    await publish("etag-tok", profile("etagold", [{ key: "editor", value: "Vim" }]));
+    await bindHandle(5201, "etagnew");
+    await publish("etag-tok", profile("etagnew", [{ key: "editor", value: "Vim" }]));
+    const res = await GET(getCtx("etagold"));
+    expect(res.status).toBe(301);
+    expect(res.headers.get("etag")).toBeNull();
   });
 
   it("301 carries ACAO and keeps the renamed cache policy (a cross-origin fetch may observe the hop)", async () => {
@@ -830,5 +864,269 @@ describe("live read is one atomic statement (no torn read)", () => {
     spy.mockRestore();
     expect(p.entries).toEqual([]);
     expect(p.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+  });
+});
+
+// The read-modify-write contract (issue #56): the CLI reads its own profile through the authed,
+// never-cached GET, and sends that read's ETag back as If-Match so a write built on a stale read
+// can never clobber one that landed in between. Fresh github_ids throughout (RL_WRITE persists).
+describe("GET /api/v1/profile — own profile (uncached RMW read)", () => {
+  it("401 on a missing, unknown, or revoked bearer; no-store, no CORS", async () => {
+    await seedToken("own-revoked", 5202, { revoked: true });
+    for (const token of [null, "not-a-real-token", "own-revoked"]) {
+      const res = await OWN(ownCtx(token));
+      expect(res.status).toBe(401);
+      expect(res.headers.get("content-type")).toBe("application/json");
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+  });
+
+  it("404 not_found envelope for a bound-but-unpublished account and for one with no handle", async () => {
+    await seedToken("own-unpub", 5203);
+    await bindHandle(5203, "ownunpub");
+    const unpub = await OWN(ownCtx("own-unpub"));
+    expect(unpub.status).toBe(404);
+    expect(unpub.headers.get("cache-control")).toBe("no-store");
+    expect(await unpub.json()).toEqual({ error: "not_found" });
+
+    await seedToken("own-nohandle", 5204); // token exists, no users row at all
+    const none = await OWN(ownCtx("own-nohandle"));
+    expect(none.status).toBe(404);
+    expect(await none.json()).toEqual({ error: "not_found" });
+
+    // Handle limbo: another account proved the name at login, which clears handle/handle_lower
+    // but leaves the old stamp behind. Keyed on github_id, the read must still say "no profile".
+    await seedToken("own-limbo", 5219);
+    await bindHandle(5219, "ownlimbo");
+    await publish("own-limbo", profile("ownlimbo", [{ key: "editor", value: "Vim" }]));
+    await env.DB.prepare("UPDATE users SET handle = NULL, handle_lower = NULL WHERE github_id = ?")
+      .bind(5219)
+      .run();
+    const limbo = await OWN(ownCtx("own-limbo"));
+    expect(limbo.status).toBe(404);
+    expect(await limbo.json()).toEqual({ error: "not_found" });
+  });
+
+  it("200 equals the public read, with the same ETag, no-store, no CORS — and reads its own writes", async () => {
+    await seedToken("own-tok", 5205);
+    await bindHandle(5205, "owner");
+    await publish("own-tok", profile("owner", [{ key: "editor", value: "Vim" }]));
+    const res = await OWN(ownCtx("own-tok"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    const own = (await res.json()) as Profile;
+    expect(own).toEqual(await readProfile("owner"));
+    expect(res.headers.get("etag")).toBe(`"${own.updated_at}"`);
+
+    // Read-your-writes: a republish is visible immediately, with a new tag.
+    await publish("own-tok", profile("owner", [{ key: "editor", value: "Helix" }]));
+    const again = await OWN(ownCtx("own-tok"));
+    const fresh = (await again.json()) as Profile;
+    expect(fresh.entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(again.headers.get("etag")).not.toBe(res.headers.get("etag"));
+  });
+
+  it("500 envelope, no-store, when the PROFILE READ throws (never masked as a 404)", async () => {
+    // Throw on the SECOND statement (the read), not the first (auth): a failure at the read stage
+    // has 404 as its neighbour, and a masked one would make the CLI publish from scratch.
+    await seedToken("own-500", 5206);
+    await bindHandle(5206, "own500");
+    await publish("own-500", profile("own500", [{ key: "editor", value: "Vim" }]));
+    const real = env.DB.prepare.bind(env.DB);
+    const spy = vi
+      .spyOn(env.DB, "prepare")
+      .mockImplementationOnce(real)
+      .mockImplementationOnce(() => {
+        throw new Error("D1_ERROR: boom");
+      });
+    const res = await OWN(ownCtx("own-500"));
+    spy.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(((await res.json()) as { error: string }).error).toBe("internal_error");
+  });
+
+  it("consults neither rate-limit binding, for a live bearer or a junk one (the documented design)", async () => {
+    // Same choice whoami makes, and the reason every RMW command now reads before it writes: a
+    // limiter here would spend a write-budget token on each publish, or 429 shared CI egress IPs.
+    // The zone WAF rule (infra/waf-ratelimit.sh names this GET) is the only cover.
+    await seedToken("own-rl", 5216);
+    await bindHandle(5216, "ownrl");
+    await publish("own-rl", profile("ownrl", [{ key: "editor", value: "Vim" }]));
+    const writeSpy = vi.spyOn(env.RL_WRITE, "limit");
+    const authSpy = vi.spyOn(env.RL_AUTH, "limit");
+    try {
+      expect((await OWN(ownCtx("own-rl"))).status).toBe(200);
+      expect((await OWN(ownCtx("ymmv_junk"))).status).toBe(401);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(authSpy).not.toHaveBeenCalled();
+    } finally {
+      writeSpy.mockRestore();
+      authSpy.mockRestore();
+    }
+  });
+
+  it("the extra headers it carries can never override no-store or the content type", async () => {
+    // noStoreJson gained a `headers` argument for the ETag. It merges UNDER the fixed pair on
+    // purpose: a caller that could set cache-control would make a bearer reply cacheable.
+    const res = noStoreJson(
+      200,
+      { ok: true },
+      {
+        "cache-control": "public, max-age=86400",
+        "content-type": "text/html",
+        etag: '"x"',
+      },
+    );
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(res.headers.get("etag")).toBe('"x"');
+  });
+});
+
+describe("POST If-Match precondition (RMW CAS)", () => {
+  async function seedPublished(token: string, gid: number, handle: string): Promise<string> {
+    await seedToken(token, gid);
+    await bindHandle(gid, handle);
+    await publish(token, profile(handle, [{ key: "editor", value: "Vim" }]));
+    const tag = (await OWN(ownCtx(token))).headers.get("etag");
+    expect(tag).toMatch(/^".+"$/);
+    return tag as string;
+  }
+
+  it("a matching quoted tag (as read) publishes and advances updated_at", async () => {
+    const tag = await seedPublished("im-tok1", 5207, "imatch");
+    const res = await publishIfMatch(
+      "im-tok1",
+      profile("imatch", [{ key: "editor", value: "Helix" }]),
+      tag,
+    );
+    expect(res.status).toBe(200);
+    const after = await readProfile("imatch");
+    expect(after.entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(`"${after.updated_at}"`).not.toBe(tag);
+  });
+
+  it("a bare (unquoted) tag matches too", async () => {
+    const tag = await seedPublished("im-tok2", 5208, "imbare");
+    const res = await publishIfMatch("im-tok2", profile("imbare"), tag.slice(1, -1));
+    expect(res.status).toBe(200);
+  });
+
+  it("a stale tag → 412 precondition_failed with human copy, and NOTHING is written", async () => {
+    const stale = await seedPublished("im-tok3", 5209, "imstale");
+    // A competing writer lands first (unconditional, like an older CLI).
+    await publish(
+      "im-tok3",
+      profile("imstale", [{ key: "editor", value: "Emacs" }], [{ label: "K", value: "HHKB" }]),
+    );
+    const between = await readProfile("imstale");
+    const res = await publishIfMatch(
+      "im-tok3",
+      profile("imstale", [{ key: "editor", value: "Vim" }]), // the stale merge: would drop K
+      stale,
+    );
+    expect(res.status).toBe(412);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("precondition_failed");
+    expect(body.message).toMatch(/changed since this command read it/);
+    // The write that landed in between survives intact: entries, extras, and the stamp.
+    expect(await readProfile("imstale")).toEqual(between);
+  });
+
+  it("a tag against a bound-but-unpublished handle (updated_at NULL) → 412, nothing written", async () => {
+    await seedToken("im-tok4", 5210);
+    await bindHandle(5210, "imnull");
+    const res = await publishIfMatch(
+      "im-tok4",
+      profile("imnull", [{ key: "editor", value: "Vim" }]),
+      '"2026-01-01T00:00:00.000Z"',
+    );
+    expect(res.status).toBe(412);
+    expect((await GET(getCtx("imnull"))).status).toBe(404);
+  });
+
+  it("no header stays unconditional (deployed CLIs) even after a competing publish", async () => {
+    await seedPublished("im-tok5", 5211, "imuncond");
+    await publish("im-tok5", profile("imuncond", [{ key: "editor", value: "Emacs" }]));
+    const res = await publish("im-tok5", profile("imuncond", [{ key: "editor", value: "Vim" }]));
+    expect(res.status).toBe(200);
+    expect((await readProfile("imuncond")).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("a blank header is no precondition at all; an empty TAG still fails closed", async () => {
+    // The two halves of ifMatchTag's empty case: nothing to compare (unconditional, what a
+    // deployed CLI sends) versus a tag that is the empty string, which no stamp ever equals.
+    await seedPublished("im-tok9", 5217, "imblank");
+    expect((await publishIfMatch("im-tok9", profile("imblank"), "   ")).status).toBe(200);
+    expect((await publishIfMatch("im-tok9", profile("imblank"), '""')).status).toBe(412);
+  });
+
+  it("malformed preconditions fail closed: `*` and a list are 412", async () => {
+    const tag = await seedPublished("im-tok6", 5212, "imweak");
+    for (const bad of ["*", `${tag}, "other"`]) {
+      expect((await publishIfMatch("im-tok6", profile("imweak"), bad)).status).toBe(412);
+    }
+  });
+
+  it("a weak tag (W/) matches: an edge that compresses the read may weaken the validator", async () => {
+    const tag = await seedPublished("im-tok9", 5220, "imweakok");
+    const res = await publishIfMatch(
+      "im-tok9",
+      profile("imweakok", [{ key: "editor", value: "Helix" }]),
+      `W/${tag}`,
+    );
+    expect(res.status).toBe(200);
+    expect((await readProfile("imweakok")).entries).toEqual([{ key: "editor", value: "Helix" }]);
+  });
+
+  it("guard-to-batch race: a write landing inside the TOCTOU window → 412, and that write survives", async () => {
+    // Same interleave technique as the handle-rebind race above: the competing stamp lands
+    // between the handler's pre-read and its batch, i.e. after any pre-check could have seen it.
+    const tag = await seedPublished("im-tok7", 5213, "imrace");
+    const realBatch = env.DB.batch.bind(env.DB);
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      await realBatch([
+        env.DB.prepare("UPDATE users SET updated_at = ? WHERE github_id = ?").bind(
+          "2099-01-01T00:00:00.000Z",
+          5213,
+        ),
+      ]);
+      return realBatch(stmts);
+    });
+    const res = await publishIfMatch(
+      "im-tok7",
+      profile("imrace", [{ key: "editor", value: "Helix" }]),
+      tag,
+    );
+    spy.mockRestore();
+    expect(res.status).toBe(412);
+    const after = await readProfile("imrace");
+    expect(after.updated_at).toBe("2099-01-01T00:00:00.000Z");
+    expect(after.entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("a bind moved mid-flight is still 409 handle_not_bound, even with a matching tag (409 wins)", async () => {
+    // The deployed CLIs' self-heal (re-login on 409) must keep working: a moved bind is never
+    // reported as a stale read, whatever the tag says.
+    const tag = await seedPublished("im-tok8", 5214, "imbind");
+    const realBatch = env.DB.batch.bind(env.DB);
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      await realBatch(handleBindStatements(env.DB, 5215, "imbind", new Date().toISOString()));
+      return realBatch(stmts);
+    });
+    const res = await publishIfMatch(
+      "im-tok8",
+      profile("imbind", [{ key: "editor", value: "Helix" }]),
+      tag,
+    );
+    spy.mockRestore();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
   });
 });

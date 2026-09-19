@@ -56,6 +56,42 @@ function orderEntries(rows: { key: string; value: string }[]): Entry[] {
   });
 }
 
+/** The rows of one live-owner LEFT JOIN → the Profile, or null when the SELECT matched nothing. */
+function liveProfile(rows: LiveEntryRow[]): Profile | null {
+  const live = rows[0];
+  if (!live) return null;
+  return {
+    schema_version: SCHEMA_VERSION,
+    handle: live.handle,
+    entries: orderEntries(
+      rows.filter(
+        (r): r is LiveEntryRow & { key: string; value: string } =>
+          r.key !== null && r.value !== null,
+      ),
+    ),
+    extras: parseExtras(live.extras),
+    updated_at: live.updated_at,
+  };
+}
+
+/**
+ * The authenticated account's OWN live profile, keyed on github_id — never on its handle: a
+ * rename or reclaim landing between the auth query and a handle-keyed lookup would resolve someone
+ * else's row (or a false miss). Same one-statement snapshot rule as the public read. Null when
+ * unpublished (updated_at NULL) or in handle limbo (handle NULL while a stale stamp survives).
+ */
+export async function readOwnProfile(db: D1Database, githubId: number): Promise<Profile | null> {
+  const { results } = await db
+    .prepare(
+      "SELECT u.handle, u.extras, u.updated_at, pe.key, pe.value FROM users u " +
+        "LEFT JOIN profile_entries pe ON pe.github_id = u.github_id " +
+        "WHERE u.github_id = ? AND u.handle IS NOT NULL AND u.updated_at IS NOT NULL",
+    )
+    .bind(githubId)
+    .all<LiveEntryRow>();
+  return liveProfile(results);
+}
+
 /**
  * Resolve a handle to its profile, a rename target, or nothing — precedence:
  *   live published owner  → { live }       (200)
@@ -86,24 +122,8 @@ export async function resolveProfile(
     .bind(handleLower)
     .all<LiveEntryRow>();
 
-  const live = liveRows[0];
-  if (live) {
-    return {
-      kind: "live",
-      profile: {
-        schema_version: SCHEMA_VERSION,
-        handle: live.handle,
-        entries: orderEntries(
-          liveRows.filter(
-            (r): r is LiveEntryRow & { key: string; value: string } =>
-              r.key !== null && r.value !== null,
-          ),
-        ),
-        extras: parseExtras(live.extras),
-        updated_at: live.updated_at,
-      },
-    };
-  }
+  const profile = liveProfile(liveRows);
+  if (profile) return { kind: "live", profile };
 
   // Not live → was it renamed away? Resolve history to the owner's CURRENT, published handle.
   const hist = await db
@@ -137,4 +157,15 @@ export function readCacheControl(kind: ProfileRead["kind"]): string {
   return kind === "notfound"
     ? "public, max-age=0, s-maxage=10, stale-while-revalidate=60"
     : "public, max-age=0, s-maxage=30, stale-while-revalidate=86400";
+}
+
+/**
+ * The validator for a live profile: the server-stamped `updated_at`, quoted. Sent as `ETag` on both
+ * profile reads. The CLI derives the same value from the body stamp (never from the header, which
+ * an edge may weaken or drop) and sends it as `If-Match` on POST /api/v1/profile, where the write
+ * is gated on the stored `updated_at` still equalling it (see the CAS in that handler; a `W/`
+ * prefix is accepted there for the same reason).
+ */
+export function profileEtag(profile: Profile): string {
+  return `"${profile.updated_at}"`;
 }

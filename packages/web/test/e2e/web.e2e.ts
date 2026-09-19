@@ -300,6 +300,42 @@ test.describe("routing", () => {
     expect(await res.json()).toEqual({ github_id: 2002, handle: "bardisty" });
   });
 
+  test("the own-profile read is mounted in the built Worker: a garbage bearer is a JSON 401", async ({
+    request,
+  }) => {
+    // GET shares a route file with POST/DELETE; this proves Astro exports it through the build.
+    const res = await request.get("/api/v1/profile", {
+      headers: { authorization: "Bearer ymmv_not_a_real_token" },
+    });
+    expect(res.status()).toBe(401);
+    expect(res.headers()["content-type"]).toContain("application/json");
+    expect(res.headers()["cache-control"]).toBe("no-store");
+    expect(res.headers()["access-control-allow-origin"]).toBeUndefined();
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  test("the own-profile read returns the live bearer's profile with an ETag, never cached", async ({
+    request,
+  }) => {
+    const res = await request.get("/api/v1/profile", {
+      headers: { authorization: "Bearer ymmv_e2e_seed_token_2002" },
+    });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["cache-control"]).toBe("no-store");
+    const body = (await res.json()) as { handle: string; updated_at: string };
+    expect(body.handle).toBe("bardisty");
+    expect(res.headers().etag).toBe(`"${body.updated_at}"`);
+  });
+
+  test("the public JSON read carries the same ETag next to its edge-cache policy", async ({
+    request,
+  }) => {
+    const res = await request.get("/api/v1/u/bardisty");
+    expect(res.status()).toBe(200);
+    const body = (await res.json()) as { updated_at: string };
+    expect(res.headers().etag).toBe(`"${body.updated_at}"`);
+  });
+
   test("404s an unknown handle with the friendly empty state", async ({ page }) => {
     const res = await page.goto("/ghosthandle");
     expect(res?.status()).toBe(404);
