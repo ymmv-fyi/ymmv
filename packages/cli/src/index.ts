@@ -1,12 +1,12 @@
 import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
 import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
-import { login } from "./device-flow.js";
+import { login, retirable } from "./device-flow.js";
 import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
 import { type Codes, colorEnabled, message, palette, sanitizeValue, useColor } from "./render.js";
 import { type Command, resolveArg } from "./resolve.js";
-import { deleteToken, loadToken, peekBase } from "./token-store.js";
+import { deleteToken, loadToken, peekBase, peekCredential } from "./token-store.js";
 import { runUpdate } from "./update.js";
 import {
   isNewer,
@@ -49,7 +49,12 @@ ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, 
 // A token for a different base is left untouched (base-scoping).
 async function logout(): Promise<void> {
   const stored = await loadToken();
-  if (!stored) {
+  // A file loadToken refuses (a corrupt handle, a pre-#57 id) can still hold a LIVE token, and it
+  // is exactly what login() sends as `revoke`: read it the same lenient way here, or a login that
+  // says "run `ymmv logout` first" points at a command that answers "Not logged in".
+  const leftover = stored ? null : await peekCredential();
+  const token = stored?.token ?? (retirable(leftover) ? leftover.token : null);
+  if (token === null) {
     const otherBase = await peekBase();
     console.log(
       message(
@@ -62,7 +67,7 @@ async function logout(): Promise<void> {
   }
   let revoked: boolean;
   try {
-    revoked = await revokeYmmvToken(stored.token);
+    revoked = await revokeYmmvToken(token);
   } catch (e) {
     console.error(
       message(

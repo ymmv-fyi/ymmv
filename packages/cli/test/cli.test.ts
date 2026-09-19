@@ -8,11 +8,17 @@ vi.mock("../src/auth-http.js", async (importOriginal) => ({
   mintYmmvToken: vi.fn(),
   revokeYmmvToken: vi.fn(),
 }));
-vi.mock("../src/device-flow.js");
+// Partial: login is mocked, but `retirable` (the same-base/non-blank predicate logout shares with
+// login) stays real so logout's corrupt-file fallback is exercised against the actual rule.
+vi.mock("../src/device-flow.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/device-flow.js")>()),
+  login: vi.fn(),
+}));
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { deleteProfile, ProfileChanged, PublishRefusal, publishProfile } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
+import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
@@ -22,6 +28,7 @@ import {
   loadCredential,
   loadToken,
   peekBase,
+  peekCredential,
   type StoredToken,
 } from "../src/token-store.js";
 
@@ -137,6 +144,36 @@ describe("ymmv logout", () => {
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");
     expect(deleteToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a token file loadToken refuses (corrupt handle): revokes the live token inside, deletes the file", async () => {
+    // login() reads the file leniently and sends that token as `revoke`; against a Worker that
+    // predates the field it refuses with "run `ymmv logout` first". Logout must read the same
+    // way, or that advice loops on "Not logged in" with the token still live.
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(peekCredential).mockResolvedValue({ base: BASE, token: "t-corrupt" });
+    vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+    await main(["logout"]);
+    expect(revokeYmmvToken).toHaveBeenCalledWith("t-corrupt");
+    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(logs.join("\n")).toContain("Logged out.");
+  });
+
+  it("a blank or other-base token in a refused file is still 'Not logged in' (nothing to revoke)", async () => {
+    for (const cred of [
+      { base: BASE, token: "   " },
+      { base: "https://other.example", token: "t-other" },
+    ]) {
+      vi.clearAllMocks();
+      logs.length = 0;
+      vi.mocked(loadToken).mockResolvedValue(null);
+      vi.mocked(peekCredential).mockResolvedValue(cred);
+      vi.mocked(peekBase).mockResolvedValue(cred.base);
+      await main(["logout"]);
+      expect(revokeYmmvToken).not.toHaveBeenCalled();
+      expect(deleteToken).not.toHaveBeenCalled();
+      expect(logs.join("\n")).toMatch(/Not logged in/);
+    }
   });
 
   it("KEEPS the local token when the revoke can't reach the server", async () => {
