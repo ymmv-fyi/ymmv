@@ -58,8 +58,8 @@ via npm Trusted Publishing, with provenance.
   the commands to run by hand)
 - `ymmv version` prints the CLI version (and notes a newer release when one is known)
 
-Values are capped at 256 characters and extra labels at 64; a profile holds up
-to 32 extras.
+Values are capped at 256 characters and extra labels at 64, and each needs at
+least one visible character; a profile holds up to 32 extras.
 
 Every profile is open JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`. Full contract
 (shape, statuses, caching, CORS):
