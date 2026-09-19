@@ -14,6 +14,7 @@ import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
+import { sanitizeValue } from "../src/render.js";
 import { deleteToken, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
@@ -904,6 +905,164 @@ describe("publish", () => {
     expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]); // no 422 round-trip
     expect(fetchFn).toHaveBeenCalledTimes(2);
   });
+
+  it("an over-cap DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
+    // The other half of the default-is-the-problem rule: a server-side cap raise (or a generous
+    // YMMV_API origin) hands a stale CLI an over-cap default, and Enter returns it unchanged.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "x".repeat(300)]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      return editorAsks === 1 ? (def ?? "") : "Helix"; // Enter keeps the (over-cap) default
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(
+      /the saved value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
+    );
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
+  });
+
+  it("an invisible-only interactive answer re-prompts in place instead of a 422 after the walk", async () => {
+    // U+200B survives trim(); the server would refuse it as invalid_value after all 13 answers.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing()) // GET existing → none
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      return editorAsks === 1 ? String.fromCodePoint(0x200b) : "Neovim";
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(/that value has no visible text/);
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, no full re-walk
+    const body = posted(fetchFn);
+    expect(body.entries).toEqual([{ key: "editor", value: "Neovim" }]); // no 422 round-trip
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("an invisible-only DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
+    // Detection only trims env values, so a $EDITOR of U+061C U+200B lands in the defaults. The
+    // real prompter returns the SANITIZED default on Enter (the bidi control U+061C stripped, the
+    // zero-width space kept), and the note must still say the saved value is the problem and
+    // offer "-"; then a typed visible value publishes.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const detected = `${String.fromCodePoint(0x061c)}${String.fromCodePoint(0x200b)}`;
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", detected]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      // Enter keeps the default, in the sanitized form makePrompter().ask() returns it.
+      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix";
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(
+      /the saved value has no visible text\. Type a value or - to clear/,
+    );
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
+  });
+
+  it("a republish walks the prompts first when a detected gap-filler has no visible text", async () => {
+    // A republish is card-first, but detection fills keys the saved profile lacks; an invisible-
+    // only filler on the card would POST, 422, and re-offer the same card. Walk first instead, so
+    // the re-ask fixes it before any card, and the saved key rides along untouched.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x200b)]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "shell", value: "zsh" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return def ?? "";
+      editorAsks += 1;
+      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix";
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // walked, one re-ask
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
+    expect(fetchFn).toHaveBeenCalledTimes(2); // no 422 round-trip
+  });
+
+  it("Enter on a DETECTED default that sanitizes to nothing re-asks instead of silently clearing", async () => {
+    // A bidi-only default (U+202E) displays as nothing and the real prompter returns "" for it on
+    // Enter. Under "Enter to keep", treating that "" as "skip the key" would clear it and a 412
+    // rebase would replay the clear; it must re-ask with the saved-value note instead.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x202e)]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter → "" for a bidi-only default
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toMatch(
+      /the saved value has no visible text\. Type a value or - to clear/,
+    );
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
+  });
+
+  it('"-" clears an invisible-only DETECTED default, the second way out the note offers', async () => {
+    // The note promises "Type a value or - to clear". Clearing must actually take: "-" makes the
+    // value empty, and an empty value skips the visibility test rather than re-asking forever.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", String.fromCodePoint(0x200b)],
+        ["os", "macOS"],
+      ]),
+    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return def ?? "";
+      editorAsks += 1;
+      return editorAsks === 1 ? (def ?? "") : "-"; // Enter keeps it, then "-" clears it
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, then done
+    expect(posted(fetchFn).entries).toEqual([{ key: "os", value: "macOS" }]); // editor dropped
+    expect(process.exitCode).toBeUndefined();
+  });
 });
 
 describe("first-send identity drift is caught on every publish path (id passed through)", () => {
@@ -1102,6 +1261,95 @@ describe("set", () => {
     expect(errs.join("\n")).toMatch(
       /The detected Terminal value is 300 characters; the cap is 256\. Set a shorter one: ymmv set terminal <value>\./,
     );
+  });
+
+  it("-y refuses locally when a DETECTED value has no visible text (no doomed POST)", async () => {
+    // Same gap as the cap: an env value of only U+200B survives detection's trim and would be the
+    // server's invalid_value; the -y branch has no re-ask, so refuse before the network.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["terminal", String.fromCodePoint(0x200b)]]));
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(
+      /The detected Terminal value has no visible text\. Set one: ymmv set terminal <value>\./,
+    );
+  });
+
+  it("-y names a SAVED value as saved, not detected, when the stored profile carries it", async () => {
+    // buildDefaults prefers the published value over detection; a value stored before the server
+    // enforced the rule is the user's, so the refusal must not blame their environment.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: String.fromCodePoint(0x200b) }])),
+      );
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(
+      /The saved Editor value has no visible text\. Set one: ymmv set editor <value>\./,
+    );
+  });
+
+  it("-y: two bad detected values report only the first, in curated-key order", async () => {
+    // The merged loop returns on the first problem: one line, one fix to make, not a wall of
+    // errors. Editor precedes Terminal in CURATED_KEYS, so the invisible one is named.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["terminal", "x".repeat(300)],
+        ["editor", String.fromCodePoint(0x200b)],
+      ]),
+    );
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()); // GET existing only
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toMatch(/The detected Editor value has no visible text/);
+    expect(errs[0]).not.toMatch(/Terminal/);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("-y: the pre-flight is scoped to the curated map — a carried unknown key is exempt", async () => {
+    // A newer taxonomy's key rides along verbatim because this build cannot know its rules; only
+    // the curated values this build is responsible for are pre-flighted. Pins that scope, so a
+    // future widening cannot brick every republish for a profile a newer CLI wrote.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const foreign = {
+      key: "launcher",
+      value: String.fromCodePoint(0x200b),
+    } as unknown as Profile["entries"][number];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [foreign, { key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(posted(fetchFn).entries).toContainEqual(foreign);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("the set confirmation echoes the argv value with escapes stripped", async () => {
+    // An ESC sequence decorating a visible value passes the pre-flight (real text survives) and is
+    // stored verbatim; the echo must still never write it to the terminal raw.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const esc = String.fromCharCode(0x1b);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me")))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "editor", value: `Hel${esc}[2Jix` });
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: `Hel${esc}[2Jix` }]);
+    const out = logs.join("\n");
+    expect(out).toContain("Set Editor = Helix.");
+    expect(out).not.toContain(esc);
   });
 
   it("a curated set publishes even when extras sit at the cap (the guard is extras-only)", async () => {

@@ -5,6 +5,7 @@ import {
   diff,
   displayUrl,
   type Entry,
+  hasVisibleContent,
   isCuratedKey,
   KEY_LABELS,
   MAX_EXTRAS,
@@ -133,26 +134,32 @@ async function promptEntries(
   console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
-    // Re-ask on an over-cap paste instead of letting the server 422 the whole publish after all
-    // 13 answers are in. Defaults can never exceed the cap (existing values are server-capped,
-    // detection emits short tool names), so accepting Enter-for-default stays safe.
+    // Re-ask on an over-cap or invisible-only paste instead of letting the server 422 the whole
+    // publish after all 13 answers are in. A DETECTED default can fail either rule (an env value
+    // of only U+200B survives detection's trim; a stale CLI can see a server-raised cap), and then
+    // Enter-to-keep would loop forever — so name the default as the problem and the two ways out.
     for (;;) {
       const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
       const value = answer === "-" ? "" : answer;
-      if (value.length > MAX_VALUE) {
-        // If the over-cap value IS the stored default (possible after a server-side cap raise
-        // with a stale CLI, or a generous YMMV_API origin), Enter-to-keep would loop forever —
-        // name the default as the problem and the two ways out.
-        const isDefault = value === (defaults.get(key) ?? "").trim();
-        console.log(
-          message(
-            `${c.faint}${
-              isDefault
-                ? `the saved value is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
-                : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`
-            }${c.reset}`,
-          ),
-        );
+      // Enter returns the SANITIZED default (prompt.ts), so compare against that form: a default
+      // carrying a bidi control would otherwise never read as "the saved value". A default that
+      // sanitizes to nothing comes back as "", which must not pass for "no answer, skip the key":
+      // under "Enter to keep" that would silently clear it, and a 412 rebase replays the clear.
+      const rawDefault = defaults.get(key) ?? "";
+      const isDefault = value === sanitizeValue(rawDefault).trim();
+      const emptiedDefault = answer === "" && rawDefault !== "";
+      let problem: string | undefined;
+      if (emptiedDefault || (value !== "" && !hasVisibleContent(value))) {
+        problem = isDefault
+          ? "the saved value has no visible text. Type a value or - to clear"
+          : "that value has no visible text";
+      } else if (value.length > MAX_VALUE) {
+        problem = isDefault
+          ? `the saved value is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
+          : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`;
+      }
+      if (problem !== undefined) {
+        console.log(message(`${c.faint}${problem}${c.reset}`));
         continue;
       }
       if (value) chosen.set(key, value);
@@ -278,15 +285,22 @@ export async function publish(io: InteractiveIO): Promise<void> {
     // Detection is the one input that skips both the argv and prompt pre-flights (env-derived
     // values land in the defaults verbatim), and this branch has no re-ask to recover with —
     // refuse locally instead of shipping a doomed POST. Scoped to the curated map: carried
-    // entries are deliberately exempt (a newer server's caps may exceed this build's), and the
-    // interactive paths recover through the re-prompt/edit loop instead.
-    const over = [...values].find(([, v]) => v.length > MAX_VALUE);
-    if (over) {
+    // entries are deliberately exempt (a newer server's caps may exceed this build's, and its
+    // visibility rule is its own to enforce), and the interactive paths recover through the
+    // re-prompt/edit loop instead.
+    // Name the real source: buildDefaults prefers a saved value over detection, and a value
+    // stored before the server enforced a rule is the user's, not their environment's.
+    const saved = new Set((existing?.entries ?? []).map((e) => e.key));
+    for (const [key, v] of values) {
+      const problem = !hasVisibleContent(v)
+        ? "has no visible text. Set one"
+        : v.length > MAX_VALUE
+          ? `is ${v.length} characters; the cap is ${MAX_VALUE}. Set a shorter one`
+          : undefined;
+      if (problem === undefined) continue;
+      const source = saved.has(key) ? "saved" : "detected";
       console.error(
-        message(
-          `The detected ${KEY_LABELS[over[0]]} value is ${over[1].length} characters; ` +
-            `the cap is ${MAX_VALUE}. Set a shorter one: ymmv set ${over[0]} <value>.`,
-        ),
+        message(`The ${source} ${KEY_LABELS[key]} value ${problem}: ymmv set ${key} <value>.`),
       );
       process.exitCode = 1;
       return;
@@ -302,8 +316,13 @@ export async function publish(io: InteractiveIO): Promise<void> {
 
   try {
     // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
-    // card first — Enter republishes as-is, e edits.
-    if (!existing) await prompt(io.prompter);
+    // card first — Enter republishes as-is, e edits — unless a merged default fails a write rule
+    // (detection filled a key the saved profile lacks with an invisible-only or over-cap value):
+    // then walk first, where the re-ask names the saved value and offers "-", rather than offer a
+    // card the server would 422 and re-offer unchanged.
+    const failsRule = ([, v]: [CuratedKey, string]) =>
+      !hasVisibleContent(v) || v.length > MAX_VALUE;
+    if (!existing || [...values].some(failsRule)) await prompt(io.prompter);
     for (;;) {
       const entries = assemble();
       showCard(entries);
@@ -496,10 +515,12 @@ export async function runSet(target: SetTarget): Promise<void> {
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
   });
+  // argv echo: same strip-escapes rule as every rejection echo (an ESC-only value is invisible
+  // to the pre-flight only after sanitizing, so the raw string can still carry a sequence).
   const line =
     target.kind === "curated"
-      ? `Set ${KEY_LABELS[target.key]} = ${target.value}.`
-      : `Set extra ${target.label} = ${target.value}.`;
+      ? `Set ${KEY_LABELS[target.key]} = ${sanitizeValue(target.value)}.`
+      : `Set extra ${sanitizeValue(target.label)} = ${sanitizeValue(target.value)}.`;
   console.log(message(`${line}${pagePointer(res.handle)}`));
 }
 

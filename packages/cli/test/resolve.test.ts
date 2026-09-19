@@ -1,4 +1,4 @@
-import { MAX_LABEL } from "@ymmv/shared";
+import { MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { resolveArg } from "../src/resolve.js";
 
@@ -121,12 +121,77 @@ describe("resolveArg", () => {
     });
   });
 
+  // Zero-width space, spelled out so nothing invisible hides in the test source. It survives
+  // trim(), so without the pre-flight it would be the server's 422 after login and a round trip.
+  const zwsp = String.fromCodePoint(0x200b);
+
+  it("`set <key>` with an invisible-only value → local error, nothing echoed", () => {
+    expect(resolveArg(["set", "editor", zwsp])).toEqual({
+      kind: "error",
+      message: "That value has no visible text.",
+    });
+  });
+
+  it("`set --extra` with an invisible-only label or value → local error", () => {
+    expect(resolveArg(["set", "--extra", `${zwsp}=v`])).toEqual({
+      kind: "error",
+      message: "That label has no visible text.",
+    });
+    expect(resolveArg(["set", "--extra", `Keyboard=${zwsp}`])).toEqual({
+      kind: "error",
+      message: "That value has no visible text.",
+    });
+  });
+
+  it("`set <key>` with a control-character-only value → the same local error", () => {
+    expect(resolveArg(["set", "editor", String.fromCodePoint(0x01)])).toEqual({
+      kind: "error",
+      message: "That value has no visible text.",
+    });
+  });
+
+  it("an invisible char decorating real text is the user's data: still parses, kept verbatim", () => {
+    expect(resolveArg(["set", "editor", `${zwsp}vim`])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value: `${zwsp}vim` },
+    });
+    expect(resolveArg(["set", "--extra", `Key${zwsp}board=Moonlander`])).toEqual({
+      kind: "set",
+      target: { kind: "extra", label: `Key${zwsp}board`, value: "Moonlander" },
+    });
+  });
+
+  it("a value failing both rules is refused as invisible, not as over-cap", () => {
+    // Ordering pin: the visibility test runs before the cap test, so the note names the rule the
+    // user can act on. A longer invisible-only value is still "no visible text".
+    expect(resolveArg(["set", "editor", zwsp.repeat(MAX_VALUE + 1)])).toEqual({
+      kind: "error",
+      message: "That value has no visible text.",
+    });
+  });
+
+  it("`set --extra` with both halves invisible reports the label first", () => {
+    expect(resolveArg(["set", "--extra", `${zwsp}=${zwsp}`])).toEqual({
+      kind: "error",
+      message: "That label has no visible text.",
+    });
+  });
+
   it("`set --extra` at both caps exactly (64-char label, 256-char value) still parses", () => {
     const label = "l".repeat(64);
     const value = "v".repeat(256);
     expect(resolveArg(["set", "--extra", `${label}=${value}`])).toEqual({
       kind: "set",
       target: { kind: "extra", label, value },
+    });
+  });
+
+  it('`set --extra "<invisible>=-"` still unsets — the "-" sentinel outranks the visibility check', () => {
+    // Same order as the cap below: a clear is a match-only lookup, and it is the one CLI-side way
+    // to drop an extra whose label was stored invisible before the server refused them.
+    expect(resolveArg(["set", "--extra", `${zwsp}=-`])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: zwsp },
     });
   });
 
