@@ -124,14 +124,10 @@ function parseUnset(rest: string[]): Command {
     // Everything after --extra is the label (joined so unquoted spaces survive, like parseSet).
     const label = rest.slice(1).join(" ").trim();
     if (!label) return { kind: "error", message: `usage: ${UNSET_EXTRA}` };
-    // CLI-set labels can never contain "=" (parseSet splits on the first one), so this is
-    // muscle-memory "Label=Value" — point at the label-only form instead of silently no-op'ing.
-    if (label.includes("=")) {
-      return {
-        kind: "error",
-        message: 'unset takes just the label: ymmv unset --extra "Keyboard"',
-      };
-    }
+    // Over the cap can never be stored, so it can never match: fail here, before any login or GET.
+    if (label.length > MAX_LABEL) return labelCapError(label);
+    // No "=" rule here: a curl-written label may contain one, and only runUnset (with the stored
+    // profile in hand) can tell a real match from muscle-memory "Label=Value".
     return { kind: "unset", target: { kind: "extra", label } };
   }
   if (!head) return { kind: "error", message: UNSET_USAGE };
