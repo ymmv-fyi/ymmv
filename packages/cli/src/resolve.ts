@@ -2,6 +2,7 @@ import {
   CLI_VERBS,
   CURATED_KEYS,
   type CuratedKey,
+  hasVisibleContent,
   isCuratedKey,
   isReserved,
   isValidHandle,
@@ -74,7 +75,7 @@ function yesOnly(usage: string, rest: string[], make: (yes: boolean) => Command)
   return { kind: "error", message: usage };
 }
 
-// Pre-flight the shared write caps at the argv boundary: the server would 422 these anyway, but
+// Pre-flight the shared write rules at the argv boundary: the server would 422 these anyway, but
 // failing locally costs no round trip and no login. Echo LENGTHS only, never the over-long value
 // itself — the sanitize-every-argv-echo rule holds by construction when nothing is echoed.
 function labelCapError(label: string): Command {
@@ -89,6 +90,14 @@ function valueCapError(value: string): Command {
     message: `That value is ${value.length} characters; the cap is ${MAX_VALUE}.`,
   };
 }
+// A value of only zero-width/format code points survives parseSet's `!value` emptiness test and
+// would be the server's `invalid_value` after the round trip (see @ymmv/shared visible.ts).
+function labelInvisibleError(): Command {
+  return { kind: "error", message: "That label has no visible text." };
+}
+function valueInvisibleError(): Command {
+  return { kind: "error", message: "That value has no visible text." };
+}
 
 function parseSet(rest: string[]): Command {
   const head = rest[0];
@@ -101,8 +110,12 @@ function parseSet(rest: string[]): Command {
     const value = spec.slice(eq + 1).trim();
     if (!label || !value) return { kind: "error", message: EXTRA_USAGE };
     // A lone "-" means clear, same as the interactive publish prompt (a literal "-" value is
-    // deliberately unrepresentable — that's the footgun this rewrite removes).
+    // deliberately unrepresentable — that's the footgun this rewrite removes). Checked before the
+    // label rules on purpose: a clear is a match-only lookup, never a store, so an over-cap or
+    // invisible-only label is a harmless miss there (the cap test pins this order).
     if (value === "-") return { kind: "unset", target: { kind: "extra", label } };
+    if (!hasVisibleContent(label)) return labelInvisibleError();
+    if (!hasVisibleContent(value)) return valueInvisibleError();
     if (label.length > MAX_LABEL) return labelCapError(label);
     if (value.length > MAX_VALUE) return valueCapError(value);
     return { kind: "set", target: { kind: "extra", label, value } };
@@ -114,6 +127,7 @@ function parseSet(rest: string[]): Command {
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
   // so multi-token values like "- foo" or "Fira-Code" stay literal sets.
   if (value === "-") return { kind: "unset", target: { kind: "curated", key: head } };
+  if (!hasVisibleContent(value)) return valueInvisibleError();
   if (value.length > MAX_VALUE) return valueCapError(value);
   return { kind: "set", target: { kind: "curated", key: head, value } };
 }
@@ -126,6 +140,8 @@ function parseUnset(rest: string[]): Command {
     if (!label) return { kind: "error", message: `usage: ${UNSET_EXTRA}` };
     // Over the cap can never be stored, so it can never match: fail here, before any login or GET.
     if (label.length > MAX_LABEL) return labelCapError(label);
+    // No visibility pre-flight, unlike parseSet: an invisible-only label could be stored before
+    // the server refused them, and unset is how such a label gets removed.
     // No "=" rule here: a curl-written label may contain one, and only runUnset (with the stored
     // profile in hand) can tell a real match from muscle-memory "Label=Value".
     return { kind: "unset", target: { kind: "extra", label } };
