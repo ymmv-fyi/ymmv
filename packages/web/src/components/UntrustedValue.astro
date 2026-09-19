@@ -1,16 +1,19 @@
 ---
 // The one place an untrusted profile value becomes visible text. Astro auto-escapes it (HTML),
 // safeHref gates the scheme (a javascript: href fires on click even when escaped), sanitizeText
-// strips bidi controls (Trojan-Source reordering), and displayUrl drops the boring "https://".
+// strips bidi controls (Trojan-Source reordering), and displayUrl drops the boring "https://" and
+// shows the parsed host (userinfo dropped, IDN as punycode).
 //
 // Display policy: shorten ONLY when the value is a real link. A value that fails the URL parse but
 // starts with "https://" (e.g. "https://evil com") is not a link, so it keeps its scheme and renders
-// as honest, malformed text instead of borrowing a link's look. Hrefs are never sanitized: safeHref
-// serializes through URL, which percent-encodes any control.
+// as honest, malformed text instead of borrowing a link's look. safeHref and displayUrl gate on the
+// same WHATWG parse, so a value cannot be linked without its authority being rewritten. Hrefs are
+// never sanitized: safeHref serializes through URL, which percent-encodes any control.
 //
 // `bdi`: wrap the text in <bdi> so a genuinely RTL value still isolates from its neighbours (the
 // diff extras "label = value" line).
-import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { displayUrl } from "@ymmv/shared";
+import { urlTitle } from "../lib/display-value.ts";
 import { safeHref } from "../lib/safe-href.ts";
 import { sanitizeText } from "../lib/sanitize.ts";
 
@@ -21,8 +24,7 @@ interface Props {
 const { value, bdi = false } = Astro.props;
 const href = safeHref(value);
 const text = sanitizeText(href ? displayUrl(value) : value);
-const fullUrl = href ? urlTitle(value) : undefined;
-const title = fullUrl && sanitizeText(fullUrl);
+const title = href ? urlTitle(value) : undefined;
 ---
 
 {
