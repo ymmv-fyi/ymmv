@@ -12,8 +12,11 @@ Build + deploy only. Skipped vs CI:
 
 ## Worker before CLI (do not roll back behind a published CLI)
 
-The CLI's login parse requires every field the current mint response carries (`token`, `handle`,
-`github_id`); a Worker that omits one fails every login with "Unexpected response". Every
+The CLI's login parse requires every field the current mint response carries: a Worker that omits
+`token`, `handle`, or `github_id` fails every login with "Unexpected response", and one that omits
+`revoked` when the request carried `revoke` (every re-login with a stored token; a first login
+still works) fails with "did not retire the previous login" until the Worker is updated or the
+user runs `ymmv logout` first. Every
 `YMMV_TOKEN` command needs `GET /api/v1/auth/whoami` too: against a Worker without it, `ymmv -y`,
 `ymmv set`/`unset`, and `ymmv delete` fail with an error saying the server is behind the CLI
 release (`ymmv <handle>` still renders, without a diff). Every write command (`ymmv`, `ymmv set`,

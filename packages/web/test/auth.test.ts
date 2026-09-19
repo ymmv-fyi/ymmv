@@ -82,10 +82,21 @@ function publishCtx(token: string, handle: string, entries: { key: string; value
   } as unknown as APIContext;
 }
 
-type MintBody = { token: string; handle: string | null; github_id: number };
+type MintBody = { token: string; handle: string | null; github_id: number; revoked?: boolean };
 
-async function mint(accessToken = "gho_valid"): Promise<MintBody> {
-  return (await (await MINT(mintCtx({ access_token: accessToken }))).json()) as MintBody;
+async function mint(accessToken = "gho_valid", revoke?: string): Promise<MintBody> {
+  const body = { access_token: accessToken, ...(revoke === undefined ? {} : { revoke }) };
+  return (await (await MINT(mintCtx(body))).json()) as MintBody;
+}
+
+async function activeTokens(githubId: number): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM tokens WHERE github_id = ? AND revoked_at IS NULL",
+  )
+    .bind(githubId)
+    .first<{ n: number }>();
+  if (!row) throw new Error("COUNT(*) returned no row");
+  return row.n;
 }
 
 // Pool storage isn't rolled back per-test here, so start each test from a clean slate (these tests
@@ -111,6 +122,7 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(body.handle).toBe("carol");
     expect(body.github_id).toBe(4242); // the identity the token row below is bound to
     expect(body.token.startsWith("ymmv_")).toBe(true);
+    expect(body).not.toHaveProperty("revoked"); // present iff the request carried `revoke`
     // Verifies via introspection (audience check), not a bare /user identity read.
     expect(fetchFn).toHaveBeenCalledWith(
       expect.stringContaining("/applications/"),
@@ -184,12 +196,31 @@ describe("POST /api/v1/auth/token — mint", () => {
     const fetchFn = stubGithub(() => introspectOk(1, "x"));
     expect((await MINT(mintCtx({}))).status).toBe(400);
     expect((await MINT(mintCtx({ access_token: "" }))).status).toBe(400);
+    // A JSON null or primitive body destructures as "no fields", never a crash on the read.
+    for (const raw of ["null", "42", '"gho_x"']) {
+      const res = await MINT(mintCtx(raw));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("missing_access_token");
+    }
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("400 bad_json", async () => {
     stubGithub(() => introspectOk(1, "x"));
     expect((await MINT(mintCtx("{not json"))).status).toBe(400);
+  });
+
+  it("400 bad_revoke on a present-but-unusable revoke, without calling GitHub or minting", async () => {
+    const fetchFn = stubGithub(() => introspectOk(1, "x"));
+    for (const revoke of ["", "  \n", 42, null, { token: "x" }]) {
+      const res = await MINT(mintCtx({ access_token: "gho_valid", revoke }));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("bad_revoke");
+    }
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(
+      (await env.DB.prepare("SELECT COUNT(*) AS n FROM tokens").first<{ n: number }>())?.n,
+    ).toBe(0);
   });
 
   it("reserved GitHub username → handle:null, token still minted", async () => {
@@ -278,6 +309,161 @@ describe("POST /api/v1/auth/token — mint", () => {
       .bind(4242)
       .first<{ n: number }>();
     expect(n?.n).toBe(2);
+  });
+
+  // `revoke`: the CLI's stored token, retired in the SAME D1 batch that inserts the new one, so a
+  // login can't be interrupted between "new live" and "old dead" (issue #58). The CLI refuses a
+  // reply without `revoked` when it sent `revoke`, so the field's presence is part of the contract.
+  describe("revoke: atomic rotate of the stored token", () => {
+    it("retires the named token in the mint step: revoked:true, old 401s, new works, no-store", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      const res = await MINT(mintCtx({ access_token: "t2", revoke: a.token }));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      const b = (await res.json()) as MintBody;
+      expect(b.revoked).toBe(true);
+      expect(b.token).not.toBe(a.token);
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(401);
+      expect((await PUBLISH(publishCtx(a.token, "carol"))).status).toBe(401);
+      expect((await WHOAMI(whoamiCtx(b.token))).status).toBe(200);
+      expect(await activeTokens(4242)).toBe(1);
+    });
+
+    it("retires exactly the named token: the account's other sessions stay live (multi-device)", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const laptop = await mint("t1");
+      const desktop = await mint("t2");
+      const relogin = await mint("t3", desktop.token);
+      expect(relogin.revoked).toBe(true);
+      expect((await WHOAMI(whoamiCtx(laptop.token))).status).toBe(200);
+      expect((await WHOAMI(whoamiCtx(desktop.token))).status).toBe(401);
+      expect(await activeTokens(4242)).toBe(2); // laptop + relogin
+    });
+
+    it("idempotent: an unknown or already-revoked revoke is revoked:false, and the mint still happens", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      await LOGOUT(logoutCtx(a.token));
+      const b = await mint("t2", a.token);
+      expect(b.revoked).toBe(false);
+      expect((await WHOAMI(whoamiCtx(b.token))).status).toBe(200);
+      const c = await mint("t3", "ymmv_never_minted");
+      expect(c.revoked).toBe(false);
+      expect((await WHOAMI(whoamiCtx(c.token))).status).toBe(200);
+    });
+
+    it("is unscoped by account: a stored token for a DIFFERENT github_id is retired too", async () => {
+      // The file may hold another account's login (the user switched GitHub accounts). Holding
+      // the raw token is the credential, exactly as for logout; scoping to the minting account
+      // would strand that token live with no local reference left.
+      stubGithub(() => introspectOk(1, "alice"));
+      const alice = await mint("t1");
+      stubGithub(() => introspectOk(2, "bob"));
+      const bob = await mint("t2", alice.token);
+      expect(bob.github_id).toBe(2);
+      expect(bob.revoked).toBe(true);
+      expect((await WHOAMI(whoamiCtx(alice.token))).status).toBe(401);
+      expect((await WHOAMI(whoamiCtx(bob.token))).status).toBe(200);
+    });
+
+    it("revokes nothing when the mint itself is refused (foreign GitHub token → 401)", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      stubGithub(() => new Response("", { status: 404 }));
+      const res = await MINT(mintCtx({ access_token: "gho_foreign", revoke: a.token }));
+      expect(res.status).toBe(401);
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(200); // the gate ran before the batch
+      expect(await activeTokens(4242)).toBe(1);
+    });
+
+    it("normalizes `revoke` like a bearer: a stored token with stray whitespace is still retired", async () => {
+      // parseBearer trims, so a padded token.json still authenticates; the retire must hash the
+      // same bytes or the live row silently survives the rotate.
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      const b = await mint("t2", `  ${a.token} \n`);
+      expect(b.revoked).toBe(true);
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(401);
+      expect(await activeTokens(4242)).toBe(1);
+    });
+
+    it("a statement failing INSIDE the batch rolls the insert back: old token live, nothing minted", async () => {
+      // The whole point of the batch. A non-atomic implementation (two sequential runs) would
+      // leave the new row behind when the second statement fails.
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      const realBatch = env.DB.batch.bind(env.DB);
+      let calls = 0;
+      const batchSpy = vi
+        .spyOn(env.DB, "batch")
+        .mockImplementation(async (stmts: D1PreparedStatement[]) => {
+          calls += 1;
+          if (calls === 2) {
+            return realBatch([stmts[0], env.DB.prepare("UPDATE no_such_table SET x = 1")]);
+          }
+          return realBatch(stmts);
+        });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const res = await MINT(mintCtx({ access_token: "t2", revoke: a.token }));
+        expect(res.status).toBe(500);
+      } finally {
+        batchSpy.mockRestore();
+        errSpy.mockRestore();
+      }
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(200);
+      expect(await activeTokens(4242)).toBe(1); // the INSERT in the same batch was rolled back
+    });
+
+    it("revokes nothing on a GitHub outage (503) or an unset secret (500): every gate runs before the batch", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      stubGithub(() => new Response("", { status: 503 }));
+      expect((await MINT(mintCtx({ access_token: "t2", revoke: a.token }))).status).toBe(503);
+      const secretEnv = env as { GITHUB_CLIENT_SECRET?: string };
+      const saved = secretEnv.GITHUB_CLIENT_SECRET;
+      try {
+        secretEnv.GITHUB_CLIENT_SECRET = "";
+        expect((await MINT(mintCtx({ access_token: "t2", revoke: a.token }))).status).toBe(500);
+      } finally {
+        secretEnv.GITHUB_CLIENT_SECRET = saved;
+      }
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(200);
+      expect(await activeTokens(4242)).toBe(1);
+    });
+
+    it("insert and revoke are one batch: a failed batch leaves the old token live, logs no token", async () => {
+      stubGithub(() => introspectOk(4242, "carol"));
+      const a = await mint("t1");
+      const logged: unknown[][] = [];
+      const errSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        logged.push(args);
+      });
+      const realBatch = env.DB.batch.bind(env.DB);
+      let calls = 0;
+      // The first batch is the handle bind; the second is the token batch under test.
+      const batchSpy = vi
+        .spyOn(env.DB, "batch")
+        .mockImplementation(async (stmts: D1PreparedStatement[]) => {
+          calls += 1;
+          if (calls === 2) throw new Error(`d1 down while rotating ${a.token}`);
+          return realBatch(stmts);
+        });
+      try {
+        const res = await MINT(mintCtx({ access_token: "t2", revoke: a.token }));
+        expect(res.status).toBe(500);
+        const text = await res.text();
+        expect(JSON.parse(text)).toEqual({ error: "internal_error" });
+        expect(text).not.toContain(a.token);
+        expect(JSON.stringify(logged)).not.toContain(a.token);
+      } finally {
+        batchSpy.mockRestore();
+        errSpy.mockRestore();
+      }
+      expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(200);
+      expect(await activeTokens(4242)).toBe(1); // nothing new minted either
+    });
   });
 
   it("login reclaims a handle another account vacated, and the reclaimer can then publish (login is authoritative)", async () => {

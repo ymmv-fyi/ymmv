@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
-import { GITHUB_CLIENT_ID, isReserved, isValidHandle, type MintResult } from "@ymmv/shared";
+import {
+  GITHUB_CLIENT_ID,
+  isReserved,
+  isValidHandle,
+  type MintRequest,
+  type MintResult,
+} from "@ymmv/shared";
 import type { APIRoute } from "astro";
 import { mintToken } from "../../../../lib/auth.ts";
 import { githubClientSecret, verifyGithubToken } from "../../../../lib/github.ts";
@@ -11,7 +17,9 @@ import { handleBindStatements } from "../../../../lib/users.ts";
 // obtained; THAT is the credential (there is no ymmv bearer yet). The Worker verifies via GitHub token
 // introspection that the token was issued to ymmv's OWN OAuth app (audience binding — a token minted
 // for any other app, or a leaked PAT, is rejected), binds the handle to the github_id authoritatively,
-// and mints an opaque ymmv token. Do not log the tokens or the client secret.
+// and mints an opaque ymmv token. An optional `revoke` (the stored ymmv token the CLI's login
+// replaces) is retired in the same D1 batch as the mint. Do not log the tokens (either of them)
+// or the client secret.
 export const POST: APIRoute = async ({ request }) => {
   let body: unknown;
   try {
@@ -19,10 +27,20 @@ export const POST: APIRoute = async ({ request }) => {
   } catch {
     return noStoreJson(400, { error: "bad_json" });
   }
-  const accessToken = (body as { access_token?: unknown })?.access_token;
+  const { access_token: accessToken, revoke: rawRevoke } = (body ?? {}) as Partial<
+    Record<keyof MintRequest, unknown>
+  >;
   if (typeof accessToken !== "string" || accessToken.trim() === "") {
     return noStoreJson(400, { error: "missing_access_token" });
   }
+  // Present-but-unusable is a client bug, not "nothing to revoke": refuse before any rate-limit
+  // spend so a malformed retire can't silently mint a second live token.
+  if (rawRevoke !== undefined && (typeof rawRevoke !== "string" || rawRevoke.trim() === "")) {
+    return noStoreJson(400, { error: "bad_revoke" });
+  }
+  // Same normalization as parseBearer: a stored token with stray whitespace still authenticates as
+  // a bearer, so the retire must hash the same bytes or it silently misses a live row.
+  const revoke = typeof rawRevoke === "string" ? rawRevoke.trim() : undefined;
 
   // Per-IP cap on this unauthenticated endpoint, BEFORE the outbound introspection call, so a
   // junk-token flood from one IP can't amplify into unbounded GitHub subrequests. No identity yet → IP.
@@ -78,11 +96,13 @@ export const POST: APIRoute = async ({ request }) => {
       ]);
       handle = null;
     }
-    const token = await mintToken(env.DB, id);
+    const { token, revoked } = await mintToken(env.DB, id, revoke);
     // github_id rides along so the CLI can compare IDENTITY across a re-login: a handle string can
     // change hands (rename + reclaim) while the account id cannot. `satisfies` pins the wire shape
-    // to the shared contract the CLI parses against.
-    return noStoreJson(200, { token, handle, github_id: id } satisfies MintResult);
+    // to the shared contract the CLI parses against. `revoked` is present iff `revoke` was sent
+    // (JSON.stringify drops it when undefined): its absence is how a CLI tells an older Worker,
+    // which ignores the field, from a retire that found nothing live.
+    return noStoreJson(200, { token, handle, github_id: id, revoked } satisfies MintResult);
   } catch {
     console.error("mint failed for github_id", user.id);
     return noStoreJson(500, { error: "internal_error" });
