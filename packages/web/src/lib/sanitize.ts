@@ -6,14 +6,15 @@
  * (Trojan-Source-style spoofing). No single-line stack value needs one, and every HTML surface
  * strips them because the store and the JSON API keep values verbatim (an invisible char
  * decorating real text is the user's data). Same property as the CLI's render.ts BIDI_RE,
- * duplicated on purpose: @ymmv/shared stays wire-schema-only and never sanitizes.
+ * duplicated on purpose: @ymmv/shared never sanitizes (each surface owns its own strip).
  *
  * `mark` replaces each control with U+FFFD instead of deleting it, for the diff table's collide
  * guard: two differing values that collapse to one string after stripping must not render as
  * two equal cells. U+FFFD has no directional effect.
  *
  * Deliberately narrow: C0/C1 are harmless under Astro's escaping, and the wider Default_Ignorable
- * set (zero-width space/joiners, variation selectors) is kept as user data.
+ * set (zero-width space/joiners, variation selectors) is kept as user data here; the diff table's
+ * collide guard (lib/diff-cells.ts) is the one place that marks some of them.
  */
 const BIDI_RE = /\p{Bidi_Control}/gu;
 const REPLACEMENT_CHAR = String.fromCodePoint(0xfffd);

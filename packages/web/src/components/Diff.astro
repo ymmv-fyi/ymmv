@@ -6,8 +6,9 @@
 // no-color vocabulary (~/=), and extras render dimmed below.
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
 // a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
-// Values are user-controlled → rendered via Astro auto-escaping and bidi-control stripping
-// (lib/sanitize.ts); extras go through UntrustedValue.
+// Values are user-controlled → compared cells go through lib/diff-cells.ts (shortening, collide
+// guard, bidi stripping) under Astro auto-escaping; extras labels through lib/sanitize.ts and
+// extras values through UntrustedValue.
 //
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
 // only on differing rows (presence, not just hue), and each row carries a visually-hidden
@@ -18,7 +19,7 @@
 // the handles/swap as plain text (no navigation, no 2nd <h1>), and it suppresses the
 // uncompared-extras block. A live diff passes no `example`.
 import type { DiffResult } from "@ymmv/shared";
-import { displayUrl, urlTitle } from "../lib/display-value.ts";
+import { pairCells } from "../lib/diff-cells.ts";
 import { sanitizeText } from "../lib/sanitize.ts";
 import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
@@ -65,26 +66,10 @@ const HeadingTag = example ? "p" : "h1";
       {
         result.rows.map((row) => {
           const differs = row.status !== "same";
-          // Never display a marked difference as two equal-looking strings: if dropping "https://"
-          // would collide the sides (https://x vs x — dotfiles compares verbatim), render both raw;
-          // if the sides differ only by bidi controls, stripping would collide them too, so mark
-          // each control visibly (U+FFFD) instead of deleting it.
-          const shortenCollide =
-            row.theirs != null &&
-            row.mine != null &&
-            row.theirs !== row.mine &&
-            displayUrl(row.theirs) === displayUrl(row.mine);
-          const base = (v: string) => (shortenCollide ? v : displayUrl(v));
-          const bidiCollide =
-            row.theirs != null &&
-            row.mine != null &&
-            row.theirs !== row.mine &&
-            sanitizeText(base(row.theirs)) === sanitizeText(base(row.mine));
-          const cell = (v: string) => sanitizeText(base(v), { mark: bidiCollide });
-          const cellTitle = (v: string) => {
-            const full = shortenCollide ? undefined : urlTitle(v);
-            return full && sanitizeText(full);
-          };
+          // Never display a marked difference as two equal-looking strings: pairCells drops the
+          // shortening, or marks invisible code points, whenever the two cells of a differing row
+          // would otherwise show the same text (lib/diff-cells.ts).
+          const [theirsCell, mineCell] = pairCells(row.theirs, row.mine, differs);
           return (
             <tr class={differs ? "changed" : "same"}>
               <th scope="row" class="k">
@@ -93,15 +78,15 @@ const HeadingTag = example ? "p" : "h1";
                 {row.label}
               </th>
               <td class="theirs">
-                {row.theirs != null ? (
-                  <span title={cellTitle(row.theirs)}>{cell(row.theirs)}</span>
+                {theirsCell ? (
+                  <span title={theirsCell.title}>{theirsCell.text}</span>
                 ) : (
                   <span class="missing">—</span>
                 )}
               </td>
               <td class="yours">
-                {row.mine != null ? (
-                  <span title={cellTitle(row.mine)}>{cell(row.mine)}</span>
+                {mineCell ? (
+                  <span title={mineCell.title}>{mineCell.text}</span>
                 ) : (
                   <span class="missing">—</span>
                 )}

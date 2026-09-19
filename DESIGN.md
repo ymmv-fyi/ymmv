@@ -150,7 +150,8 @@ the identity.
   (mono 600 — no display-type handle), and the stack is the command's output: one `.readout` grid
   (`fit-content(40%)` label column, 2ch gutter) so stack AND extras share a single value tab stop,
   groups separated by a blank line — no group headers, no hairline rows, no plate, 14px/1.7. URL
-  values render scheme-stripped with the full URL in `title`, gated through `safeHref`. The foot
+  values render with `https://` dropped (`http://` stays) and the parsed host (userinfo dropped,
+  IDN as punycode), the full URL in `title`, gated through `safeHref`. The foot
   is the session's closing prompt lines: `$ npx ymmv-cli@latest  # make yours` (copyable) and the
   `$ diff vs <you> →` prompt form (`.diff-cta`, no longer a raised panel). `updated YYYY-MM-DD`
   stays an absolute date (edge-cached pages must not serve stale relative times).
