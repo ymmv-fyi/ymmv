@@ -11,7 +11,7 @@ vi.mock("../src/auth-http.js", async (importOriginal) => ({
 vi.mock("../src/device-flow.js");
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
-import { deleteProfile, PublishRefusal, publishProfile } from "../src/api.js";
+import { deleteProfile, ProfileChanged, PublishRefusal, publishProfile } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
@@ -265,6 +265,48 @@ describe("ymmv unset dispatch", () => {
   });
 });
 
+describe("If-Match precondition (publish)", () => {
+  const headersOf = (fetchFn: { mock: { calls: unknown[][] } }, call: number) =>
+    (fetchFn.mock.calls[call][1] as RequestInit).headers as Record<string, string>;
+
+  it("sends the caller's tag verbatim as If-Match, and no header without one", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValue(ok({ handle: "carol" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publishProfile(PROFILE, MINE, { ifMatch: '"2026-06-30T00:00:00.000Z"' });
+    expect(headersOf(fetchFn, 0)["if-match"]).toBe('"2026-06-30T00:00:00.000Z"');
+    await publishProfile(PROFILE, MINE);
+    expect(headersOf(fetchFn, 1)["if-match"]).toBeUndefined();
+  });
+
+  it("412 → ProfileChanged with the re-run copy, one POST, no login", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(status(412, { error: "precondition_failed", message: "server copy" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, MINE, { ifMatch: '"x"' })).rejects.toThrow(
+      "Your profile changed since this command read it. Re-run the command.",
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("401 then 412 on the healed retry → ProfileChanged, and the retry re-sent the tag", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(status(401))
+      .mockResolvedValueOnce(status(412, { error: "precondition_failed" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publishProfile(PROFILE, MINE, { ifMatch: '"x"' })).rejects.toBeInstanceOf(
+      ProfileChanged,
+    );
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(headersOf(fetchFn, 1)["if-match"]).toBe('"x"');
+  });
+});
+
 describe("publish auto-reauth", () => {
   it("on 401: explains the re-login, deletes the token, re-logs-in, retries once", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
@@ -506,6 +548,18 @@ describe("publish auto-reauth", () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
     await expect(publishProfile(PROFILE, MINE)).rejects.toBeInstanceOf(PublishRefusal);
+  });
+
+  it("the 412 site throws ProfileChanged, a PublishRefusal (the loop's exit contract)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(status(412, { error: "precondition_failed" })),
+    );
+    const err = await publishProfile(PROFILE, MINE, { ifMatch: '"x"' }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(ProfileChanged);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect(login).not.toHaveBeenCalled();
   });
 
   it("second 409 with a message-less handle_not_bound body gets the same honest copy", async () => {

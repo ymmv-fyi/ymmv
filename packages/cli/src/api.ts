@@ -4,6 +4,7 @@ import {
   ENV_TOKEN_REJECTED_MINT_AGAIN,
   fetchWhoami,
   MintRejected,
+  missingRouteError,
 } from "./auth-http.js";
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
@@ -27,6 +28,17 @@ export class PublishRefusal extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = "PublishRefusal";
+  }
+}
+
+/** The server refused the write (412) because the profile changed after this command read it:
+ *  the If-Match tag from that read no longer matches. Deterministic for THIS merge, so a
+ *  PublishRefusal for set/unset/-y (a fresh run re-reads) — and the one refusal the interactive
+ *  publish loop heals in place, by re-reading and re-offering with the user's answers kept. */
+export class ProfileChanged extends PublishRefusal {
+  constructor() {
+    super("Your profile changed since this command read it. Re-run the command.");
+    this.name = "ProfileChanged";
   }
 }
 
@@ -118,17 +130,25 @@ export interface PublishResult {
 }
 
 /** `expected`: the credential the CALLER resolved `profile.handle` under. Required, so a new call
- *  site can't silently downgrade the first send to the handle-only check (see the drift guard). */
+ *  site can't silently downgrade the first send to the handle-only check (see the drift guard).
+ *  `ifMatch`: the ETag of the read this merge was built on (fetchOwnProfile); sent as If-Match so
+ *  the server refuses (412 → ProfileChanged) if the profile changed in between. Omitted for a
+ *  first publish (nothing was read), which is unconditional. */
 export async function publishProfile(
   profile: Profile,
   expected: Credential,
+  opts: { ifMatch?: string } = {},
 ): Promise<PublishResult> {
   const send = (c: Credential) =>
     safeFetch(
       `${BASE}/api/v1/profile`,
       {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${c.token}` },
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${c.token}`,
+          ...(opts.ifMatch ? { "if-match": opts.ifMatch } : {}),
+        },
         // Send the login-bound handle, never a caller-guessed one — the official client never claims
         // a handle it doesn't own.
         body: JSON.stringify({ ...profile, handle: c.handle ?? profile.handle }),
@@ -287,6 +307,9 @@ export async function publishProfile(
       );
     }
   }
+  // 412: the If-Match tag no longer matches — a write landed between this command's read and now.
+  // The copy is ours, so the body is not read.
+  if (res.status === 412) throw new ProfileChanged();
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
     // Server copy first: the Worker's 4xx bodies carry a human {message} (422 caps, 400 schema
@@ -322,10 +345,10 @@ export async function publishProfile(
  *  errors. The Worker 301s a renamed handle to its current one — Node's fetch follows it by default,
  *  so callers always see the live profile or a clean miss.
  *
- *  INVARIANT: read-modify-write callers (publish/set/unset) require an UNCACHED read. The response
- *  declares `s-maxage=30, stale-while-revalidate=86400` (web: profile-read.ts readCacheControl);
- *  nothing edge-caches Worker responses today, but if a cache rule ever fronts /api/v1/u/*, a stale
- *  read here would make the full-replace publish silently drop writes made moments earlier. */
+ *  Display-only (`ymmv <handle>`). The response declares an edge-cache policy (`s-maxage=30,
+ *  stale-while-revalidate=86400`, web: profile-read.ts readCacheControl), so a read here may one
+ *  day be stale; read-modify-write callers (publish/set/unset) must build on fetchOwnProfile
+ *  instead, whose reply is never cached and carries the If-Match tag the write is gated on. */
 export async function fetchProfileJson(handle: string): Promise<Profile | null> {
   const res = await safeFetch(`${BASE}/api/v1/u/${encodeURIComponent(handle)}`, undefined, BASE);
   if (res.status === 404) return null;
@@ -336,6 +359,66 @@ export async function fetchProfileJson(handle: string): Promise<Profile | null> 
   // override / MITM) returning e.g. `entries:null` must surface as a typed ProfileParseError, not a
   // TypeError crash deep in diff()/buildDefaults.
   return parseProfile(await res.json());
+}
+
+/** Visible ASCII, no space or double quote (RFC 9110 etagc), bounded: what may ride in If-Match. */
+const HEADER_SAFE_TAG = /^[!#-~]{1,128}$/;
+
+/** The caller's own profile plus the entity-tag the write must send back as If-Match. */
+export interface OwnProfile {
+  profile: Profile;
+  etag: string;
+}
+
+/** Fetch the logged-in account's OWN profile (GET /api/v1/profile, bearer): the uncached read every
+ *  read-modify-write command builds its merge on. Returns null only for the Worker's own
+ *  `{error:"not_found"}` 404 (no profile yet); a 404 of any other shape is a Worker deployed before
+ *  this route existed and THROWS — reading it as "no profile" would publish from scratch over
+ *  whatever is live. Deliberately NO auto-reauth: a 401 here is answered with the login
+ *  instruction. A device flow inside the read would have to hand its new credential back to the
+ *  command (and the loop's reloads), and the merge the command builds afterwards would be judged
+ *  against the old one; publishProfile keeps its own heal for a token revoked between read and
+ *  write. Throws plain Errors with finished copy otherwise. */
+export async function fetchOwnProfile(cred: Credential): Promise<OwnProfile | null> {
+  assertVerified(cred);
+  const res = await safeFetch(
+    `${BASE}/api/v1/profile`,
+    {
+      headers: { authorization: `Bearer ${cred.token}` },
+      // Never follow a redirect: the bearer must not travel to a redirect target, and a 30x→200
+      // must not read as a profile. Same guard as whoami, mint, logout, publish, and delete.
+      redirect: "manual",
+    },
+    BASE,
+  );
+  if (res.status === 401) {
+    throw new Error(
+      cred.source === "env"
+        ? ENV_TOKEN_REJECTED_MINT_AGAIN
+        : "Session expired. Run `ymmv login`, then re-run the command.",
+    );
+  }
+  if (res.status === 404) {
+    const { slug } = wireErrorBody(await wireBody(res));
+    if (slug === "not_found") return null;
+    throw missingRouteError("profile lookup");
+  }
+  if (res.status === 429) throw new Error(await rateLimitMessage(res));
+  if (!res.ok) {
+    // "fetch failed" prefix: the commands' abort-on-read-failure copy and tests key on it.
+    const raw = await wireBody(res);
+    throw new Error(withRetryHint(`fetch failed: ${res.status} ${wireText(raw)}`, res));
+  }
+  const profile = parseProfile(await res.json());
+  // The tag is built from the body stamp, never read from the ETag header: an edge may weaken
+  // (`W/`) or blank the header on the way, which would turn every conditional write into a 412 or,
+  // worse, into an unconditional one — while the stamp IS the documented value the header carries
+  // (docs/api.md). It becomes a request header, so it must be header-safe; a non-conforming origin
+  // (a YMMV_API override) fails loudly rather than shipping its bytes in If-Match.
+  if (!HEADER_SAFE_TAG.test(profile.updated_at)) {
+    throw new Error(`Unexpected response from ${BASE}. Check YMMV_API, or try again shortly.`);
+  }
+  return { profile, etag: `"${profile.updated_at}"` };
 }
 
 /**

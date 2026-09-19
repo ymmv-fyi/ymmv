@@ -14,7 +14,9 @@ import {
 import {
   deleteProfile,
   ensureLogin,
+  fetchOwnProfile,
   fetchProfileJson,
+  ProfileChanged,
   PublishRefusal,
   type PublishResult,
   publishProfile,
@@ -80,7 +82,8 @@ function requireHandle(cred: Credential): string | null {
 
 /**
  * Refuse a read-modify-write when the pre-write read resolved to a DIFFERENT handle than the
- * login-bound one (fetchProfileJson follows the 301 a GitHub rename leaves behind). Republishing
+ * login-bound one (the own read answers with the handle the server binds to this account NOW, so
+ * a mismatch means a re-login elsewhere moved it after this credential was stored). Republishing
  * would silently rebind the account to the stale handle — re-login is the only sanctioned rebind.
  * Under an env credential the handle came from whoami moments ago, so the mismatch is a bind that
  * changed in between; `ymmv login` would only write a file token YMMV_TOKEN keeps shadowing, and
@@ -172,6 +175,7 @@ async function promptEntries(
  *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
  *               ├─ y ──► POST ─┬─ ok ────────────► Published
  *               │              ├─ transient err ─► "…Your answers are kept." ─► LOOP
+ *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published."  exit 0
  *               ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
@@ -203,16 +207,21 @@ export async function publish(io: InteractiveIO): Promise<void> {
       return readFileSync(p, "utf8");
     },
   });
-  // NOT caught: fetchProfileJson returns null only on a 404 (no profile yet) and THROWS on a real
-  // read failure. Swallowing the throw would let a transient error look like "no profile", and the
-  // upsert (server does delete-then-insert) would then clobber every curated key + extra. Abort.
-  const existing = await fetchProfileJson(handle);
+  // NOT caught: fetchOwnProfile returns null only on the Worker's own "no profile yet" 404 and
+  // THROWS on a real read failure. Swallowing the throw would let a transient error look like "no
+  // profile", and the upsert (server does delete-then-insert) would then clobber every curated key
+  // + extra. Abort.
+  const own = await fetchOwnProfile(cred);
+  const existing = own?.profile ?? null;
   assertHandleUnchanged(existing, cred, handle);
   const defaults = buildDefaults(existing, detected);
   // Keys a newer taxonomy published that this build doesn't know: carried through verbatim (the
   // upsert is a full replace — rebuilding from our compiled-in key list alone would delete them).
-  const carried = unknownEntries(existing);
-  const extras = existing?.extras ?? [];
+  // `let`, with `extras` and `ifMatch`: a 412 mid-loop reloads all three from a fresh read;
+  // showCard/assemble close over them, so the next card is the reload.
+  let carried = unknownEntries(existing);
+  let extras = existing?.extras ?? [];
+  let ifMatch = own?.etag;
   const color = colorEnabled();
   const site = displayUrl(BASE);
 
@@ -250,6 +259,18 @@ export async function publish(io: InteractiveIO): Promise<void> {
 
   let values = defaults;
   const assemble = (): Entry[] => [...entriesFromMap(values), ...carried];
+  // The user's explicit edits (undefined = cleared with "-"), kept apart from `values`: on a
+  // republish nobody is prompted, so `values` is server state, not answers. A 412 reload rebases
+  // onto the live profile and re-applies exactly these.
+  const edits = new Map<CuratedKey, string | undefined>();
+  const prompt = async (prompter: Prompter): Promise<void> => {
+    const before = values;
+    values = await promptEntries(values, prompter);
+    for (const key of CURATED_KEYS) {
+      const after = values.get(key);
+      if (after !== before.get(key)) edits.set(key, after);
+    }
+  };
 
   // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
   // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
@@ -272,14 +293,17 @@ export async function publish(io: InteractiveIO): Promise<void> {
     }
     const entries = assemble();
     showCard(entries);
-    printPublished(await publishProfile(newProfile(handle, entries, extras), cred), color);
+    printPublished(
+      await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
+      color,
+    );
     return;
   }
 
   try {
     // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
     // card first — Enter republishes as-is, e edits.
-    if (!existing) values = await promptEntries(values, io.prompter);
+    if (!existing) await prompt(io.prompter);
     for (;;) {
       const entries = assemble();
       showCard(entries);
@@ -291,9 +315,48 @@ export async function publish(io: InteractiveIO): Promise<void> {
       );
       if (ans === "y") {
         try {
-          printPublished(await publishProfile(newProfile(handle, entries, extras), cred), color);
+          printPublished(
+            await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
+            color,
+          );
           return;
         } catch (e) {
+          // 412: a write landed elsewhere (another device, a CI run) while the user was at the
+          // prompt. Retrying the same merge would clobber it, and exiting would throw away the
+          // answers — so reload what is live, rebase onto it (fresh defaults + the user's explicit
+          // edits, cleared keys included), and re-offer the card. The re-read is NOT caught: a
+          // transient failure there aborts, like the pre-loop read. A deleted profile is a
+          // refusal: silently re-offering a card that would recreate it is not "answers kept".
+          if (e instanceof ProfileChanged) {
+            console.error(
+              message(
+                "Your profile changed since this command read it. " +
+                  "Reloaded the current version; your answers are kept.",
+              ),
+            );
+            // publishProfile's own heal may have replaced the stored token: re-read it so the
+            // reload does not go out under a revoked one (an env credential is the caller's, never
+            // re-read). The write is still judged against the credential the merge was built under.
+            const liveCred = cred.source === "env" ? cred : ((await loadCredential()) ?? cred);
+            const fresh = await fetchOwnProfile(liveCred);
+            if (!fresh) {
+              throw new PublishRefusal(
+                "Your profile was deleted since this command read it. Nothing was published. " +
+                  "Run `ymmv` again to recreate it.",
+              );
+            }
+            assertHandleUnchanged(fresh.profile, cred, handle);
+            const rebased = buildDefaults(fresh.profile, detected);
+            for (const [key, value] of edits) {
+              if (value === undefined) rebased.delete(key);
+              else rebased.set(key, value);
+            }
+            values = rebased;
+            carried = unknownEntries(fresh.profile);
+            extras = fresh.profile.extras;
+            ifMatch = fresh.etag;
+            continue;
+          }
           // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the 13 answers
           // the user just typed — print why and re-enter the loop (card + Y/n/e). Deterministic
           // failures pass through: PromptAborted (^C during the re-login device flow) keeps its
@@ -302,8 +365,8 @@ export async function publish(io: InteractiveIO): Promise<void> {
           if (e instanceof PromptAborted || e instanceof PublishRefusal) throw e;
           // Honest about what's known: a server-ANSWERED failure (4xx/5xx body) proves nothing
           // was written, but a lost response (NetworkError/timeout) can arrive AFTER the server
-          // committed — never claim "nothing was published" for those. (The retry also replays
-          // the pre-loop read; see issue #56, the uncached read path for RMW mutations.)
+          // committed — never claim "nothing was published" for those. The retry re-sends the
+          // same tag, so a write that landed in between surfaces as the 412 branch above.
           const ambiguous = e instanceof NetworkError || isTimeoutError(e);
           console.error(
             message(
@@ -321,7 +384,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
         console.log(message("Aborted. Nothing published."));
         return;
       }
-      values = await promptEntries(values, io.prompter); // "e": edit, prefilled with current answers
+      await prompt(io.prompter); // "e": edit, prefilled with current answers
     }
   } catch (e) {
     if (e instanceof PromptAborted) {
@@ -411,8 +474,9 @@ export async function runSet(target: SetTarget): Promise<void> {
   const handle = requireHandle(cred);
   if (!handle) return;
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
-  // truncated profile. fetchProfileJson returns null only for a genuine 404.
-  const existing = await fetchProfileJson(handle);
+  // truncated profile. fetchOwnProfile returns null only for the Worker's own "no profile" 404.
+  const own = await fetchOwnProfile(cred);
+  const existing = own?.profile ?? null;
   assertHandleUnchanged(existing, cred, handle);
   const { entries, extras } = applySet(existing, target);
   // Count pre-flight needs the merged profile, so it lives here, not in parseSet. Only a genuine
@@ -429,7 +493,9 @@ export async function runSet(target: SetTarget): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const res = await publishProfile(newProfile(handle, entries, extras), cred);
+  const res = await publishProfile(newProfile(handle, entries, extras), cred, {
+    ifMatch: own?.etag,
+  });
   const line =
     target.kind === "curated"
       ? `Set ${KEY_LABELS[target.key]} = ${target.value}.`
@@ -460,8 +526,9 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   const handle = requireHandle(cred);
   if (!handle) return;
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
-  // truncated profile. fetchProfileJson returns null only for a genuine 404.
-  const existing = await fetchProfileJson(handle);
+  // truncated profile. fetchOwnProfile returns null only for the Worker's own "no profile" 404.
+  const own = await fetchOwnProfile(cred);
+  const existing = own?.profile ?? null;
   assertHandleUnchanged(existing, cred, handle);
   if (!existing) {
     // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
@@ -478,7 +545,9 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
     console.log(message(line));
     return; // idempotent no-op: exit 0, and crucially no network write
   }
-  const res = await publishProfile(newProfile(handle, entries, extras), cred);
+  const res = await publishProfile(newProfile(handle, entries, extras), cred, {
+    ifMatch: own?.etag,
+  });
   // removed.* comes off the wire (unlike runSet's echo of the user's own argv) — sanitize it.
   const line =
     target.kind === "curated"
