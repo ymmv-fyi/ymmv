@@ -78,16 +78,26 @@ function stubIntrospect(id: number, login: string): ReturnType<typeof vi.fn> {
   return fn;
 }
 
-function mintCtx(accessToken: string, ip?: string): APIContext {
+function mintCtx(accessToken: string, ip?: string, revoke?: string): APIContext {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (ip) headers["cf-connecting-ip"] = ip;
   return {
     request: new Request("https://ymmv.test/api/v1/auth/token", {
       method: "POST",
       headers,
-      body: JSON.stringify({ access_token: accessToken }),
+      body: JSON.stringify({
+        access_token: accessToken,
+        ...(revoke === undefined ? {} : { revoke }),
+      }),
     }),
   } as unknown as APIContext;
+}
+
+async function isLive(token: string): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT revoked_at FROM tokens WHERE hash = ?")
+    .bind(await hashToken(token))
+    .first<{ revoked_at: string | null }>();
+  return row !== null && row.revoked_at === null;
 }
 
 // Disjoint from the profile-write ids above (90000-90003) and IPs, so the never-reset limiter counters
@@ -96,6 +106,7 @@ const GID_MINT_CAP = 90010;
 const GID_MINT_IPCAP = 90011;
 const GID_MINT_OK = 90012;
 const IP_MINT_CAP = "203.0.113.10";
+const IP_BAD_REVOKE = "203.0.113.11";
 
 beforeEach(async () => {
   await seedToken(TOK_POST, GID_POST);
@@ -161,10 +172,12 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
     // Pre-trip the SAME per-identity key the mint handler keys on (post-introspection).
     expect((await exhaust(writeRateLimitKey(GID_MINT_CAP))).denied).toBe(true);
 
-    const res = await MINT(mintCtx("gho_x"));
+    // Carry a `revoke` too: the retire rides in the token batch, so a 429 must leave it live.
+    const res = await MINT(mintCtx("gho_x", undefined, TOK_FRESH));
     expect(res.status).toBe(429);
     expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
     expect(fetchFn).toHaveBeenCalled(); // identity WAS resolved — the write cap is post-introspection
+    expect(await isLive(TOK_FRESH)).toBe(true);
 
     // 429 short-circuits before the D1 batch: no token AND no user/handle row for this identity.
     expect(
@@ -187,7 +200,7 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
     const fetchFn = stubIntrospect(GID_MINT_IPCAP, "ipcap");
     expect((await exhaust(authRateLimitKey(IP_MINT_CAP), env.RL_AUTH)).denied).toBe(true);
 
-    const res = await MINT(mintCtx("gho_x", IP_MINT_CAP));
+    const res = await MINT(mintCtx("gho_x", IP_MINT_CAP, TOK_FRESH));
     expect(res.status).toBe(429);
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("rate_limited");
@@ -195,6 +208,19 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
     expect(body.message).toBeTruthy();
     expect(body.message).not.toContain("—");
     expect(fetchFn).not.toHaveBeenCalled(); // IP cap short-circuits before GitHub is ever hit
+    expect(await isLive(TOK_FRESH)).toBe(true); // and before the token batch
+  });
+
+  it("a malformed revoke is refused BEFORE the IP cap is consulted (400, not 429, on a tripped IP)", async () => {
+    // Were the shape check after the limiter, an exhausted IP would answer 429 here. 400 pins the
+    // order the handler promises: a client bug spends no rate-limit budget and reaches no GitHub.
+    const fetchFn = stubIntrospect(GID_MINT_IPCAP, "ipcap");
+    expect((await exhaust(authRateLimitKey(IP_BAD_REVOKE), env.RL_AUTH)).denied).toBe(true);
+
+    const res = await MINT(mintCtx("gho_x", IP_BAD_REVOKE, ""));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("bad_revoke");
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("mint with no cf-connecting-ip fails open (RL_AUTH doesn't block it)", async () => {
