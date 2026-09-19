@@ -5,7 +5,6 @@ import {
   diff,
   displayUrl,
   type Entry,
-  hasVisibleContent,
   isCuratedKey,
   KEY_LABELS,
   MAX_EXTRAS,
@@ -45,6 +44,7 @@ import {
   renderDiff,
   renderProfile,
   sanitizeValue,
+  showsVisibleText,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
 import { type Credential, deleteToken, loadCredential } from "./token-store.js";
@@ -124,10 +124,53 @@ function pagePointer(handle: string): string {
   return ` ${c.faint}→ ${color ? displayUrl(BASE) : BASE}/${handle}${c.reset}`;
 }
 
+/** The first curated entry that fails a write rule, as the refusal to print, or undefined when the
+ *  merge is clean. Every no-prompt write path (-y, set, unset) runs it before the POST: the server
+ *  would 422 the same values, and its message would read as a rejection of what the user just
+ *  typed. Scoped to curated keys: carried entries are deliberately exempt (a newer server's caps
+ *  may exceed this build's, and its visibility rule is its own to enforce). Names the real source:
+ *  a value saved before the server enforced a rule is the user's, not their environment's. */
+function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | undefined {
+  const saved = savedKeys(existing);
+  for (const { key, value } of entries) {
+    if (!isCuratedKey(key)) continue;
+    const problem = valueProblem(value);
+    if (problem === undefined) continue;
+    const what =
+      problem === "invisible"
+        ? "has no visible text. Set one"
+        : `is ${value.length} characters; the cap is ${MAX_VALUE}. Set a shorter one`;
+    const source = saved.has(key) ? "saved" : "detected";
+    // A saved value with nothing visible is more likely wanted gone than replaced; unset works
+    // because applyUnset drops the entry before this check sees the merge.
+    const remove =
+      problem === "invisible" && source === "saved" ? `, or remove it: ymmv unset ${key}` : "";
+    return `The ${source} ${KEY_LABELS[key]} value ${what}: ymmv set ${key} <value>${remove}.`;
+  }
+  return undefined;
+}
+
+/** Which write rule a curated value fails, or undefined. The ONE predicate behind the three
+ *  siblings of the argv pre-flight: promptEntries' re-ask, the publish loop's walk gate, and
+ *  writeRuleRefusal. They must agree exactly, or a value the gate rejects and the re-ask accepts
+ *  would walk the 13 prompts forever without ever reaching a card. */
+function valueProblem(value: string): "invisible" | "over-cap" | undefined {
+  if (!showsVisibleText(value)) return "invisible";
+  if (value.length > MAX_VALUE) return "over-cap";
+  return undefined;
+}
+
+/** The curated keys the saved profile carries: a failing default under one of these is the user's
+ *  own stored value, anything else came from detection. */
+function savedKeys(existing: Profile | null): ReadonlySet<string> {
+  return new Set((existing?.entries ?? []).map((e) => e.key));
+}
+
 /** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key).
  *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
+  saved: ReadonlySet<string>,
   prompter: Prompter,
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
@@ -148,18 +191,20 @@ async function promptEntries(
       const rawDefault = defaults.get(key) ?? "";
       const isDefault = value === sanitizeValue(rawDefault).trim();
       const emptiedDefault = answer === "" && rawDefault !== "";
-      let problem: string | undefined;
-      if (emptiedDefault || (value !== "" && !hasVisibleContent(value))) {
-        problem = isDefault
-          ? "the saved value has no visible text. Type a value or - to clear"
-          : "that value has no visible text";
-      } else if (value.length > MAX_VALUE) {
-        problem = isDefault
-          ? `the saved value is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
-          : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`;
-      }
+      const problem = emptiedDefault ? "invisible" : value === "" ? undefined : valueProblem(value);
       if (problem !== undefined) {
-        console.log(message(`${c.faint}${problem}${c.reset}`));
+        // Name the default's real source when it is the problem (a saved value is the user's own,
+        // a detected one is their environment's), and the two ways out.
+        const which = `the ${saved.has(key) ? "saved" : "detected"} value`;
+        const note =
+          problem === "invisible"
+            ? isDefault
+              ? `${which} has no visible text. Type a value or - to clear`
+              : "that value has no visible text"
+            : isDefault
+              ? `${which} is ${value.length} characters; the cap is ${MAX_VALUE}. Type a shorter value or - to clear`
+              : `that value is ${value.length} characters; the cap is ${MAX_VALUE}`;
+        console.log(message(`${c.faint}${note}${c.reset}`));
         continue;
       }
       if (value) chosen.set(key, value);
@@ -270,9 +315,10 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // republish nobody is prompted, so `values` is server state, not answers. A 412 reload rebases
   // onto the live profile and re-applies exactly these.
   const edits = new Map<CuratedKey, string | undefined>();
+  let saved = savedKeys(existing);
   const prompt = async (prompter: Prompter): Promise<void> => {
     const before = values;
-    values = await promptEntries(values, prompter);
+    values = await promptEntries(values, saved, prompter);
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
       if (after !== before.get(key)) edits.set(key, after);
@@ -284,28 +330,15 @@ export async function publish(io: InteractiveIO): Promise<void> {
   if (!io.interactive || !io.prompter || io.yes) {
     // Detection is the one input that skips both the argv and prompt pre-flights (env-derived
     // values land in the defaults verbatim), and this branch has no re-ask to recover with —
-    // refuse locally instead of shipping a doomed POST. Scoped to the curated map: carried
-    // entries are deliberately exempt (a newer server's caps may exceed this build's, and its
-    // visibility rule is its own to enforce), and the interactive paths recover through the
-    // re-prompt/edit loop instead.
-    // Name the real source: buildDefaults prefers a saved value over detection, and a value
-    // stored before the server enforced a rule is the user's, not their environment's.
-    const saved = new Set((existing?.entries ?? []).map((e) => e.key));
-    for (const [key, v] of values) {
-      const problem = !hasVisibleContent(v)
-        ? "has no visible text. Set one"
-        : v.length > MAX_VALUE
-          ? `is ${v.length} characters; the cap is ${MAX_VALUE}. Set a shorter one`
-          : undefined;
-      if (problem === undefined) continue;
-      const source = saved.has(key) ? "saved" : "detected";
-      console.error(
-        message(`The ${source} ${KEY_LABELS[key]} value ${problem}: ymmv set ${key} <value>.`),
-      );
+    // refuse locally instead of shipping a doomed POST; the interactive path recovers through
+    // the re-prompt/edit loop instead.
+    const entries = assemble();
+    const refusal = writeRuleRefusal(entries, existing);
+    if (refusal !== undefined) {
+      console.error(message(refusal));
       process.exitCode = 1;
       return;
     }
-    const entries = assemble();
     showCard(entries);
     printPublished(
       await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
@@ -316,14 +349,15 @@ export async function publish(io: InteractiveIO): Promise<void> {
 
   try {
     // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
-    // card first — Enter republishes as-is, e edits — unless a merged default fails a write rule
-    // (detection filled a key the saved profile lacks with an invisible-only or over-cap value):
-    // then walk first, where the re-ask names the saved value and offers "-", rather than offer a
-    // card the server would 422 and re-offer unchanged.
-    const failsRule = ([, v]: [CuratedKey, string]) =>
-      !hasVisibleContent(v) || v.length > MAX_VALUE;
-    if (!existing || [...values].some(failsRule)) await prompt(io.prompter);
+    // card first — Enter republishes as-is, e edits.
+    if (!existing) await prompt(io.prompter);
+    const failsRule = ([, v]: [CuratedKey, string]) => valueProblem(v) !== undefined;
     for (;;) {
+      // Never offer a card the server would 422 and this loop would re-offer unchanged: when a
+      // merged default fails a write rule (a value saved before the rule existed, or a detected
+      // value filling a key the saved profile lacks), walk first, where the re-ask names the saved
+      // value and offers "-". At the loop top so a 412 reload's fresh merge is gated the same way.
+      if ([...values].some(failsRule)) await prompt(io.prompter);
       const entries = assemble();
       showCard(entries);
       const ans = await io.prompter.choice(
@@ -371,6 +405,7 @@ export async function publish(io: InteractiveIO): Promise<void> {
               else rebased.set(key, value);
             }
             values = rebased;
+            saved = savedKeys(fresh.profile);
             carried = unknownEntries(fresh.profile);
             extras = fresh.profile.extras;
             ifMatch = fresh.etag;
@@ -512,11 +547,19 @@ export async function runSet(target: SetTarget): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  // The target itself was pre-flighted at the argv boundary; this catches a SAVED value that no
+  // longer passes, so the refusal names that key instead of reading as a rejection of the set.
+  const refusal = writeRuleRefusal(entries, existing);
+  if (refusal !== undefined) {
+    console.error(message(refusal));
+    process.exitCode = 1;
+    return;
+  }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
   });
-  // argv echo: same strip-escapes rule as every rejection echo (an ESC-only value is invisible
-  // to the pre-flight only after sanitizing, so the raw string can still carry a sequence).
+  // argv echo: same strip-escapes rule as every rejection echo. The pre-flight only rejects a
+  // value with nothing visible, so one mixing an escape sequence with real text arrives here raw.
   const line =
     target.kind === "curated"
       ? `Set ${KEY_LABELS[target.key]} = ${sanitizeValue(target.value)}.`
@@ -566,10 +609,17 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
     console.log(message(line));
     return; // idempotent no-op: exit 0, and crucially no network write
   }
+  // Same as runSet: a SAVED value that no longer passes a write rule is named before the POST.
+  const refusal = writeRuleRefusal(entries, existing);
+  if (refusal !== undefined) {
+    console.error(message(refusal));
+    process.exitCode = 1;
+    return;
+  }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
   });
-  // removed.* comes off the wire (unlike runSet's echo of the user's own argv) — sanitize it.
+  // removed.* comes off the wire — sanitize it, as every echo here is (runSet's argv one too).
   const line =
     target.kind === "curated"
       ? `Removed ${KEY_LABELS[target.key]} (was "${sanitizeValue(removed.value)}").`

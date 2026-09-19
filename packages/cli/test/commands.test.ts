@@ -712,6 +712,35 @@ describe("publish", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("412 mid-loop: a reloaded value that fails a write rule walks the prompts before the next card", async () => {
+    // The concurrent write left a saved value with no visible text (stored before the server
+    // enforced the rule). Re-offering the rebased card as-is would POST it, 422, and re-offer it
+    // unchanged; the loop-top gate walks the prompts first, where the re-ask names the saved value.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const before = prof("me", [{ key: "editor", value: "vim" }]);
+    const after = prof("me", [{ key: "editor", value: String.fromCodePoint(0x200b) }]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412)) // POST 1
+      .mockResolvedValueOnce(own(after, '"B"')) // the reload carries the bad value
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST 2
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return def ?? "";
+      editorAsks += 1;
+      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter, then a real value
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // no walk before the first card
+    expect(logs.join("\n")).toMatch(/the saved value has no visible text/);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+    expect(posted(fetchFn, 3).entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(fetchFn).toHaveBeenCalledTimes(4); // no 422 round-trip
+  });
+
   it("412 mid-loop: explicit edits survive the rebase, cleared keys included", async () => {
     // The user edited (e) before confirming: Editor typed, OS cleared with "-". Another device
     // then changed editor+os+shell. The rebase keeps the two edits and takes the live shell.
@@ -925,7 +954,7 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(
-      /the saved value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
+      /the detected value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
@@ -957,7 +986,7 @@ describe("publish", () => {
   it("an invisible-only DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
     // Detection only trims env values, so a $EDITOR of U+061C U+200B lands in the defaults. The
     // real prompter returns the SANITIZED default on Enter (the bidi control U+061C stripped, the
-    // zero-width space kept), and the note must still say the saved value is the problem and
+    // zero-width space kept), and the note must still say the detected value is the problem and
     // offer "-"; then a typed visible value publishes.
     vi.mocked(loadToken).mockResolvedValue(stored());
     const detected = `${String.fromCodePoint(0x061c)}${String.fromCodePoint(0x200b)}`;
@@ -977,7 +1006,7 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(
-      /the saved value has no visible text\. Type a value or - to clear/,
+      /the detected value has no visible text\. Type a value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
@@ -1030,7 +1059,7 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(
-      /the saved value has no visible text\. Type a value or - to clear/,
+      /the detected value has no visible text\. Type a value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
@@ -1293,7 +1322,7 @@ describe("set", () => {
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
     expect(process.exitCode).toBe(1);
     expect(errs.join("\n")).toMatch(
-      /The saved Editor value has no visible text\. Set one: ymmv set editor <value>\./,
+      /The saved Editor value has no visible text\. Set one: ymmv set editor <value>, or remove it: ymmv unset editor\./,
     );
   });
 
@@ -1349,6 +1378,72 @@ describe("set", () => {
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: `Hel${esc}[2Jix` }]);
     const out = logs.join("\n");
     expect(out).toContain("Set Editor = Helix.");
+    expect(out).not.toContain(esc);
+  });
+
+  it("set refuses before the POST when a SAVED value no longer passes a write rule, naming that key", async () => {
+    // A value stored before the server enforced the rule would make the server 422 the whole
+    // republish with copy that reads as a rejection of the value just typed. Name the real one.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: String.fromCodePoint(0x200b) }])),
+      );
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "shell", value: "zsh" });
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the read only, no POST
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(
+      /The saved Editor value has no visible text\. Set one: ymmv set editor <value>, or remove it: ymmv unset editor\./,
+    );
+  });
+
+  it("set of the failing key itself replaces it and publishes (the argv value was pre-flighted)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: String.fromCodePoint(0x200b) }])),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "editor", value: "Zed" });
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Zed" }]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("unset refuses before the POST when another SAVED value no longer passes a write rule", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValueOnce(
+      own(
+        prof("me", [
+          { key: "editor", value: String.fromCodePoint(0x200b) },
+          { key: "shell", value: "zsh" },
+        ]),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "shell" });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toMatch(/The saved Editor value has no visible text/);
+  });
+
+  it("the extra set confirmation sanitizes both the echoed label and value", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const esc = String.fromCharCode(0x1b);
+    const label = `Key${esc}[31mboard`;
+    const value = `HH${esc}[2JKB`;
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me")))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "extra", label, value });
+    expect(posted(fetchFn).extras).toEqual([{ label, value }]); // stored verbatim
+    const out = logs.join("\n");
+    expect(out).toContain("Set extra Keyboard = HHKB.");
     expect(out).not.toContain(esc);
   });
 

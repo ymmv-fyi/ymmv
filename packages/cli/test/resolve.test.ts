@@ -150,6 +150,20 @@ describe("resolveArg", () => {
     });
   });
 
+  it("`set <key>` with an ANSI-only value → local error (it would render as a blank on the card)", () => {
+    // ESC[31m has visible bytes by the shared rule (the server would store it) but sanitizes to
+    // nothing on every CLI render, so the user would confirm a blank; the CLI judges what it shows.
+    const esc = String.fromCharCode(0x1b);
+    expect(resolveArg(["set", "editor", `${esc}[31m`])).toEqual({
+      kind: "error",
+      message: "That value has no visible text.",
+    });
+    expect(resolveArg(["set", "editor", `${esc}[31mvim`])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value: `${esc}[31mvim` },
+    });
+  });
+
   it("an invisible char decorating real text is the user's data: still parses, kept verbatim", () => {
     expect(resolveArg(["set", "editor", `${zwsp}vim`])).toEqual({
       kind: "set",
@@ -200,6 +214,15 @@ describe("resolveArg", () => {
     expect(resolveArg(["set", "--extra", `${"l".repeat(65)}=-`])).toEqual({
       kind: "unset",
       target: { kind: "extra", label: "l".repeat(65) },
+    });
+  });
+
+  it("`unset --extra <invisible>` still resolves: it is the removal path for a label stored before the rule", () => {
+    // Deliberately asymmetric with parseSet (which refuses an invisible-only label): the server
+    // has refused such labels only since the rule shipped, and unset is how an older one goes.
+    expect(resolveArg(["unset", "--extra", zwsp])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: zwsp },
     });
   });
 

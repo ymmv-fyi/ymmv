@@ -161,6 +161,16 @@ describe("serverMessage", () => {
     expect(long).toHaveLength(201); // 200 + ellipsis
   });
 
+  it("cuts the cap between code points, never inside a surrogate pair", async () => {
+    // Code point 200 is astral: a UTF-16 cut would keep its high surrogate alone, printing a
+    // replacement glyph and reading as "visible" to the guard.
+    const smile = String.fromCodePoint(0x1f600);
+    const msg = `${"x".repeat(199)}${smile}tail`;
+    expect(await serverMessage(res(JSON.stringify({ message: msg })))).toBe(
+      `${"x".repeat(199)}${smile}…`,
+    );
+  });
+
   it("returns undefined for a non-JSON body (edge WAF block page) — caller's fallback stands", async () => {
     expect(await serverMessage(res("<html>blocked</html>"))).toBeUndefined();
   });
@@ -171,11 +181,19 @@ describe("serverMessage", () => {
     expect(await serverMessage(res(JSON.stringify({ message: 123 })))).toBeUndefined();
   });
 
-  it("judges visibility on the untruncated message — a long invisible-only body is not a bare ellipsis", async () => {
-    // wireText appends a visible "…" past 200 chars; testing the truncated form would let 201
-    // zero-width spaces through and print "…" as the server's message.
-    const long = String.fromCodePoint(0x200b).repeat(201);
-    expect(await serverMessage(res(JSON.stringify({ message: long })))).toBeUndefined();
+  it('judges visibility on what will print, minus the cap\'s ellipsis — never blanks plus "…"', async () => {
+    // wireText appends a visible "…" past 200 chars. Testing the capped form would let 201
+    // zero-width spaces through on the ellipsis alone; testing the whole body would let visible
+    // text that only starts past the cap through, printing 200 invisibles and "…".
+    const zwsp = String.fromCodePoint(0x200b);
+    expect(await serverMessage(res(JSON.stringify({ message: zwsp.repeat(201) })))).toBeUndefined();
+    expect(
+      await serverMessage(res(JSON.stringify({ message: `${zwsp.repeat(200)}boom` }))),
+    ).toBeUndefined();
+    // Visible text inside the cap still prints, capped.
+    const kept = await serverMessage(res(JSON.stringify({ message: `boom${zwsp.repeat(300)}` })));
+    expect(kept?.startsWith("boom")).toBe(true);
+    expect(kept).toHaveLength(201);
   });
 
   it("returns undefined when the message sanitizes to nothing visible — never a blank error line", async () => {

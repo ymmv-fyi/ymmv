@@ -12,7 +12,9 @@
  * which render as nothing too. `.trim()` does NOT remove these (it strips the Zs whitespace set
  * plus U+FEFF), so a field of only U+200B or U+0001 passes an emptiness check, stores, and
  * renders as a blank row. Reject a field only when NOTHING visible survives — an invisible char
- * decorating real text is the user's data and is stored verbatim.
+ * decorating real text is the user's data and is stored verbatim. This is Unicode's
+ * classification, not a render check: a graphic character whose glyph happens to be blank
+ * (U+2800 BRAILLE PATTERN BLANK) passes.
  *
  * A predicate only, never a sanitizer: @ymmv/shared never rewrites a value (each surface owns its
  * own strip — see the web's lib/sanitize.ts and the CLI's render.ts).

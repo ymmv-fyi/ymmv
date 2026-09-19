@@ -4,6 +4,7 @@ import {
   displayUrl,
   type Entry,
   type ExtraDiff,
+  hasVisibleContent,
   KEY_LABELS,
   type Profile,
 } from "@ymmv/shared";
@@ -81,6 +82,15 @@ const BIDI_RE = /\p{Bidi_Control}/gu;
 /** Neutralize an untrusted value for terminal display: strip ANSI + control + bidi chars. */
 export function sanitizeValue(value: string): string {
   return value.replace(ANSI_RE, "").replace(CTRL_RE, "").replace(BIDI_RE, "");
+}
+
+/** The CLI's visibility pre-flight: the shared rule applied to the form the user is SHOWN. An
+ *  ANSI sequence like ESC[31m has visible bytes by the shared rule (the server stores it) but
+ *  sanitizes to nothing here, so the card would show a blank the user then confirms. Judging the
+ *  sanitized form keeps the card and the consent in agreement; the CLI refuses a little more than
+ *  the server, never less. */
+export function showsVisibleText(value: string): boolean {
+  return hasVisibleContent(sanitizeValue(value));
 }
 
 /**
