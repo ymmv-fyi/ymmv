@@ -12,6 +12,8 @@ import {
 } from "@ymmv/shared";
 import type { APIRoute } from "astro";
 import { authenticateRequest } from "../../../lib/auth.ts";
+import { noStoreJson } from "../../../lib/json.ts";
+import { profileEtag, readOwnProfile } from "../../../lib/profile-read.ts";
 import { checkWriteRateLimit } from "../../../lib/rate-limit.ts";
 
 // Input caps live in @ymmv/shared (`caps.ts`) so the CLI pre-flights the same numbers this handler
@@ -33,12 +35,52 @@ function hasVisibleContent(s: string): boolean {
   return s.replace(INVISIBLE_RE, "").trim() !== "";
 }
 
+// Every reply here is bearer-authed, so every one is no-store (errors included).
 function err(status: number, error: string, extra?: Record<string, unknown>): Response {
-  return new Response(JSON.stringify({ error, ...extra }), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+  return noStoreJson(status, { error, ...extra });
 }
+
+/** The entity-tag an `If-Match` carries, unquoted — or null when the header is absent or empty
+ *  (an unconditional write, which every CLI before the precondition sends). Accepts `"<tag>"`,
+ *  bare `<tag>`, and a weak `W/"<tag>"`: the tag IS the server's own stamp, so weak comparison
+ *  loses nothing, and an edge that compresses a reply may weaken the validator it forwards (RFC
+ *  9110 would refuse it; that would turn every conditional write into a 412). Anything else
+ *  (`*`, a list) is compared verbatim and so never matches: a malformed precondition fails closed
+ *  as a 412 rather than opening the write. */
+function ifMatchTag(request: Request): string | null {
+  const raw = request.headers.get("if-match")?.trim() ?? "";
+  if (raw === "") return null;
+  const strong = raw.startsWith("W/") ? raw.slice(2) : raw;
+  const quoted = /^"(.*)"$/.exec(strong);
+  return quoted ? quoted[1] : strong;
+}
+
+// GET /api/v1/profile — the caller's OWN live profile, bearer-authed and no-store: the uncached
+// read the CLI's read-modify-write commands (publish/set/unset) build their merge on. The public
+// GET /api/v1/u/<handle> declares an edge-cache policy and may one day be served stale; a merge
+// built on a stale read would silently drop writes made moments earlier, so this read never is.
+// Carries the same ETag as the public read; the CLI sends the same stamp back as If-Match below.
+// 404 {error:"not_found"} when the account binds no handle or has not published — the CLI treats
+// exactly that envelope as "no profile yet" (an older Worker's HTML 404 must NOT read as one).
+// The read is keyed on the authenticated github_id, never on the handle the token maps to, so a
+// rename or reclaim racing this request can't hand the caller someone else's profile. No CORS
+// (bearer endpoint) and no RL binding: same class as GET /api/v1/auth/whoami, covered by the zone
+// WAF rule (infra/waf-ratelimit.sh names both GETs).
+export const GET: APIRoute = async ({ request }) => {
+  try {
+    const githubId = await authenticateRequest(request, env.DB);
+    if (githubId === null) return noStoreJson(401, { error: "unauthorized" });
+    const profile = await readOwnProfile(env.DB, githubId);
+    if (!profile) return noStoreJson(404, { error: "not_found" });
+    return noStoreJson(200, profile, { etag: profileEtag(profile) });
+  } catch (e) {
+    console.error("own-profile read failed", e);
+    return noStoreJson(500, {
+      error: "internal_error",
+      message: "The server hit an error reading your profile. Try again shortly.",
+    });
+  }
+};
 
 // POST /api/v1/profile — authed upsert of one user's profile.
 //
@@ -54,6 +96,9 @@ export const POST: APIRoute = async ({ request }) => {
   // Per-identity write rate limit (after auth so we can key on github_id, before any D1 work).
   const limited = await checkWriteRateLimit(githubId);
   if (limited) return limited;
+
+  // Optional precondition: the ETag the caller read (see GET above). Null = unconditional.
+  const expectedTag = ifMatchTag(request);
 
   let body: unknown;
   try {
@@ -179,29 +224,55 @@ export const POST: APIRoute = async ({ request }) => {
 
     // One atomic batch — D1 has no interactive transactions. Publish never writes handle or
     // handle_lower: it stamps the row published (updated_at + extras) and rewrites the entries,
-    // and EVERY statement re-checks the bind (WHERE handle_lower = ?) inside the transaction. That
+    // and EVERY write statement re-checks the bind (handle_lower = ?) inside the transaction. That
     // closes the guard-to-batch TOCTOU as a CAS: if a concurrent login rebound this account (GitHub
     // rename on another device) or a concurrent DELETE vacated it (handle_lower NULL), the whole
     // batch no-ops — a stale publish can neither undo a GitHub-proven rename nor resurrect a
     // deleted profile. Delete-then-insert entries so a republish drops keys.
-    const results = await env.DB.batch([
+    //
+    // The same gate carries the If-Match precondition: `(? IS NULL OR updated_at = ?)` is inert
+    // without a tag (every statement is byte-identical to the unconditional write) and otherwise
+    // requires the stored stamp to still equal the one the caller read, so a merge built on a
+    // stale read no-ops instead of clobbering the write that landed in between. The stamp UPDATE
+    // runs LAST because it rewrites the very column the entry statements gate on. A NULL stamp
+    // (never published, or vacated since the read) never equals a tag, which is the right verdict:
+    // what the caller read is gone. Known gap: two publishes stamped in the same millisecond share
+    // a tag, so a reader of the first can't see the second (needs two same-account writes in one
+    // millisecond under the per-identity write limit; a revision column would close it).
+    const gate = "AND handle_lower = ? AND (? IS NULL OR updated_at = ?)";
+    const gateBinds = [handleLower, expectedTag, expectedTag] as const;
+    const writes = [
       env.DB.prepare(
-        "UPDATE users SET extras = ?, updated_at = ? WHERE github_id = ? AND handle_lower = ?",
-      ).bind(extrasJson, now, githubId, handleLower),
-      env.DB.prepare(
-        "DELETE FROM profile_entries WHERE github_id = ? " +
-          "AND EXISTS (SELECT 1 FROM users WHERE github_id = ? AND handle_lower = ?)",
-      ).bind(githubId, githubId, handleLower),
+        `DELETE FROM profile_entries WHERE github_id = ? AND EXISTS (SELECT 1 FROM users WHERE github_id = ? ${gate})`,
+      ).bind(githubId, githubId, ...gateBinds),
       ...[...entryMap].map(([key, value]) =>
         env.DB.prepare(
-          "INSERT INTO profile_entries (github_id, key, value) " +
-            "SELECT ?, ?, ? FROM users WHERE github_id = ? AND handle_lower = ?",
-        ).bind(githubId, key, value, githubId, handleLower),
+          `INSERT INTO profile_entries (github_id, key, value) SELECT ?, ?, ? FROM users WHERE github_id = ? ${gate}`,
+        ).bind(githubId, key, value, githubId, ...gateBinds),
       ),
-    ]);
-    // The stamp UPDATE matching zero rows means the bind changed mid-flight (and the shared WHERE
-    // made every other statement no-op with it) — same verdict as the guard, one race later.
-    if ((results[0]?.meta.changes ?? 0) === 0) {
+      env.DB.prepare(
+        `UPDATE users SET extras = ?, updated_at = ? WHERE github_id = ? ${gate}`,
+      ).bind(extrasJson, now, githubId, ...gateBinds),
+    ];
+    // Conditional writes only: one more statement reads the bind inside the same transaction, so
+    // a zero-change batch is classified from the snapshot that produced it, never a later read.
+    const probe =
+      expectedTag === null
+        ? []
+        : [env.DB.prepare("SELECT handle_lower FROM users WHERE github_id = ?").bind(githubId)];
+    const results = await env.DB.batch<{ handle_lower: string | null }>([...writes, ...probe]);
+    const stampResult = results[writes.length - 1];
+    const probeRow = results[writes.length]?.results[0];
+    if ((stampResult?.meta.changes ?? 0) === 0) {
+      // Nothing written. Bind moved (rename / vacate / limbo) → 409, the verdict deployed CLIs
+      // self-heal from by re-logging-in — and it wins over a stamp mismatch, since a re-read under
+      // the old handle can't fix a moved bind. Bind intact but the stamp moved → 412: the caller's
+      // read is stale, and only a caller that sent a tag (and so has a probe row) can land here.
+      if (probeRow?.handle_lower === handleLower) {
+        return err(412, "precondition_failed", {
+          message: "Your profile changed since this command read it. Re-run the command.",
+        });
+      }
       return err(409, "handle_not_bound", {
         message: "Publish uses the handle bound at login. Run `ymmv login` and retry.",
       });
@@ -215,10 +286,7 @@ export const POST: APIRoute = async ({ request }) => {
 
   // Echo the STORED handle, not the payload: display casing is login-proven (GitHub's exact login
   // casing) and a publish must not be able to drift it via a case-variant payload.
-  return new Response(JSON.stringify({ ok: true, handle: boundHandle }), {
-    status: 200,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
+  return noStoreJson(200, { ok: true, handle: boundHandle });
 };
 
 // DELETE /api/v1/profile — authed hard-delete (v1 delete semantics). One atomic batch:
@@ -262,8 +330,5 @@ export const DELETE: APIRoute = async ({ request }) => {
     });
   }
 
-  return new Response(JSON.stringify({ ok: true }), {
-    status: 200,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
-  });
+  return noStoreJson(200, { ok: true });
 };

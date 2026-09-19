@@ -16,7 +16,10 @@ The CLI's login parse requires every field the current mint response carries (`t
 `github_id`); a Worker that omits one fails every login with "Unexpected response". Every
 `YMMV_TOKEN` command needs `GET /api/v1/auth/whoami` too: against a Worker without it, `ymmv -y`,
 `ymmv set`/`unset`, and `ymmv delete` fail with an error saying the server is behind the CLI
-release (`ymmv <handle>` still renders, without a diff). A tag release already orders this
+release (`ymmv <handle>` still renders, without a diff). Every write command (`ymmv`, `ymmv set`,
+`ymmv unset`) also needs `GET /api/v1/profile` (the authed own-profile read) and a `POST
+/api/v1/profile` that honours `If-Match`: against a Worker without the GET they fail with the same
+"behind this CLI release" error rather than publishing from scratch. A tag release already orders this
 (`publish-cli` needs `deploy-worker` in `release.yml`). Manually: never roll
 the Worker back to a build older than the published CLI expects, and when a manual deploy
 precedes a CLI tag, deploy first, tag second.
@@ -71,7 +74,8 @@ Select-String packages/web/dist/server/wrangler.json -Pattern 'ymmv-production|R
 ### 4. Zone WAF rate-limit rule, BEFORE the deploy (only when `infra/waf-ratelimit.sh` changed)
 
 The committed rule expression is the source of truth for the edge rate limit, and it is the only
-limiter in front of `GET /api/v1/auth/whoami` (no Workers binding). When the expression changed
+limiter in front of the bearer GETs, `/api/v1/auth/whoami` and `/api/v1/profile` (no Workers
+binding). When the expression changed
 since the last deploy, apply it first, so the Worker never serves a new endpoint the rule does not
 yet cover; then verify. Needs a zone WAF-edit API token. Still from the repo root:
 

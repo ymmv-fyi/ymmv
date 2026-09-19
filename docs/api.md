@@ -71,6 +71,10 @@ behavior):
 A freshly published handle appears within about 10 seconds; a republish is visible to
 its owner immediately (`max-age=0`).
 
+A 200 also carries `ETag: "<updated_at>"`, a validator equal to the body's `updated_at`
+(exposed to browser clients via `access-control-expose-headers`). 301 and 404 responses
+carry none.
+
 ## CORS
 
 Every response this endpoint emits carries `access-control-allow-origin: *`, and OPTIONS

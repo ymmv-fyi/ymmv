@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import type { APIRoute } from "astro";
-import { readCacheControl, resolveProfile } from "../../../../lib/profile-read.ts";
+import { profileEtag, readCacheControl, resolveProfile } from "../../../../lib/profile-read.ts";
 
 // GET /api/v1/u/<handle> — the public JSON contract (shared/src/types.ts → Profile).
 // Precedence + edge cache live in the shared resolveProfile/readCacheControl, so this JSON
@@ -15,7 +15,12 @@ import { readCacheControl, resolveProfile } from "../../../../lib/profile-read.t
 // Public read-only data: the whole handler surface (including errors) is cross-origin readable.
 // Errors carry it too — without ACAO a browser fetch sees an opaque CORS TypeError instead of
 // the status, so a consumer couldn't tell an outage from a network failure.
-const CORS = { "access-control-allow-origin": "*" } as const;
+// ETag is not a CORS-safelisted response header: without the expose grant a browser client
+// reads null where curl sees the validator docs/api.md promises.
+const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-expose-headers": "etag",
+} as const;
 
 export const GET: APIRoute = async ({ params }) => {
   try {
@@ -43,12 +48,15 @@ export const GET: APIRoute = async ({ params }) => {
       });
     }
 
+    // ETag (200 only): the write API accepts it back as If-Match, so a client that read here can
+    // publish without racing another writer. Additive header, not a body-shape change.
     return new Response(JSON.stringify(result.profile), {
       status: 200,
       headers: {
         ...CORS,
         "content-type": "application/json",
         "cache-control": readCacheControl("live"),
+        etag: profileEtag(result.profile),
       },
     });
   } catch (e) {
