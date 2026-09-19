@@ -853,6 +853,123 @@ describe("unset", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('extra: a label containing "=" is removed when it matches (curl-written rows)', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Mode=Vi", value: "yes" }]))) // GET
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "mode=vi" });
+    const body = posted(fetchFn);
+    expect(body.extras).toEqual([]);
+    expect(logs).toContain('\n  Removed extra "Mode=Vi" (was "yes"). → https://ymmv.fyi/me');
+  });
+
+  it('extra: "Label=Value" with no match → no-op plus just-the-label note, exit 0, no POST', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Keyboard", value: "HHKB" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "Keyboard=HHKB" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs).toContain(
+      '\n  No extra "Keyboard=HHKB".\n  (unset takes just the label: ymmv unset --extra "Keyboard")',
+    );
+    expect(errs).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('extra: a leading "=" has no head, so no note (exit 0)', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Keyboard", value: "HHKB" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "=foo" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs).toContain('\n  No extra "=foo".');
+    expect(logs.join("\n")).not.toMatch(/just the label/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('extra: the note trims the head ("Keyboard =HHKB" → "Keyboard")', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Keyboard", value: "HHKB" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "Keyboard =HHKB" });
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs.join("\n")).toContain('ymmv unset --extra "Keyboard")');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('extra: a "=" label that misses with no stored head is the plain no-op (idempotent re-run)', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Mode=Vi", value: "yes" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "Mode=Vim" }); // typo of a curl-written label
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs).toContain('\n  No extra "Mode=Vim".');
+    expect(logs.join("\n")).not.toMatch(/just the label/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("extra: the pasteable suggestion falls back to a placeholder for a shell-unsafe head", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "$(echo x)", value: "y" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "$(echo x)=y" });
+    const out = logs.join("\n");
+    expect(out).toContain('ymmv unset --extra "Label")');
+    expect(out).not.toContain('--extra "$(');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("extra: the pasteable head keeps plain punctuation (digits, dot, space)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: "Neovim 0.10", value: "stable" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: "Neovim 0.10=stable" });
+    expect(logs.join("\n")).toContain('ymmv unset --extra "Neovim 0.10")');
+  });
+
+  it("extra: a lone quote in the head is enough to fall back to the placeholder", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: 'a"b', value: "x" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: 'a"b=x' });
+    const out = logs.join("\n");
+    expect(out).toContain('ymmv unset --extra "Label")');
+    expect(out).not.toContain('--extra "a"');
+  });
+
+  it("extra: the no-op echo strips escapes from argv, and the note never carries them", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const esc = String.fromCharCode(0x1b); // explicit code point, never a raw literal
+    const dirty = `Key${esc}[31mboard`;
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [], [{ label: dirty, value: "HHKB" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "extra", label: `${dirty}=HHKB` });
+    const out = logs.join("\n");
+    expect(out).toContain('No extra "Keyboard=HHKB".');
+    expect(out).toContain('ymmv unset --extra "Label")');
+    expect(out).not.toContain(esc);
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("never published (404): friendly nudge, exit 0, no POST", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing());

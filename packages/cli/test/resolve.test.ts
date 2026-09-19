@@ -1,3 +1,4 @@
+import { MAX_LABEL } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { resolveArg } from "../src/resolve.js";
 
@@ -184,10 +185,17 @@ describe("resolveArg", () => {
     expect(resolveArg(["unset", "--extra"]).kind).toBe("error");
   });
 
-  it('`unset --extra "Label=Value"` → just-the-label hint', () => {
-    const cmd = resolveArg(["unset", "--extra", "Keyboard=HHKB"]);
+  it("`unset --extra` over the label cap → cap error before any login or GET", () => {
+    const cmd = resolveArg(["unset", "--extra", "x".repeat(MAX_LABEL + 1)]);
     expect(cmd.kind).toBe("error");
-    if (cmd.kind === "error") expect(cmd.message).toMatch(/just the label/);
+    if (cmd.kind === "error") expect(cmd.message).toMatch(new RegExp(`the cap is ${MAX_LABEL}`));
+  });
+
+  it('`unset --extra "Label=Value"` parses as a label (curl-written labels may contain "=")', () => {
+    expect(resolveArg(["unset", "--extra", "Keyboard=HHKB"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "Keyboard=HHKB" },
+    });
   });
 
   it("`set <key> -` rewrites to unset (dash clears, like the publish prompt)", () => {

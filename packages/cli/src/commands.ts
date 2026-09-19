@@ -437,6 +437,23 @@ export async function runSet(target: SetTarget): Promise<void> {
   console.log(message(`${line}${pagePointer(res.handle)}`));
 }
 
+// The suggestion below is meant to be pasted, so the label rides inside it only when it cannot
+// change the command's meaning: letters, digits, and a few plain separators. Anything else (quotes,
+// `$(`, backticks, escapes, bidi controls) falls back to the generic placeholder.
+const PASTE_SAFE_LABEL = /^[\p{L}\p{N} _.+/:-]+$/u;
+
+/** Muscle-memory nudge for `unset --extra "Label=Value"`: parseSet splits on the first "=", so when
+ *  the part before it names a stored extra, that is almost certainly the label meant. Only reached
+ *  on a miss and only ever adds a line: a genuine "=" label (curl-written) that is already gone
+ *  stays the exit-0 no-op, with the nudge still naming a stored head if one happens to exist. */
+function extraHint(existing: Profile, label: string): string {
+  const eq = label.indexOf("=");
+  const head = eq > 0 ? label.slice(0, eq).trim() : "";
+  if (!head || !applyUnset(existing, { kind: "extra", label: head }).removed) return "";
+  const shown = PASTE_SAFE_LABEL.test(head) ? head : "Label";
+  return `\n(unset takes just the label: ymmv unset --extra "${shown}")`;
+}
+
 /** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST. */
 export async function runUnset(target: UnsetTarget): Promise<void> {
   const cred = await ensureLogin();
@@ -453,13 +470,12 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   }
   const { entries, extras, removed } = applyUnset(existing, target);
   if (!removed) {
-    console.log(
-      message(
-        target.kind === "curated"
-          ? `${KEY_LABELS[target.key]} is not set.`
-          : `No extra "${target.label}".`,
-      ),
-    );
+    // target.label is argv, echoed on a no-op: same strip-escapes rule as every rejection echo.
+    const line =
+      target.kind === "curated"
+        ? `${KEY_LABELS[target.key]} is not set.`
+        : `No extra "${sanitizeValue(target.label)}".${extraHint(existing, target.label)}`;
+    console.log(message(line));
     return; // idempotent no-op: exit 0, and crucially no network write
   }
   const res = await publishProfile(newProfile(handle, entries, extras), cred);
