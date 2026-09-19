@@ -93,6 +93,17 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
     }
   });
 
+  it("covers the own-profile read GET /api/v1/profile in the GET/HEAD arm (bearer, no-store, no binding)", () => {
+    // A bare "/api/v1/profile" atom is satisfied by the POST/DELETE arm alone, so pin the GET arm
+    // itself: the clause after {"GET" "HEAD"} must name the own read next to whoami.
+    const expr = /^RULE_EXPRESSION='(.*)'$/m.exec(script)?.[1] ?? "";
+    const getArm = expr.slice(expr.indexOf('{"GET" "HEAD"}'));
+    expect(getArm).toContain('starts_with(http.request.uri.path, "/api/v1/auth/whoami")');
+    expect(getArm).toContain('starts_with(http.request.uri.path, "/api/v1/profile")');
+    // The public read must stay OUTSIDE the rule: it is the edge-cacheable surface.
+    expect(expr).not.toContain("/api/v1/u");
+  });
+
   it("takes credentials from env only and commits no secret-shaped literals", () => {
     expect(script).toContain("CLOUDFLARE_API_TOKEN");
     expect(script).toContain("CLOUDFLARE_ZONE_ID");

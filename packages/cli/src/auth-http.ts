@@ -153,6 +153,20 @@ export async function mintYmmvToken(accessToken: string): Promise<MintResult> {
   return { token, ...identity };
 }
 
+/** A 404 from a route this CLI release requires: a Worker deployed before it existed. The next
+ *  step depends on who runs that server: a YMMV_API override points at a staging or self-hosted
+ *  Worker the user can update; the default base is ymmv.fyi itself, where the only honest advice
+ *  is that the server is behind this CLI release. `missing` names the route in the user's terms. */
+export function missingRouteError(missing: string): Error {
+  return new Error(
+    `${BASE} has no ${missing}. ${
+      process.env.YMMV_API
+        ? "Point YMMV_API at an up-to-date server."
+        : "The server is behind this CLI release; try again later."
+    }`,
+  );
+}
+
 /**
  * Look up the identity a ymmv token is bound to (GET /api/v1/auth/whoami): YMMV_TOKEN arrives with
  * no server-proven handle or id, and this is what supplies them. Every failure is a plain Error
@@ -172,18 +186,9 @@ export async function fetchWhoami(token: string): Promise<WhoamiResult> {
   if (!res.ok) {
     if (res.status === 401) throw new Error(ENV_TOKEN_REJECTED_MINT_AGAIN);
     if (res.status === 404) {
-      // A Worker deployed before this endpoint existed. No fallback to the unverified YMMV_HANDLE:
-      // a forced 404 must not downgrade the identity check, so this fails with the real diagnosis.
-      // The next step depends on who runs that server: a YMMV_API override points at a staging or
-      // self-hosted Worker the user can update; the default base is ymmv.fyi itself, where the
-      // only honest advice is that the server is behind this CLI release.
-      throw new Error(
-        `${BASE} has no identity lookup for YMMV_TOKEN. ${
-          process.env.YMMV_API
-            ? "Point YMMV_API at an up-to-date server."
-            : "The server is behind this CLI release; try again later."
-        }`,
-      );
+      // No fallback to the unverified YMMV_HANDLE: a forced 404 must not downgrade the identity
+      // check, so this fails with the real diagnosis.
+      throw missingRouteError("identity lookup for YMMV_TOKEN");
     }
     // 429 and everything else (5xx, an edge error page, a 30x under redirect:manual): the server's
     // own {message} when it sent one, plus the retry-after hint. Every env-token command depends

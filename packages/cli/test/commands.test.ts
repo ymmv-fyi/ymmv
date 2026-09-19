@@ -32,8 +32,19 @@ const stored = (o: Partial<StoredToken> = {}): StoredToken => ({
   ...o,
 });
 const jsonRes = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-const missing = () => new Response("not found", { status: 404 });
+/** The Worker's own "no profile" 404 envelope — the ONLY 404 the own-profile read treats as none. */
+const missing = () => jsonRes({ error: "not_found" }, 404);
 const fail = (status: number) => new Response("err", { status }); // a real error, NOT a 404
+/** The own-profile read (GET /api/v1/profile) as the Worker answers it: the profile + its ETag. The
+ *  CLI builds the tag from the body stamp (never the header), so the tag is stamped into the body. */
+const own = (p: Profile, etag = '"2026-01-01"') =>
+  new Response(JSON.stringify({ ...p, updated_at: etag.slice(1, -1) }), {
+    status: 200,
+    headers: { etag },
+  });
+/** The If-Match header of fetch call `call` (a POST), or undefined when none was sent. */
+const ifMatchOf = (fetchFn: { mock: { calls: unknown[][] } }, call: number) =>
+  ((fetchFn.mock.calls[call][1] as RequestInit).headers as Record<string, string>)["if-match"];
 
 /** The Profile JSON the test POSTed: fetch call `call` (default 1, after the GET), its RequestInit body. */
 function posted(fetchFn: { mock: { calls: unknown[][] } }, call = 1): Profile {
@@ -596,6 +607,266 @@ describe("publish", () => {
     expect(choice).toHaveBeenCalledTimes(1); // no re-offer after the abort
   });
 
+  it("reads the OWN profile (bearer, never cached) and sends its ETag back as If-Match", async () => {
+    // The public /api/v1/u/<handle> read declares an edge-cache policy; a merge built on a stale
+    // copy would silently drop a write made moments earlier. The RMW read is the authed one.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: "vim" }]), '"2026-05-05T00:00:00.000Z"'),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/profile$/);
+    expect(init.method).toBeUndefined(); // GET
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer t");
+    expect(init.redirect).toBe("manual");
+    expect(ifMatchOf(fetchFn, 1)).toBe('"2026-05-05T00:00:00.000Z"');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a first publish (no profile yet) sends no If-Match", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(ifMatchOf(fetchFn, 1)).toBeUndefined();
+  });
+
+  it("-y: a 412 (the profile changed since the read) fails with the re-run copy after ONE POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me")))
+      .mockResolvedValueOnce(
+        jsonRes({ error: "precondition_failed", message: "server copy" }, 412),
+      );
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publish({ interactive: false, yes: true })).rejects.toThrow(
+      /Your profile changed since this command read it\. Re-run the command\./,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("an old Worker's non-envelope 404 on the own read aborts — never a from-scratch publish", async () => {
+    // A Worker without GET /api/v1/profile answers the HTML 404. Reading that as "no profile"
+    // would POST an empty merge over whatever is live; the read must throw instead.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>404</html>", { status: 404 }));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(publish({ interactive: false, yes: true })).rejects.toThrow(
+      /behind this CLI release/,
+    );
+    expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
+  });
+
+  it("412 mid-loop: rebases onto the live profile, re-offers, and the second y sends the fresh tag", async () => {
+    // Someone published from another device while the user sat at the confirm. Retrying the same
+    // merge would clobber it; exiting would discard the answers. On a republish nobody was
+    // prompted, so the curated values are server state: the reload must take the LIVE ones.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const foreign = { key: "launcher", value: "Raycast" } as unknown as Profile["entries"][number];
+    const before = prof(
+      "me",
+      [{ key: "editor", value: "vim" }],
+      [{ label: "Launcher", value: "x" }],
+    );
+    const after = prof(
+      "me",
+      [{ key: "editor", value: "emacs" }, foreign],
+      [{ label: "Keyboard", value: "HHKB" }],
+    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412)) // POST 1
+      .mockResolvedValueOnce(own(after, '"B"')) // the reload
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST 2
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ifMatchOf(fetchFn, 1)).toBe('"A"');
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+    const post2 = posted(fetchFn, 3);
+    // No edits were made, so the concurrent curated edit (emacs) is what gets republished, with
+    // the reloaded newer-taxonomy key and extras — never the stale first read.
+    expect(post2.entries).toEqual([{ key: "editor", value: "emacs" }, foreign]);
+    expect(post2.extras).toEqual([{ label: "Keyboard", value: "HHKB" }]);
+    expect(choice).toHaveBeenCalledTimes(2);
+    expect(logs.filter(isCard)).toHaveLength(2); // a fresh card after the reload
+    expect(errs).toContain(
+      "\n  Your profile changed since this command read it. Reloaded the current version; your answers are kept.",
+    );
+    expect(logs.join("\n")).toMatch(/Published me/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("412 mid-loop: explicit edits survive the rebase, cleared keys included", async () => {
+    // The user edited (e) before confirming: Editor typed, OS cleared with "-". Another device
+    // then changed editor+os+shell. The rebase keeps the two edits and takes the live shell.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const before = prof("me", [
+      { key: "editor", value: "vim" },
+      { key: "os", value: "Arch" },
+      { key: "shell", value: "fish" },
+    ]);
+    const after = prof("me", [
+      { key: "editor", value: "emacs" },
+      { key: "os", value: "Debian" },
+      { key: "shell", value: "zsh" },
+    ]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    // Enter keeps the default (the prompter hands it back); "-" clears.
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Neovim" : label === "OS" ? "-" : (def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+    const prompter = stubPrompter({ ask, choice });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "shell", value: "zsh" },
+    ]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("412 then a deleted-meanwhile re-read (404) refuses: nothing recreated, nothing further sent", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "vim" }]), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await expect(publish({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /deleted since this command read it/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(choice).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 412 reload after publishProfile's own 401 heal goes out under the NEW token", async () => {
+    // The heal swaps the stored token mid-loop; the command's in-memory credential is the old
+    // one. The reload must re-read the store, or it 401s seconds after a successful login.
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(stored()) // the command's own login
+      .mockResolvedValue(stored({ token: "t2" })); // after the heal
+    vi.mocked(login).mockResolvedValue(undefined); // the device flow succeeds
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"A"'))
+      .mockResolvedValueOnce(new Response("{}", { status: 401 })) // POST → heal
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412)) // healed retry
+      .mockResolvedValueOnce(own(prof("me"), '"B"')) // the reload
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await publish({ interactive: true, yes: false, prompter });
+    const reload = fetchFn.mock.calls[3]?.[1] as RequestInit;
+    expect((reload.headers as Record<string, string>).authorization).toBe("Bearer t2");
+    expect(ifMatchOf(fetchFn, 4)).toBe('"B"');
+    expect(logs.join("\n")).toMatch(/Published me/);
+  });
+
+  it("a second 412 reloads again: every retry carries the tag of the read it was built on", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me"), '"B"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me"), '"C"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await publish({ interactive: true, yes: false, prompter });
+    expect([ifMatchOf(fetchFn, 1), ifMatchOf(fetchFn, 3), ifMatchOf(fetchFn, 5)]).toEqual([
+      '"A"',
+      '"B"',
+      '"C"',
+    ]);
+    expect(choice).toHaveBeenCalledTimes(3);
+    expect(logs.join("\n")).toMatch(/Published me/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("412 then a reload that resolves a DIFFERENT handle refuses — no second POST", async () => {
+    // A rename (re-login on another device) landed while the user sat at the confirm. The reload
+    // is checked exactly like the pre-loop read: publishing the merge under the old handle would
+    // write it to whatever now answers there.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me-renamed"), '"B"'));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await expect(publish({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /your profile now lives at "me-renamed"/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(choice).toHaveBeenCalledTimes(1);
+  });
+
+  it("412 then a transiently failing re-read aborts (no further POST), like the pre-loop read", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(fail(500));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
+    await expect(publish({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /fetch failed/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(choice).toHaveBeenCalledTimes(1);
+  });
+
+  it("n after a 412 reload aborts cleanly with nothing further sent", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me"), '"B"'));
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      ask: vi.fn(async () => ""),
+      choice: vi.fn().mockResolvedValueOnce("y").mockResolvedValueOnce("n"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(logs).toContain("\n  Aborted. Nothing published.");
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("an interactive answer exactly at the cap is accepted without a re-ask", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
@@ -704,6 +975,7 @@ describe("set", () => {
     await runSet({ kind: "extra", label: "Launcher", value: "Raycast" });
     const body = posted(fetchFn);
     expect(body.extras).toEqual([{ label: "Launcher", value: "Raycast" }]);
+    expect(ifMatchOf(fetchFn, 1)).toBeUndefined(); // nothing was read, so nothing to condition on
   });
 
   it("refuses when the bound handle is null (reserved username)", async () => {
@@ -721,6 +993,43 @@ describe("set", () => {
     await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
       /fetch failed/,
     );
+  });
+
+  it("reads the own profile and sends its ETag back as If-Match", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"E"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runSet({ kind: "curated", key: "shell", value: "zsh" });
+    expect(String(fetchFn.mock.calls[0]?.[0])).toMatch(/\/api\/v1\/profile$/);
+    expect(ifMatchOf(fetchFn, 1)).toBe('"E"');
+  });
+
+  it("a 412 (the profile changed since the read) fails with the re-run copy after ONE POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me"), '"E"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
+      /changed since this command read it/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("an old Worker's non-envelope 404 on the own read aborts, no POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>404</html>", { status: 404 }));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runSet({ kind: "curated", key: "shell", value: "zsh" })).rejects.toThrow(
+      /behind this CLI release/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("refuses when the read resolves a different handle (server-side rename) — no POST", async () => {
@@ -970,6 +1279,44 @@ describe("unset", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("reads the own profile and sends its ETag back as If-Match", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "vim" }]), '"E"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await runUnset({ kind: "curated", key: "editor" });
+    expect(String(fetchFn.mock.calls[0]?.[0])).toMatch(/\/api\/v1\/profile$/);
+    expect(ifMatchOf(fetchFn, 1)).toBe('"E"');
+  });
+
+  it("a 412 (the profile changed since the read) fails with the re-run copy after ONE POST", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "vim" }]), '"E"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(
+      /changed since this command read it/,
+    );
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("an old Worker's non-envelope 404 on the own read aborts, no POST (not the no-profile no-op)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>404</html>", { status: 404 }));
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(runUnset({ kind: "curated", key: "editor" })).rejects.toThrow(
+      /behind this CLI release/,
+    );
+    expect(noPost(fetchFn)).toBe(true);
+    expect(logs.join("\n")).not.toContain("No profile yet");
+  });
+
   it("never published (404): friendly nudge, exit 0, no POST", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing());
@@ -1145,7 +1492,12 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     expect(logs.join("\n")).toContain("Published me");
     expect(urlOf(fetchFn, 0)).toContain("/api/v1/auth/whoami");
     expect(initOf(fetchFn, 0).redirect).toBe("manual");
-    expect(urlOf(fetchFn, 1)).toContain("/api/v1/u/me"); // read under the VERIFIED handle
+    // The own read: the bearer names the account (no handle in the URL), and the reply is what
+    // the merge is built on — assertHandleUnchanged then compares it to the VERIFIED handle.
+    expect(urlOf(fetchFn, 1)).toMatch(/\/api\/v1\/profile$/);
+    expect((initOf(fetchFn, 1).headers as Record<string, string>).authorization).toBe(
+      "Bearer ymmv_env",
+    );
     expect(posted(fetchFn, 2).handle).toBe("me");
   });
 
@@ -1331,7 +1683,7 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runSet({ kind: "curated", key: "shell", value: "fish" });
     expect(process.exitCode).toBeUndefined();
-    expect(urlOf(fetchFn, 1)).toContain("/api/v1/u/me");
+    expect(urlOf(fetchFn, 1)).toMatch(/\/api\/v1\/profile$/); // the own read, under the env bearer
     expect(posted(fetchFn, 2).handle).toBe("me");
     expect(logs.join("\n")).toContain("Set Shell = fish.");
 
@@ -1430,14 +1782,14 @@ describe("file credential never triggers the identity lookup", () => {
         `${(c[1] as RequestInit | undefined)?.method ?? "GET"} ${String(c[0]).replace(/^.*\/api/, "/api")}`,
     );
     expect(sent).toEqual([
-      "GET /api/v1/u/me", // publish read
+      "GET /api/v1/profile", // publish read (own, authed)
       "POST /api/v1/profile",
-      "GET /api/v1/u/me", // set read
+      "GET /api/v1/profile", // set read
       "POST /api/v1/profile",
-      "GET /api/v1/u/me", // unset read
+      "GET /api/v1/profile", // unset read
       "POST /api/v1/profile",
-      "GET /api/v1/u/them", // view target
-      "GET /api/v1/u/me", // view "mine"
+      "GET /api/v1/u/them", // view target (public)
+      "GET /api/v1/u/me", // view "mine" (public: display only)
       "DELETE /api/v1/profile",
     ]);
   });
