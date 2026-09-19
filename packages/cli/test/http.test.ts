@@ -169,6 +169,9 @@ describe("serverMessage", () => {
     expect(await serverMessage(res(JSON.stringify({ message: msg })))).toBe(
       `${"x".repeat(199)}${smile}…`,
     );
+    // The cap counts code points: 150 astral chars are 300 UTF-16 units and must not be cut.
+    const astral = `${smile.repeat(150)}x`;
+    expect(await serverMessage(res(JSON.stringify({ message: astral })))).toBe(astral);
   });
 
   it("returns undefined for a non-JSON body (edge WAF block page) — caller's fallback stands", async () => {

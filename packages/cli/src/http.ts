@@ -69,7 +69,10 @@ const WIRE_TEXT_CAP = 200;
 /** The first WIRE_TEXT_CAP code points: cut between code points, never inside a surrogate pair
  *  (a split pair prints as a replacement glyph, and a lone high surrogate reads as visible). */
 function head(clean: string): string {
-  return [...clean].slice(0, WIRE_TEXT_CAP).join("");
+  // Spread only as many code units as WIRE_TEXT_CAP code points can occupy (two each): a wire
+  // body has no size bound, and one array slot per code point of it would amplify it. A pair
+  // split at the cut lands at code-point index >= WIRE_TEXT_CAP and the second slice drops it.
+  return [...clean.slice(0, WIRE_TEXT_CAP * 2)].slice(0, WIRE_TEXT_CAP).join("");
 }
 function capped(clean: string): string {
   const kept = head(clean);
@@ -92,9 +95,10 @@ export async function wireBody(res: Response): Promise<string> {
 
 /** Parse an already-read error body into the wire error envelope: `slug` (the machine `error`
  *  code — compared by callers, printed only through wireText) and `message` (the server's human
- *  copy — wireText'd, or undefined when the body is non-JSON (e.g. the edge WAF block page), has
- *  no message, or carries one that sanitizes to nothing visible: pure ANSI/whitespace/zero-width
- *  would otherwise defeat every caller's `?? fallback` and print a blank error line). */
+ *  copy — sanitized and capped like wireText, or undefined when the body is non-JSON (e.g. the
+ *  edge WAF block page), has no message, or carries no visible text in its first WIRE_TEXT_CAP
+ *  code points: pure ANSI/whitespace/zero-width would otherwise defeat every caller's
+ *  `?? fallback` and print a blank error line). */
 export function wireErrorBody(raw: string): { slug?: string; message?: string } {
   try {
     const body = JSON.parse(raw) as { error?: unknown; message?: unknown };
