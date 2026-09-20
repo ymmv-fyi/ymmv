@@ -9,6 +9,9 @@ import {
 import { BASE } from "./config.js";
 import { login } from "./device-flow.js";
 import {
+  displayError,
+  isTimeoutError,
+  NetworkError,
   safeFetch,
   serverMessage,
   wireBody,
@@ -71,13 +74,17 @@ async function rateLimitMessage(res: Response): Promise<string> {
  *  (a Worker reply this binary refuses to store) and a login that persisted nothing can never
  *  succeed on a retry, so they exit the loop as PublishRefusals instead of re-offering a `y` that
  *  would run another device flow and orphan another minted token. Everything else (network,
- *  GitHub outage) propagates as-is: transient. ensureLogin runs OUTSIDE any loop (the commands'
- *  own first login: publish, set, unset, delete), so a raw MintRejected there is just an error. */
+ *  GitHub outage) stays transient, but leaves as a plain Error with the same copy: to that loop a
+ *  NetworkError or timeout out of publishProfile means "the POST's response was lost, the write
+ *  may have landed", and no POST is in flight during a login (none sent yet, or the one sent was
+ *  answered 401/409). ensureLogin runs OUTSIDE any loop (the commands' own first login: publish,
+ *  set, unset, delete), so a raw MintRejected there is just an error. */
 async function loginOrRefuse(): Promise<Credential> {
   try {
     await login();
   } catch (e) {
     if (e instanceof MintRejected) throw new PublishRefusal(e.message);
+    if (e instanceof NetworkError || isTimeoutError(e)) throw new Error(displayError(e));
     throw e;
   }
   const fresh = await loadCredential();

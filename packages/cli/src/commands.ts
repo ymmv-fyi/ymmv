@@ -39,6 +39,8 @@ import {
   buildDefaults,
   detectionDisagreements,
   entriesFromMap,
+  profileChanges,
+  sameContent,
   unknownEntries,
 } from "./profile-ops.js";
 import { PromptAborted, type Prompter } from "./prompt.js";
@@ -49,6 +51,7 @@ import {
   notFound,
   nudge,
   palette,
+  relTime,
   renderDiff,
   renderProfile,
   sanitizeValue,
@@ -244,25 +247,33 @@ async function promptEntries(
  *
  *   ymmv (publish)
  *     ├─ non-TTY, no -y ──────────────► refuse (needs -y), exit 1
- *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ► POST            (no prompts)
+ *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ─┬─ changes something ► POST  (no prompts)
+ *     │                                               └─ nothing to change ► say so  exit 0
  *     └─ interactive
  *          ├─ no existing profile ────► guided 13 prompts (hint line once) ─┐
  *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
  *          └─► LOOP: preview card (rows a fresh detection disagrees with carry a faint
  *               │     "(detected: X)" note, unless that exact disagreement was dismissed in
- *               │     an earlier run) + carried-note + dup-extra note (recomputed)
+ *               │     an earlier run; rows the publish would change on the live profile carry
+ *               │     a `~`/`+`/`-` gutter mark) + carried-note + dup-extra note (recomputed)
  *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit] (+d=detected while a row is marked)
+ *               │  Nothing differs from what is live ► "Nothing changed. Last published <when>."
+ *               │  and the choice becomes "Publish to <site>/<h> anyway?" [y/N/e=edit]
  *               ├─ y ──► POST ─┬─ ok ────────────► Published
  *               │              ├─ transient err ─► "…Your answers are kept." ─► LOOP
  *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
- *               ├─ n ──► "Aborted. Nothing published."  exit 0
+ *               ├─ n ──► "Aborted. Nothing published." ("Left as is." at the anyway prompt)  exit 0
  *               ├─ e ──► 13 prompts prefilled with current answers; a marked row's prompt shows
  *               │        "(detected: X)", and Enter there keeps the value for this run ─► LOOP
  *               ├─ d ──► per marked row "Label  saved → detected" [Y/n]: y takes the detected
  *               │        value, n keeps the saved one and dismisses the mark (remembered
  *               │        across runs; `--reset-marks` forgets) ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
+ *
+ *   After a failed POST nothing is called unchanged until a 412 reload settles what is live.
+ *   After a lost response (the write may have landed) both abort lines read "Aborted. The
+ *   earlier publish may have completed." for the rest of the run.
  */
 export async function publish(io: PublishIO): Promise<void> {
   // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
@@ -300,24 +311,33 @@ export async function publish(io: PublishIO): Promise<void> {
   const defaults = buildDefaults(existing, detected);
   // Keys a newer taxonomy published that this build doesn't know: carried through verbatim (the
   // upsert is a full replace — rebuilding from our compiled-in key list alone would delete them).
-  // `let`, with `extras` and `ifMatch`: a 412 mid-loop reloads all three from a fresh read;
-  // showCard/assemble close over them, so the next card is the reload.
+  // `let`, with `extras`, `ifMatch` and `live`: a 412 mid-loop reloads all four from a fresh
+  // read; showCard/assemble close over them, so the next card is the reload.
   let carried = unknownEntries(existing);
   let extras = existing?.extras ?? [];
   let ifMatch = own?.etag;
+  // What the change marks and the nothing-changed check compare against. `existing` stays the
+  // profile this run started from (first publish or not); `live` follows a 412 reload.
+  let live = existing;
   const color = colorEnabled();
   const site = displayUrl(BASE);
 
   // Preview card + its notes, recomputed per render: an edit pass can create or remove the
   // duplicate-extra condition, so the hints must describe THIS iteration's entries. The row
-  // marks (`disagreements`) are this iteration's too: a `d`, a walk, or a 412 reload changes them.
-  const showCard = (entries: Entry[], disagreements: ReadonlyMap<CuratedKey, string>): void => {
+  // marks (`disagreements`, `changes`) are this iteration's too: a `d`, a walk, or a 412 reload
+  // changes them.
+  const showCard = (
+    entries: Entry[],
+    disagreements: ReadonlyMap<CuratedKey, string>,
+    changes: ReadonlyMap<CuratedKey, string | null> | undefined,
+  ): void => {
     console.log(
       renderProfile(newProfile(handle, entries, extras), {
         color,
         site,
         mode: "preview",
         disagreements,
+        changes,
       }),
     );
     const notes: string[] = [];
@@ -348,6 +368,35 @@ export async function publish(io: PublishIO): Promise<void> {
 
   let values = defaults;
   const assemble = (): Entry[] => [...entriesFromMap(values), ...carried];
+  // What this publish would change on the live profile, for the card's marks; undefined on a
+  // first publish, where every row would be new and the marks would say nothing.
+  const pending = (): Map<CuratedKey, string | null> | undefined =>
+    live ? profileChanges(live, values) : undefined;
+  // Set when a POST failed: `live` may no longer be what is live. A lost response can follow a
+  // commit, and so can a 5xx a gateway answered for a Worker that did commit (publishProfile
+  // does not type those apart, and being wrong here costs one ordinary publish). Until a 412
+  // reload settles it, nothing is called unchanged, and the retry goes out under the old tag for
+  // the server to arbitrate (a 412 if the write did land).
+  let unsure = false;
+  // A lost response, for the rest of the run: a reload makes `live` trustworthy again, not the
+  // claim that this run published nothing.
+  let maybePublished = false;
+  const aborted = (): string =>
+    maybePublished
+      ? "Aborted. The earlier publish may have completed."
+      : "Aborted. Nothing published.";
+  // The line for a publish that would only move the updated date and spend a write-limit slot,
+  // else undefined. Byte-for-byte against the payload as the server would store it (it trims
+  // every value and label), which is stricter than the marks: a stored value or extra label
+  // padded before the server trimmed writes shows no mark, but publishing still normalizes it,
+  // so that run publishes (once; the next one is unchanged).
+  const unchangedLine = (entries: Entry[]): string | undefined => {
+    const sent = entries.map((e) => ({ ...e, value: e.value.trim() }));
+    const sentExtras = extras.map((x) => ({ label: x.label.trim(), value: x.value.trim() }));
+    return live && !unsure && sameContent(live, sent, sentExtras)
+      ? `Nothing changed. Last published ${relTime(live.updated_at)}.`
+      : undefined;
+  };
   // The user's explicit edits (undefined = cleared with "-"), kept apart from `values`: on a
   // republish nobody is prompted, so `values` is server state, not answers. A 412 reload rebases
   // onto the live profile and re-applies exactly these.
@@ -410,9 +459,19 @@ export async function publish(io: PublishIO): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    // No marks here: a scripted run's environment (a CI runner) is rarely the user's stack, so a
-    // "(detected: X)" note would describe the wrong machine, with no key to act on anyway.
-    showCard(entries, new Map());
+    // No detection marks here: a scripted run's environment (a CI runner) is rarely the user's
+    // stack, so a "(detected: X)" note would describe the wrong machine, with no key to act on
+    // anyway. The change marks do print: they describe the write itself, and a runner's detection
+    // filling a gap is exactly the `+` row a log reader should see.
+    showCard(entries, new Map(), pending());
+    // After the refusal on purpose: an unchanged profile whose curated value no longer passes a
+    // write rule is still worth exit 1. Skipping the write keeps a scheduled `ymmv -y` from moving
+    // the updated date every run.
+    const same = unchangedLine(entries);
+    if (same) {
+      console.log(message(`${same} Nothing to publish.`));
+      return;
+    }
     printPublished(
       await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
       color,
@@ -432,7 +491,8 @@ export async function publish(io: PublishIO): Promise<void> {
 
   try {
     // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
-    // card first — Enter republishes as-is, e edits.
+    // card first — Enter publishes, or leaves the page alone when nothing would change (see
+    // unchangedLine), e edits.
     if (!existing) await prompt(io.prompter);
     const failsRule = ([, v]: [CuratedKey, string]) => valueProblem(v) !== undefined;
     for (;;) {
@@ -443,15 +503,22 @@ export async function publish(io: PublishIO): Promise<void> {
       if ([...values].some(failsRule)) await prompt(io.prompter);
       const entries = assemble();
       const disagreements = disagreeing();
-      showCard(entries, disagreements);
-      // `d` exists only while a row is marked, so a first publish and a clean republish keep the
-      // exact prompt the landing transcript mirrors; an unoffered `d` simply re-asks.
+      showCard(entries, disagreements, pending());
+      // Nothing differs from what is live: say so and flip the default, so Enter from someone who
+      // only came to look writes nothing. Still a question, not an exit: `e` is how a returning
+      // user edits, a `d` mark is often the one thing to act on at such a card, and `y` is the way
+      // to move the updated date on purpose.
+      const same = unchangedLine(entries);
+      if (same) console.log(message(same));
+      // `d` exists only while a row is marked, so a first publish and a republish that changes
+      // something keep the exact prompt the landing transcript mirrors; an unoffered `d` simply
+      // re-asks.
       const offerD = disagreements.size > 0;
       const ans = await io.prompter.choice(
-        `Publish to ${site}/${sanitizeValue(handle)}?`,
+        `Publish to ${site}/${sanitizeValue(handle)}${same ? " anyway" : ""}?`,
         offerD ? ["y", "n", "e", "d"] : ["y", "n", "e"],
-        "y",
-        offerD ? "Y/n/e=edit/d=detected" : "Y/n/e=edit",
+        same ? "n" : "y",
+        `${same ? "y/N" : "Y/n"}/e=edit${offerD ? "/d=detected" : ""}`,
       );
       if (ans === "y") {
         try {
@@ -494,6 +561,8 @@ export async function publish(io: PublishIO): Promise<void> {
             values = rebased;
             for (const [key, value] of kept) if (rebased.get(key) !== value) kept.delete(key);
             saved = savedKeys(fresh.profile);
+            live = fresh.profile;
+            unsure = false;
             carried = unknownEntries(fresh.profile);
             extras = fresh.profile.extras;
             ifMatch = fresh.etag;
@@ -510,6 +579,8 @@ export async function publish(io: PublishIO): Promise<void> {
           // committed — never claim "nothing was published" for those. The retry re-sends the
           // same tag, so a write that landed in between surfaces as the 412 branch above.
           const ambiguous = e instanceof NetworkError || isTimeoutError(e);
+          unsure = true;
+          if (ambiguous) maybePublished = true;
           console.error(
             message(
               `${displayError(e)}\n${
@@ -523,7 +594,10 @@ export async function publish(io: PublishIO): Promise<void> {
         }
       }
       if (ans === "n") {
-        console.log(message("Aborted. Nothing published."));
+        // Declining at a nothing-changed card aborts nothing. It can also follow a lost response
+        // whose write did land (the 412 reload then shows it as live), where "Nothing published"
+        // would be false.
+        console.log(message(same ? "Left as is." : aborted()));
         return;
       }
       if (ans === "d") {
@@ -582,9 +656,14 @@ export async function publish(io: PublishIO): Promise<void> {
   } catch (e) {
     if (e instanceof PromptAborted) {
       // The first newline closes the interrupted prompt line; then the standard unit.
-      console.log(`\n${message("Aborted. Nothing published.")}`);
+      console.log(`\n${message(aborted())}`);
       process.exitCode = 130;
       return;
+    }
+    // Whatever ends the run now (a refusal, a failed re-read) may say "Nothing was published"
+    // about ITS attempt; after a lost response that reads as a claim about the whole run.
+    if (maybePublished) {
+      console.error(message("The earlier publish may have completed."));
     }
     throw e;
   }
@@ -661,7 +740,8 @@ export async function view(handle: string): Promise<void> {
   plainCard();
 }
 
-/** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish. */
+/** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish (unless
+ *  the field already holds exactly that, which writes nothing). */
 export async function runSet(target: SetTarget): Promise<void> {
   const cred = await ensureLogin();
   const handle = requireHandle(cred);
@@ -693,6 +773,16 @@ export async function runSet(target: SetTarget): Promise<void> {
     console.error(message(refusal));
     process.exitCode = 1;
     return;
+  }
+  if (existing && sameContent(existing, entries, extras)) {
+    // Same argv echo rule as the success line below. Byte-equal only: a respelled value or an
+    // extra label's new casing is a change, and publishes.
+    const line =
+      target.kind === "curated"
+        ? `${KEY_LABELS[target.key]} is already ${sanitizeValue(target.value)}.`
+        : `Extra "${sanitizeValue(target.label)}" is already ${sanitizeValue(target.value)}.`;
+    console.log(message(line));
+    return; // idempotent no-op, like unset's: exit 0, no network write, the updated date stays
   }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
