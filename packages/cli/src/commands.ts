@@ -30,6 +30,7 @@ import {
   applySet,
   applyUnset,
   buildDefaults,
+  detectionDisagreements,
   entriesFromMap,
   unknownEntries,
 } from "./profile-ops.js";
@@ -44,6 +45,7 @@ import {
   renderDiff,
   renderProfile,
   sanitizeValue,
+  shownValue,
   showsVisibleText,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
@@ -196,7 +198,7 @@ async function promptEntries(
       // sanitizes to nothing comes back as "", which must not pass for "no answer, skip the key":
       // under "Enter to keep" that would silently clear it, and a 412 rebase replays the clear.
       const rawDefault = defaults.get(key) ?? "";
-      const isDefault = value === sanitizeValue(rawDefault).trim();
+      const isDefault = value === shownValue(rawDefault);
       const emptiedDefault = answer === "" && rawDefault !== "";
       const problem = emptiedDefault ? "invisible" : value === "" ? undefined : valueProblem(value);
       if (problem !== undefined) {
@@ -226,14 +228,16 @@ async function promptEntries(
  *     └─ interactive
  *          ├─ no existing profile ────► guided 13 prompts (hint line once) ─┐
  *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
- *          └─► LOOP: preview card + carried-note + dup-extra note (recomputed)
- *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit]
+ *          └─► LOOP: preview card (rows a fresh detection disagrees with carry a faint
+ *               │     "(detected: X)" note) + carried-note + dup-extra note (recomputed)
+ *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit] (+d=detected while a row is marked)
  *               ├─ y ──► POST ─┬─ ok ────────────► Published
  *               │              ├─ transient err ─► "…Your answers are kept." ─► LOOP
  *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published."  exit 0
- *               ├─ e ──► 13 prompts prefilled with current answers ─► LOOP
+ *               ├─ e ──► 13 prompts prefilled with current answers (resolves every mark) ─► LOOP
+ *               ├─ d ──► take every marked detected value ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
  */
 export async function publish(io: InteractiveIO): Promise<void> {
@@ -280,11 +284,23 @@ export async function publish(io: InteractiveIO): Promise<void> {
   const color = colorEnabled();
   const site = displayUrl(BASE);
 
+  // Whether the user has seen a card for the CURRENT answers: a walk resolves marks only after
+  // one, because the loop-top rule walk (and the first-publish walk) runs before any card, and
+  // the prompts never show a detection, so nothing there counts as the user's look at a mark.
+  // A 412 reload resets it: the reloaded values can carry marks no card has shown yet.
+  let cardShown = false;
   // Preview card + its notes, recomputed per render: an edit pass can create or remove the
-  // duplicate-extra condition, so the hints must describe THIS iteration's entries.
-  const showCard = (entries: Entry[]): void => {
+  // duplicate-extra condition, so the hints must describe THIS iteration's entries. The row
+  // marks (`disagreements`) are this iteration's too: a `d`, a walk, or a 412 reload changes them.
+  const showCard = (entries: Entry[], disagreements: ReadonlyMap<CuratedKey, string>): void => {
+    cardShown = true;
     console.log(
-      renderProfile(newProfile(handle, entries, extras), { color, site, mode: "preview" }),
+      renderProfile(newProfile(handle, entries, extras), {
+        color,
+        site,
+        mode: "preview",
+        disagreements,
+      }),
     );
     const notes: string[] = [];
     if (carried.length > 0) {
@@ -318,13 +334,37 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // republish nobody is prompted, so `values` is server state, not answers. A 412 reload rebases
   // onto the live profile and re-applies exactly these.
   const edits = new Map<CuratedKey, string | undefined>();
+  // Marked keys a walk visited without changing, with the value that was kept: Enter (or retyping
+  // the value) is "keep", and a kept value must not be replaced by a later `d`. A 412 rebase
+  // keeps the decision only where the live value still equals it; a key another device changed
+  // is marked afresh, since a decision about the old value says nothing about the new one.
+  const kept = new Map<CuratedKey, string>();
   let saved = savedKeys(existing);
+  // Rows to mark on this card: where a fresh detection names a different tool than the shown
+  // value, minus keys the user already decided this session (edited, cleared, taken, kept), minus
+  // detected values the write rules refuse (an invisible one would print "(detected: )", and
+  // taking it would send `d` into the loop-top walk, where the re-ask calls it "the saved value").
+  const disagreeing = (): Map<CuratedKey, string> => {
+    const out = detectionDisagreements(
+      values,
+      detected,
+      new Set([...edits.keys(), ...kept.keys()]),
+    );
+    for (const [key, value] of out) if (valueProblem(value) !== undefined) out.delete(key);
+    return out;
+  };
   const prompt = async (prompter: Prompter): Promise<void> => {
     const before = values;
+    const marked = cardShown ? disagreeing() : new Map<CuratedKey, string>();
     values = await promptEntries(values, saved, prompter);
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
       if (after !== before.get(key)) edits.set(key, after);
+    }
+    // A walk shows every key; a mark that survives the user's look is a decision, not a gap.
+    for (const key of marked.keys()) {
+      const value = values.get(key);
+      if (!edits.has(key) && value !== undefined) kept.set(key, value);
     }
   };
 
@@ -342,7 +382,9 @@ export async function publish(io: InteractiveIO): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    showCard(entries);
+    // No marks here: a scripted run's environment (a CI runner) is rarely the user's stack, so a
+    // "(detected: X)" note would describe the wrong machine, with no key to act on anyway.
+    showCard(entries, new Map());
     printPublished(
       await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
       color,
@@ -362,12 +404,16 @@ export async function publish(io: InteractiveIO): Promise<void> {
       // value and offers "-". At the loop top so a 412 reload's fresh merge is gated the same way.
       if ([...values].some(failsRule)) await prompt(io.prompter);
       const entries = assemble();
-      showCard(entries);
+      const disagreements = disagreeing();
+      showCard(entries, disagreements);
+      // `d` exists only while a row is marked, so a first publish and a clean republish keep the
+      // exact prompt the landing transcript mirrors; an unoffered `d` simply re-asks.
+      const offerD = disagreements.size > 0;
       const ans = await io.prompter.choice(
         `Publish to ${site}/${sanitizeValue(handle)}?`,
-        ["y", "n", "e"],
+        offerD ? ["y", "n", "e", "d"] : ["y", "n", "e"],
         "y",
-        "Y/n/e=edit",
+        offerD ? "Y/n/e=edit/d=detected" : "Y/n/e=edit",
       );
       if (ans === "y") {
         try {
@@ -408,6 +454,8 @@ export async function publish(io: InteractiveIO): Promise<void> {
               else rebased.set(key, value);
             }
             values = rebased;
+            for (const [key, value] of kept) if (rebased.get(key) !== value) kept.delete(key);
+            cardShown = false;
             saved = savedKeys(fresh.profile);
             carried = unknownEntries(fresh.profile);
             extras = fresh.profile.extras;
@@ -440,6 +488,15 @@ export async function publish(io: InteractiveIO): Promise<void> {
       if (ans === "n") {
         console.log(message("Aborted. Nothing published."));
         return;
+      }
+      if (ans === "d") {
+        // Taken values are explicit edits: a 412 rebase re-applies them over the reloaded profile.
+        values = new Map(values);
+        for (const [key, value] of disagreements) {
+          values.set(key, value);
+          edits.set(key, value);
+        }
+        continue;
       }
       await prompt(io.prompter); // "e": edit, prefilled with current answers
     }

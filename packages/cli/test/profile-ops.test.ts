@@ -4,6 +4,7 @@ import {
   applySet,
   applyUnset,
   buildDefaults,
+  detectionDisagreements,
   entriesFromMap,
   unknownEntries,
 } from "../src/profile-ops.js";
@@ -24,6 +25,76 @@ describe("buildDefaults", () => {
   });
   it("null existing → pure detection", () => {
     expect(buildDefaults(null, map([["shell", "zsh"]])).get("shell")).toBe("zsh");
+  });
+});
+
+describe("detectionDisagreements", () => {
+  const ESC = String.fromCharCode(27);
+  const RLO = String.fromCharCode(0x202e); // U+202E, a bidi control the card strips
+
+  it("a saved value that names a different tool than the detection is reported with the detected value", () => {
+    const out = detectionDisagreements(map([["editor", "Zed"]]), map([["editor", "Neovim"]]));
+    expect([...out]).toEqual([["editor", "Neovim"]]);
+  });
+  it("same tool, different spelling is not a disagreement (the diff's canonical rule)", () => {
+    const out = detectionDisagreements(
+      map([
+        ["editor", "nvim"],
+        ["shell", "pwsh"],
+        ["terminal", "VS  Code"],
+      ]),
+      map([
+        ["editor", "Neovim"],
+        ["shell", "PowerShell"],
+        ["terminal", "vscode"],
+      ]),
+    );
+    expect(out.size).toBe(0);
+  });
+  it("compares the SHOWN form: an invisible-char difference is not a disagreement", () => {
+    expect(
+      detectionDisagreements(map([["shell", "zsh"]]), map([["shell", `zsh${RLO}`]])).size,
+    ).toBe(0);
+    expect(
+      detectionDisagreements(map([["shell", `zsh${RLO}`]]), map([["shell", "zsh"]])).size,
+    ).toBe(0);
+  });
+  it("returns the shown (sanitized, trimmed) detected value, never the raw env string", () => {
+    const out = detectionDisagreements(
+      map([["editor", "Vim"]]),
+      map([["editor", ` Neo${ESC}[2Jvim `]]),
+    );
+    expect(out.get("editor")).toBe("Neovim");
+  });
+  it("a detected value that sanitizes to nothing is not a disagreement", () => {
+    expect(
+      detectionDisagreements(map([["editor", "Vim"]]), map([["editor", `${ESC}[31m`]])).size,
+    ).toBe(0);
+  });
+  it("a key only one side has is not a disagreement (a filled gap, or a clear, stands)", () => {
+    expect(detectionDisagreements(map([]), map([["editor", "Neovim"]])).size).toBe(0);
+    expect(detectionDisagreements(map([["editor", "Vim"]]), map([])).size).toBe(0);
+  });
+  it("a key decided this session is not a disagreement", () => {
+    const out = detectionDisagreements(
+      map([["editor", "Zed"]]),
+      map([["editor", "Neovim"]]),
+      new Set<CuratedKey>(["editor"]),
+    );
+    expect(out.size).toBe(0);
+  });
+  it("reports keys in CURATED_KEYS order regardless of input order", () => {
+    const out = detectionDisagreements(
+      map([
+        ["shell", "zsh"],
+        ["editor", "Zed"],
+      ]),
+      map([
+        ["shell", "fish"],
+        ["editor", "Neovim"],
+      ]),
+    );
+    expect([...out.keys()]).toEqual(["editor", "shell"]);
   });
 });
 

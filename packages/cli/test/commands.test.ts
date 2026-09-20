@@ -1103,6 +1103,583 @@ describe("publish", () => {
   });
 });
 
+describe("publish: a changed detection is marked on the card and taken with d", () => {
+  const ESC = String.fromCharCode(27);
+  const ZWSP = String.fromCharCode(0x200b);
+  /** Enter hands back the SANITIZED default, exactly as makePrompter().ask() does. */
+  const keepAll = () => vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
+  const choiceCalls = (choice: { mock: { calls: unknown[][] } }) =>
+    choice.mock.calls.map((c) => ({ keys: c[1], hint: c[3] }));
+  const THREE = { keys: ["y", "n", "e"], hint: "Y/n/e=edit" };
+  const FOUR = { keys: ["y", "n", "e", "d"], hint: "Y/n/e=edit/d=detected" };
+  const cards = () => logs.filter(isCard);
+
+  it("republish: the disagreeing row is marked, d is offered, and y still keeps the saved value", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards()[0]).toMatch(/Editor\s+Vim {2}\(detected: Neovim\)/);
+    expect(choiceCalls(choice)).toEqual([FOUR]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("d takes every marked value, re-shows a clean card with [Y/n/e=edit], and y publishes them", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [
+            { key: "editor", value: "Vim" },
+            { key: "os", value: "Arch" },
+            { key: "shell", value: "zsh" },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = keepAll();
+    const choice = vi.fn().mockResolvedValueOnce("d").mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(ask).not.toHaveBeenCalled();
+    expect(cards().length).toBe(2);
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(cards()[0]).toContain("(detected: fish)");
+    expect(cards()[1]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "os", value: "Arch" },
+      { key: "shell", value: "fish" },
+    ]);
+  });
+
+  // REGRESSION pin: a clean republish keeps the exact prompt the landing transcript mirrors.
+  it("an alias spelling is not a disagreement: no mark, no d, [Y/n/e=edit] unchanged", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "vim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(logs.join("\n")).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([THREE]);
+  });
+
+  it("first publish: a value typed over a detection is not marked and d is not offered", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(logs.join("\n")).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([THREE]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Zed" }]);
+  });
+
+  it("e then a typed value: the row is no longer marked on the next card", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(cards()[1]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Zed" }]);
+  });
+
+  it("e then Enter on the marked row keeps it: the walk resolves the mark, d is not offered again", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(cards()[1]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("-y: no marks are printed and the saved values are published", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn();
+    await publish({
+      interactive: true,
+      yes: true,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(choice).not.toHaveBeenCalled();
+    expect(logs.join("\n")).toMatch(/Editor\s+Vim\n/);
+    expect(logs.join("\n")).not.toContain("(detected");
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("412 after d: the taken detections survive the rebase and the retry carries the fresh tag", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const before = prof("me", [
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "fish" },
+    ]);
+    const after = prof("me", [
+      { key: "editor", value: "Emacs" },
+      { key: "shell", value: "zsh" },
+    ]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("d").mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "shell", value: "zsh" },
+    ]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('a key cleared with "-" in the walk stays cleared: no mark on the gap row, d not offered', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [
+            { key: "editor", value: "Vim" },
+            { key: "shell", value: "zsh" },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "-" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(cards()[1]).toMatch(/Editor\s+—/);
+    expect(cards()[1]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "shell", value: "zsh" }]);
+  });
+
+  it("a detected value that fails a write rule is neither marked nor offered", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", ZWSP]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(logs.join("\n")).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([THREE]);
+    expect(fetchFn.mock.calls.filter((c) => (c[1] as RequestInit)?.method === "POST").length).toBe(
+      1,
+    );
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Vim" }]);
+  });
+
+  it("a detected value with an escape sequence is shown clean, and d publishes the clean form", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", `Neo${ESC}[2Jvim`]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("d").mockResolvedValueOnce("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(logs.join("\n")).not.toContain(ESC);
+    const body = JSON.stringify(posted(fetchFn));
+    expect(body).toContain('"Neovim"');
+    expect(body).not.toContain(ESC);
+  });
+
+  it("412 after a walk-kept mark: the reloaded value is marked afresh and d is offered again", async () => {
+    // The keep was about Vim; the rebase replaced it with Emacs, which the user never looked at.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const before = prof("me", [{ key: "editor", value: "Vim" }]);
+    const after = prof("me", [{ key: "editor", value: "Emacs" }]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards().length).toBe(3);
+    expect(cards()[1]).not.toContain("(detected");
+    expect(cards()[2]).toMatch(/Editor\s+Emacs {2}\(detected: Neovim\)/);
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE, FOUR]);
+    expect(posted(fetchFn, 3).entries).toEqual([{ key: "editor", value: "Emacs" }]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+  });
+
+  it("412 reload can introduce a mark on an untouched key, and d works on the reloaded card", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const before = prof("me", [
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "fish" },
+    ]);
+    const after = prof("me", [
+      { key: "editor", value: "Emacs" },
+      { key: "shell", value: "bash" },
+    ]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi
+      .fn()
+      .mockResolvedValueOnce("d")
+      .mockResolvedValueOnce("y")
+      .mockResolvedValueOnce("d")
+      .mockResolvedValueOnce("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(cards()[0]).not.toContain("(detected: fish)"); // shell agreed before the reload
+    expect(cards()[2]).toContain("(detected: fish)"); // the live shell (bash) disagrees now
+    expect(cards()[2]).not.toContain("(detected: Neovim)"); // the taken editor is an edit, never re-marked
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE, FOUR, THREE]);
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "shell", value: "fish" },
+    ]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+  });
+
+  it("412 that changes an UNRELATED key keeps the walk-kept decision: d takes only the new mark", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const before = prof("me", [
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "fish" },
+    ]);
+    const after = prof("me", [
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "bash" },
+    ]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    // e + Enter keeps Vim; y -> 412 (shell changed elsewhere); d takes the shell; y publishes.
+    const choice = vi
+      .fn()
+      .mockResolvedValueOnce("e")
+      .mockResolvedValueOnce("y")
+      .mockResolvedValueOnce("d")
+      .mockResolvedValueOnce("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(cards()[2]).toContain("(detected: fish)");
+    expect(cards()[2]).not.toContain("(detected: Neovim)"); // the keep survived the reload
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE, FOUR, THREE]);
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "fish" },
+    ]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+  });
+
+  it("412 whose reload forces a walk: marks the reload introduced are not resolved unseen", async () => {
+    // Before: editor agrees with detection, the saved terminal masks an over-cap detected one.
+    // Another device then changes the editor and removes the terminal, so the reload's gap-filler
+    // fails a rule and the walk runs before the reloaded card. The editor mark must survive it.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["terminal", "x".repeat(300)],
+      ]),
+    );
+    const before = prof("me", [
+      { key: "editor", value: "Neovim" },
+      { key: "terminal", value: "Ghostty" },
+    ]);
+    const after = prof("me", [{ key: "editor", value: "Emacs" }]);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(before, '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(after, '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Terminal" ? "Ghostty" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(cards()[0]).not.toContain("(detected"); // nothing disagreed before the reload
+    expect(ask).toHaveBeenCalled(); // the reload forced the walk
+    expect(cards()[1]).toMatch(/Editor\s+Emacs {2}\(detected: Neovim\)/);
+    expect(choiceCalls(choice)).toEqual([THREE, FOUR]);
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "Emacs" },
+      { key: "terminal", value: "Ghostty" },
+    ]);
+    expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
+  });
+
+  it("a walk forced BEFORE any card (a saved value fails a rule) does not resolve marks", async () => {
+    // The over-cap saved editor sends the loop through the prompts first; the shell mark must
+    // still show on the first card, because no card was there for the user to look at.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["shell", "fish"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [
+            { key: "editor", value: "x".repeat(300) },
+            { key: "shell", value: "zsh" },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Vim" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(ask).toHaveBeenCalled();
+    expect(cards()[0]).toMatch(/Shell\s+zsh {2}\(detected: fish\)/);
+    expect(choiceCalls(choice)).toEqual([FOUR]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "zsh" },
+    ]);
+  });
+
+  it("a transient POST failure on a marked card re-offers the marks and d, and the retry can take them", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(fail(500))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = keepAll();
+    const choice = vi
+      .fn()
+      .mockResolvedValueOnce("y")
+      .mockResolvedValueOnce("d")
+      .mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(ask).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toMatch(/Nothing was published\. Your answers are kept\./);
+    expect(cards().length).toBe(3);
+    expect(cards()[1]).toContain("(detected: Neovim)"); // the failed y decided nothing
+    expect(cards()[2]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, FOUR, THREE]);
+    expect(posted(fetchFn, 1).entries).toEqual([{ key: "editor", value: "Vim" }]);
+    expect(posted(fetchFn, 2).entries).toEqual([{ key: "editor", value: "Neovim" }]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("d then n: the taken values are never sent (no POST, exit 0)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("d").mockResolvedValueOnce("n");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the own-profile read only
+    expect(logs).toContain("\n  Aborted. Nothing published.");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("Ctrl+C at the confirm after d: nothing sent, exit 130", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("d").mockRejectedValueOnce(new PromptAborted());
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: keepAll(), choice }),
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(logs.join("\n")).toMatch(/Aborted\. Nothing published\./);
+    expect(process.exitCode).toBe(130);
+  });
+
+  it("d then e: the walk is prefilled with the taken value, and Enter keeps it", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = keepAll();
+    const choice = vi
+      .fn()
+      .mockResolvedValueOnce("d")
+      .mockResolvedValueOnce("e")
+      .mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(ask).toHaveBeenCalledWith("Editor", "Neovim");
+    expect(cards()[2]).toMatch(/Editor\s+Neovim\n/);
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE, THREE]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Neovim" }]);
+  });
+
+  it("one walk resolves every mark: a typed row and an Enter-kept row both come back clean", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonRes(
+          prof("me", [
+            { key: "editor", value: "Vim" },
+            { key: "shell", value: "zsh" },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(cards()[0]).toContain("(detected: Neovim)");
+    expect(cards()[0]).toContain("(detected: fish)");
+    expect(cards()[1]).not.toContain("(detected");
+    expect(choiceCalls(choice)).toEqual([FOUR, THREE]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Zed" },
+      { key: "shell", value: "zsh" },
+    ]);
+  });
+});
+
 describe("first-send identity drift is caught on every publish path (id passed through)", () => {
   // Same handle, different account between the command's own login and the send: the handle
   // string can't tell, the id can. One case per publishProfile call site outside the loop.

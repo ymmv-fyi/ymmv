@@ -1,4 +1,4 @@
-import type { DiffResult, Profile } from "@ymmv/shared";
+import type { CuratedKey, DiffResult, Profile } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import {
   isHttpUrl,
@@ -10,6 +10,7 @@ import {
   renderDiff,
   renderProfile,
   sanitizeValue,
+  shownValue,
   useColor,
 } from "../src/render.js";
 
@@ -17,6 +18,16 @@ const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
 const AMBER = `${ESC}[93m`;
 const OSC8_OPEN = `${ESC}]8;;`;
+
+describe("shownValue (the form the card shows and Enter hands back)", () => {
+  it("sanitizes, then trims: whitespace an escape was hiding goes too", () => {
+    expect(shownValue(`  Neo${ESC}[2Jvim  `)).toBe("Neovim");
+    expect(shownValue(` ${ESC}[31m `)).toBe("");
+  });
+  it("leaves a clean value, inner spacing included, untouched", () => {
+    expect(shownValue("VS Code")).toBe("VS Code");
+  });
+});
 
 describe("sanitizeValue (terminal-escape injection)", () => {
   it("strips ANSI color sequences", () => {
@@ -383,6 +394,71 @@ describe("renderProfile", () => {
     expect(out).toMatch(/Font\s+—/);
     expect(out).toContain("Zed");
     expect(out).not.toContain("updated");
+  });
+
+  describe("disagreements (preview row marks)", () => {
+    const FAINT = `${ESC}[90m`;
+    const RESET = `${ESC}[0m`;
+    const marks = new Map<CuratedKey, string>([["editor", "Neovim"]]);
+
+    it("appends a faint (detected: X) note to a marked row, never amber", () => {
+      const plain = renderProfile(FULLISH, {
+        color: false,
+        site: SITE,
+        mode: "preview",
+        disagreements: marks,
+      });
+      expect(plain).toMatch(/Editor\s+Zed {2}\(detected: Neovim\)/);
+      const colored = renderProfile(FULLISH, {
+        color: true,
+        site: SITE,
+        mode: "preview",
+        disagreements: marks,
+      });
+      expect(colored).toContain(`${FAINT}(detected: Neovim)${RESET}`);
+      // The dotfiles link below it is amber by rule; the marked row itself spends none.
+      const editorLine = colored.split("\n").find((l) => l.includes("Editor")) ?? "";
+      expect(editorLine).not.toContain(AMBER);
+    });
+    it("sanitizes the note (the detected value is env-derived)", () => {
+      const out = renderProfile(FULLISH, {
+        color: false,
+        site: SITE,
+        mode: "preview",
+        disagreements: new Map<CuratedKey, string>([["editor", `Neo${ESC}[2Jvim`]]),
+      });
+      expect(out).toContain("(detected: Neovim)");
+      expect(out).not.toContain(ESC);
+    });
+    it("view mode ignores disagreements entirely", () => {
+      const out = renderProfile(FULLISH, {
+        color: false,
+        site: SITE,
+        disagreements: marks,
+        now: at(NOW),
+      });
+      expect(out).not.toContain("(detected");
+    });
+    it("a gap row never carries a note", () => {
+      const out = renderProfile(FULLISH, {
+        color: false,
+        site: SITE,
+        mode: "preview",
+        disagreements: new Map<CuratedKey, string>([["font", "Lilex"]]),
+      });
+      expect(out).toMatch(/Font\s+—/);
+      expect(out).not.toContain("(detected");
+    });
+    it("an empty note prints nothing, never a bare (detected: )", () => {
+      const out = renderProfile(FULLISH, {
+        color: false,
+        site: SITE,
+        mode: "preview",
+        disagreements: new Map<CuratedKey, string>([["editor", ""]]),
+      });
+      expect(out).toMatch(/Editor\s+Zed\n/);
+      expect(out).not.toContain("(detected");
+    });
   });
 });
 
