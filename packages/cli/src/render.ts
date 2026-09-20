@@ -86,9 +86,10 @@ export function sanitizeValue(value: string): string {
 }
 
 /** The form Enter hands back at a prompt (prompt.ts sanitizes the default; the walk trims the
- *  answer), which is also what the card row shows for an already-trimmed value. The two
- *  "does this name the same thing the user saw" comparisons use it: promptEntries' Enter-to-keep
- *  check and detectionDisagreements. publish()'s edit diff and its 412 keep-pruning compare raw
+ *  answer), which is also what the card row shows for an already-trimmed value. Every "does this
+ *  name the same thing the user saw" comparison uses it: promptEntries' Enter-to-keep check,
+ *  detectionDisagreements, and the dismissal match (isDismissed, and the `saved` form publish
+ *  records on an "n"). publish()'s edit diff and its 412 keep-pruning compare raw
  *  stored values on purpose: they ask whether the answer changed, not how it reads. */
 export function shownValue(value: string): string {
   return sanitizeValue(value).trim();
@@ -262,6 +263,26 @@ export function renderProfile(
     lines.push("", `  ${c.faint}updated ${relTime(profile.updated_at, opts.now)}${c.reset}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * One marked row as the per-key take question (publish's `d`): `Editor    Zed → Neovim`, the
+ * label padded so a run of questions lines up. No indent (the prompter adds the unit's), and the
+ * values are never linked: a URL here is something to answer about, not to follow. Both values
+ * are untrusted (wire-fetched and env-derived), so both are sanitized like a card row.
+ */
+export function takeLine(
+  label: string,
+  width: number,
+  saved: string,
+  detected: string,
+  color: boolean,
+): string {
+  const c = palette(color);
+  return (
+    `${c.faint}${label.padEnd(width)}${c.reset}  ${sanitizeValue(saved)} ` +
+    `${c.faint}→${c.reset} ${sanitizeValue(detected)}`
+  );
 }
 
 const MISSING = "—";

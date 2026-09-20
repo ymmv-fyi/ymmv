@@ -21,6 +21,26 @@ describe("promptLine", () => {
   it("a default that is ONLY control characters renders as no default", () => {
     expect(promptLine("Editor", `${ESC}[2J`)).toBe("  Editor: ");
   });
+  it("a hint follows the default in parentheses, before the colon", () => {
+    expect(promptLine("Editor", "Zed", false, "detected: Neovim")).toBe(
+      "  Editor [Zed] (detected: Neovim): ",
+    );
+    expect(promptLine("Editor", undefined, false, "detected: Neovim")).toBe(
+      "  Editor (detected: Neovim): ",
+    );
+  });
+  it("the hint is env-derived: sanitized, and one with nothing left prints no parentheses", () => {
+    expect(promptLine("Editor", "Zed", false, `detected: Neo${ESC}[2Jvim`)).toBe(
+      "  Editor [Zed] (detected: Neovim): ",
+    );
+    expect(promptLine("Editor", "Zed", false, `${ESC}[2J`)).toBe("  Editor [Zed]: ");
+    expect(promptLine("Editor", "Zed", false, "")).toBe("  Editor [Zed]: ");
+  });
+  it("color mode dims the hint like the card's note, never amber", () => {
+    expect(promptLine("Editor", "Zed", true, "detected: Neovim")).toBe(
+      `  ${ESC}[90mEditor${ESC}[0m [Zed] ${ESC}[90m(detected: Neovim)${ESC}[0m: `,
+    );
+  });
   it("color mode dims the label only — default and punctuation stay plain ink", () => {
     expect(promptLine("Editor", "Neovim", true)).toBe(`  ${ESC}[90mEditor${ESC}[0m [Neovim]: `);
   });
@@ -49,6 +69,18 @@ describe("matchChoice", () => {
     expect(matchChoice("", ["y", "n", "e", "d"], "y")).toBe("y");
     expect(matchChoice("d", KEYS, "y")).toBeNull();
   });
+  it("exact: only the letter or yes/no match, so a tool name typed back at a take question re-asks", () => {
+    const YN = ["y", "n"];
+    expect(matchChoice("n", YN, "y", true)).toBe("n");
+    expect(matchChoice(" NO ", YN, "y", true)).toBe("n");
+    expect(matchChoice("Yes", YN, "y", true)).toBe("y");
+    expect(matchChoice("", YN, "y", true)).toBe("y");
+    expect(matchChoice("neovim", YN, "y", true)).toBeNull(); // not "n"
+    expect(matchChoice("nvim", YN, "y", true)).toBeNull();
+    expect(matchChoice("yazi", YN, "y", true)).toBeNull(); // not "y"
+    expect(matchChoice("neovim", YN, "y")).toBe("n"); // the loose default, unchanged
+  });
+
   it("throws loudly on colliding or multi-letter keys (programming error)", () => {
     expect(() => matchChoice("y", ["y", "y"], "y")).toThrow(/unique single letters/);
     expect(() => matchChoice("y", ["yes", "no"], "yes")).toThrow(/unique single letters/);
