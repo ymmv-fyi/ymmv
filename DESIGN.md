@@ -66,6 +66,12 @@ CLI parity: the CLI renders the same semantics with ANSI bright yellow (`package
 — amber-only-on-difference, em-dash for a missing side, "N differ / N shared" wording, "how X
 differs from Y" heading. Change one surface, mirror the other.
 
+The CLI's publish preview compares the card against the live profile and marks each differing
+row in the gutter: `~` changed, `+` new, `-` cleared. That is the no-color vocabulary plus two
+glyphs. The glyph prints in both color modes, since three kinds cannot share the amber dot. The
+glyph and the incoming value are amber, because a change against live is a diff difference. The
+outgoing value and its arrow are faint. The web has no publish preview, so this is CLI only.
+
 ## The divergence motif
 
 - **Hero field**: retired from the landing (2026-09-14, see Landing layout). The static roads and

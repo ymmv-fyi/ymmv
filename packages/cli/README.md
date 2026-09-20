@@ -50,6 +50,9 @@ via npm Trusted Publishing, with provenance.
   your environment now detects differently and `d` asks about each one; `ymmv publish` is the
   same command). Answer `y` to take the detected value, or `n` to keep yours. The CLI remembers
   an `n` on this machine and stops marking that value until it or the detection changes.
+  The preview also marks what publishing will change on your live profile: `~` changed, `+` new,
+  `-` cleared. With nothing to change it says so, and Enter publishes nothing. `y` still
+  publishes.
 - `ymmv --reset-marks` forgets those answers, so every differing value is marked again
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
@@ -109,7 +112,9 @@ Two things to know:
 - `ymmv -y` publishes the merge of your existing profile with what it detects on the machine it
   runs on. Values you already published always win, but curated keys you have never set get the
   CI runner's detected values (its OS, shell, and so on). For targeted updates from CI, prefer
-  `ymmv set <key> <value>`.
+  `ymmv set <key> <value>`. When the merge equals what is already live, `ymmv -y` says
+  `Nothing to publish.` and exits 0 without writing, so a scheduled job does not move your
+  updated date. `ymmv set` does the same for a value the profile already holds.
 - A rejected or revoked `YMMV_TOKEN` fails `ymmv -y`, `ymmv set`/`unset`, and `ymmv delete` with
   an error naming the variable; nothing falls back to an interactive login, and the stored login
   file on the runner (if any) is left untouched. `ymmv <handle>` still shows the profile, with the

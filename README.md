@@ -21,7 +21,9 @@ npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 The first run asks you to sign in with GitHub. Every run after that goes
 straight to detect, confirm, publish: the preview marks any value your
 environment now detects differently, and `d` takes the ones you want, so
-updating your page is the same command again. Works on macOS, Linux,
+updating your page is the same command again. The preview also marks what
+publishing will change on your live page: `~` changed, `+` new, `-` cleared.
+If nothing would change, Enter publishes nothing. Works on macOS, Linux,
 Windows, and WSL.
 
 ## What you get
