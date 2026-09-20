@@ -7,6 +7,7 @@ import {
   type ExtraDiff,
   hasVisibleContent,
   KEY_LABELS,
+  MAX_VALUE,
   type Profile,
 } from "@ymmv/shared";
 
@@ -137,6 +138,32 @@ const HTTP_URL_RE = /^https?:\/\/\S+$/i;
 export function isHttpUrl(value: string): boolean {
   const t = value.trim();
   return HTTP_URL_RE.test(t) && URL.canParse(t);
+}
+
+// `me/dotfiles`: a GitHub login (no dots), then a repo name that is not `.` or `..`.
+const USER_REPO_RE = /^([a-z\d][a-z\d-]*)\/((?!\.{1,2}\/?$)[\w.-]+)\/?$/i;
+// `github.com/me/dotfiles`: a dotted host ending in a TLD, then a path. The slash is required so
+// a filename (`chezmoi.toml`) never reads as a host, and the path charset is narrow enough that
+// the result can ride inside a command meant to be pasted (no quotes, `$(`, backticks, `?`, `#`).
+const HOST_PATH_RE = /^[a-z\d-]+(\.[a-z\d-]+)*\.[a-z]{2,}\/[\w.~%+/-]*$/i;
+
+/** The https form of a dotfiles value typed without a scheme, or undefined when there is none to
+ *  offer: both surfaces link only a bare http(s) URL (isHttpUrl here, safe-href.ts on the web), so
+ *  `github.com/me/dotfiles` publishes as plain text. `user/repo` is read as GitHub only when the
+ *  user is `handle`, the GitHub login this profile is bound to: any `word/word` fits the shape
+ *  (`n/a`, `src/dotfiles`), and the offer defaults to yes. Never a form the write rules would
+ *  refuse. */
+export function linkForm(value: string, handle: string): string | undefined {
+  const t = value.trim();
+  if (isHttpUrl(t)) return undefined;
+  const repo = USER_REPO_RE.exec(t);
+  const url =
+    repo && repo[1]?.toLowerCase() === handle.toLowerCase()
+      ? `https://github.com/${repo[1]}/${repo[2]}`
+      : HOST_PATH_RE.test(t)
+        ? `https://${t}`
+        : undefined;
+  return url !== undefined && url.length <= MAX_VALUE ? url : undefined;
 }
 
 // Terminals known to mishandle (not ignore) unknown OSC sequences — never emit OSC-8 there.
