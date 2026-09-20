@@ -19,8 +19,9 @@ npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 ```
 
 The first run asks you to sign in with GitHub. Every run after that goes
-straight to detect, confirm, publish, so updating your page is the same
-command again. Works on macOS, Linux, Windows, and WSL.
+straight to detect, confirm, publish: the preview marks any value your
+environment now detects differently, and `d` takes those, so updating your
+page is the same command again. Works on macOS, Linux, Windows, and WSL.
 
 ## What you get
 

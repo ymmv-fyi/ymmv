@@ -46,7 +46,8 @@ via npm Trusted Publishing, with provenance.
 
 ## Commands
 
-- `ymmv` detects, confirms, and publishes (re-run any time to update; `ymmv publish` is the same command)
+- `ymmv` detects, confirms, and publishes (re-run any time to update: the preview marks values
+  your environment now detects differently and `d` takes them; `ymmv publish` is the same command)
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
 - `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own (`-e` works too)

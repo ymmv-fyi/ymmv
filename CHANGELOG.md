@@ -2,6 +2,15 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **Running `ymmv` again picks up a value your environment now detects differently.** On a
+  republish the preview card marks each such row, as `Editor    Zed  (detected: Neovim)`, and the
+  confirm offers `d` to take every marked value before publishing. Saved values still win by
+  default, a value you change, clear, or keep in the same run is never marked, and `ymmv -y` is
+  unchanged.
+
 ## [0.11.2] - 2026-09-19
 
 ### Fixed
