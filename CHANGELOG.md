@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.11.3] - 2026-09-19
 
 ### Fixed
 - **Running `ymmv` again picks up a value your environment now detects differently.** On a
@@ -390,6 +390,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.11.3]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.11.3
 [0.11.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.11.2
 [0.11.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.11.1
 [0.11.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.11.0
