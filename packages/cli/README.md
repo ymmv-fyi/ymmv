@@ -56,6 +56,9 @@ via npm Trusted Publishing, with provenance.
 - `ymmv --reset-marks` forgets those answers, so every differing value is marked again
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
+- `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form, since only a full URL
+  links on your page (the publish prompts offer the same). Without a terminal, or under
+  `YMMV_TOKEN`, it stores the value as typed and never asks.
 - `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own (`-e` works too)
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
