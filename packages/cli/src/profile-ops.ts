@@ -61,6 +61,48 @@ export function detectionDisagreements(
   return out;
 }
 
+/**
+ * What publishing `values` would change on the live profile, per curated key: the live value
+ * being replaced or cleared, or `null` for a key the live profile lacks. Which of the two a string
+ * means falls out of `values` (key present: changed; absent: cleared). These are the card's
+ * marks, not the "nothing to publish" decision (publish() makes that with sameContent): the live
+ * side is read through buildDefaults, so it follows the rules `values` was built under (trimmed,
+ * last duplicate wins, whitespace-only is absent) and a padded stored value is not marked, though
+ * publishing does normalize it. Raw comparison, not canonical: `vim` → `Vim` names the same tool
+ * but is a different stored string. Curated keys only: publish() passes extras and
+ * newer-taxonomy entries through verbatim, so they cannot differ.
+ */
+export function profileChanges(
+  live: Profile,
+  values: ReadonlyMap<CuratedKey, string>,
+): Map<CuratedKey, string | null> {
+  const stored = buildDefaults(live, new Map());
+  const out = new Map<CuratedKey, string | null>();
+  for (const key of CURATED_KEYS) {
+    const from = stored.get(key);
+    if (from !== values.get(key)) out.set(key, from ?? null);
+  }
+  return out;
+}
+
+/**
+ * Would storing these entries/extras leave `live` exactly as it is? Byte-for-byte on purpose (the
+ * no-op check of `set` and of publish): an extra label's casing is a real change, and so is a
+ * padded stored value when the caller passes what the server would store (publish() trims its
+ * side; `set` passes the other rows as read, so it only answers for its target). Extras compare in
+ * order (the server stores the array as sent). Entries do not: the server keys them and reads
+ * them back in ITS taxonomy order, so a newer key it lists between two this build knows comes
+ * back interleaved, while publish() sends it last.
+ */
+export function sameContent(live: Profile, entries: Entry[], extras: Extra[]): boolean {
+  return (
+    entries.length === live.entries.length &&
+    extras.length === live.extras.length &&
+    entries.every((e) => live.entries.some((l) => l.key === e.key && l.value === e.value)) &&
+    extras.every((x, i) => x.label === live.extras[i]?.label && x.value === live.extras[i]?.value)
+  );
+}
+
 /** A curated-key map → ordered Entry[] (canonical CURATED_KEYS order, empty keys dropped). */
 export function entriesFromMap(map: Map<CuratedKey, string>): Entry[] {
   return CURATED_KEYS.flatMap((key) => {
