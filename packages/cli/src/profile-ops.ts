@@ -1,11 +1,13 @@
 import {
   CURATED_KEYS,
   type CuratedKey,
+  canonical,
   type Entry,
   type Extra,
   isCuratedKey,
   type Profile,
 } from "@ymmv/shared";
+import { shownValue } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
 
 // Pure profile transforms shared by the write commands (publish/set/unset). No IO — given the
@@ -15,6 +17,8 @@ import type { SetTarget, UnsetTarget } from "./resolve.js";
 /**
  * Per-key defaults for the publish edit prompt. An existing published value wins over a fresh
  * detection (never clobber a deliberate choice on republish); detection only fills the gaps.
+ * What it silently won over is surfaced by detectionDisagreements, so the card can mark the row
+ * and the confirm can offer `d` to take the detection.
  */
 export function buildDefaults(
   existing: Profile | null,
@@ -27,6 +31,32 @@ export function buildDefaults(
   for (const key of CURATED_KEYS) {
     const value = existingByKey.get(key) ?? detected.get(key);
     if (value?.trim()) out.set(key, value.trim());
+  }
+  return out;
+}
+
+/**
+ * Keys whose current answer names a different tool than a fresh detection, with the detected
+ * value as the card shows it: the complement of buildDefaults, which lets the saved value win
+ * silently. Compared on the SHOWN form (sanitized, trimmed, then canonical), so same-tool
+ * spellings (`vim`/`Vim`, `vscode`/`VS Code`) and invisible-character differences are not
+ * disagreements, and the value returned is the one `d` may store — what you saw is what you
+ * accept. A key only one side has is not a disagreement either (a gap was already filled by
+ * buildDefaults; a clear stands), nor is a key in `decided`: one the user typed, cleared, took, or
+ * kept in a walk this session. Rule-agnostic on purpose: the write rules live in commands.ts.
+ */
+export function detectionDisagreements(
+  values: ReadonlyMap<CuratedKey, string>,
+  detected: ReadonlyMap<CuratedKey, string>,
+  decided: ReadonlySet<CuratedKey> = new Set(),
+): Map<CuratedKey, string> {
+  const out = new Map<CuratedKey, string>();
+  for (const key of CURATED_KEYS) {
+    const current = values.get(key);
+    const fresh = detected.get(key);
+    if (current === undefined || fresh === undefined || decided.has(key)) continue;
+    const take = shownValue(fresh);
+    if (take && canonical(key, shownValue(current)) !== canonical(key, take)) out.set(key, take);
   }
   return out;
 }

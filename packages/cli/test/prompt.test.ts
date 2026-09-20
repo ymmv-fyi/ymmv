@@ -43,6 +43,12 @@ describe("matchChoice", () => {
     expect(matchChoice("-", KEYS, "y")).toBeNull();
     expect(matchChoice("publish", KEYS, "y")).toBeNull();
   });
+  it("d matches only while it is offered; unoffered it re-asks like any other letter", () => {
+    expect(matchChoice("d", ["y", "n", "e", "d"], "y")).toBe("d");
+    expect(matchChoice("Detected", ["y", "n", "e", "d"], "y")).toBe("d");
+    expect(matchChoice("", ["y", "n", "e", "d"], "y")).toBe("y");
+    expect(matchChoice("d", KEYS, "y")).toBeNull();
+  });
   it("throws loudly on colliding or multi-letter keys (programming error)", () => {
     expect(() => matchChoice("y", ["y", "y"], "y")).toThrow(/unique single letters/);
     expect(() => matchChoice("y", ["yes", "no"], "yes")).toThrow(/unique single letters/);

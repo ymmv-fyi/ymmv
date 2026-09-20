@@ -1,5 +1,6 @@
 import {
   CURATED_KEYS,
+  type CuratedKey,
   type DiffResult,
   displayUrl,
   type Entry,
@@ -82,6 +83,15 @@ const BIDI_RE = /\p{Bidi_Control}/gu;
 /** Neutralize an untrusted value for terminal display: strip ANSI + control + bidi chars. */
 export function sanitizeValue(value: string): string {
   return value.replace(ANSI_RE, "").replace(CTRL_RE, "").replace(BIDI_RE, "");
+}
+
+/** The form Enter hands back at a prompt (prompt.ts sanitizes the default; the walk trims the
+ *  answer), which is also what the card row shows for an already-trimmed value. The two
+ *  "does this name the same thing the user saw" comparisons use it: promptEntries' Enter-to-keep
+ *  check and detectionDisagreements. publish()'s edit diff and its 412 keep-pruning compare raw
+ *  stored values on purpose: they ask whether the answer changed, not how it reads. */
+export function shownValue(value: string): string {
+  return sanitizeValue(value).trim();
 }
 
 /** The CLI's visibility pre-flight: the shared rule applied to the form the user is SHOWN. An
@@ -179,10 +189,22 @@ export function relTime(iso: string, now: () => number = Date.now): string {
  * curated key as a faint `Label  —` row so gaps are visible before confirming, and drops the
  * `updated` line (a pre-publish timestamp would be a lie). view() never passes `mode`, so preview
  * rows cannot leak into viewing.
+ *
+ * `disagreements` (preview only, ignored in view mode) holds the keys whose fresh detection names
+ * a different tool than the shown value, each mapped to that detected value: the row gets a faint
+ * trailing `(detected: X)` note so the user can see what the saved value won over before
+ * confirming. The caller decides what "disagrees" means; this only prints. Gap rows never carry
+ * one (nothing to disagree with). Env-derived, so the note is sanitized like every value.
  */
 export function renderProfile(
   profile: Profile,
-  opts: { color: boolean; site: string; mode?: "view" | "preview"; now?: () => number },
+  opts: {
+    color: boolean;
+    site: string;
+    mode?: "view" | "preview";
+    now?: () => number;
+    disagreements?: ReadonlyMap<CuratedKey, string>;
+  },
 ): string {
   const c = palette(opts.color);
   const preview = opts.mode === "preview";
@@ -193,7 +215,13 @@ export function renderProfile(
   const rows = CURATED_KEYS.flatMap((key) => {
     const value = byKey.get(key);
     if (value === undefined && !preview) return [];
-    return [{ label: KEY_LABELS[key], value: value === undefined ? null : sanitizeValue(value) }];
+    return [
+      {
+        label: KEY_LABELS[key],
+        value: value === undefined ? null : sanitizeValue(value),
+        note: preview && value !== undefined ? opts.disagreements?.get(key) : undefined,
+      },
+    ];
   });
   const extras = (profile.extras ?? []).map((x) => ({
     label: sanitizeValue(x.label),
@@ -216,11 +244,12 @@ export function renderProfile(
   if (rows.length) {
     lines.push("");
     for (const r of rows) {
-      lines.push(
-        r.value === null
-          ? `  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`
-          : `  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}`,
-      );
+      if (r.value === null) {
+        lines.push(`  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`);
+        continue;
+      }
+      const note = r.note ? `  ${c.faint}(detected: ${sanitizeValue(r.note)})${c.reset}` : "";
+      lines.push(`  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}${note}`);
     }
   }
   if (extras.length) {
