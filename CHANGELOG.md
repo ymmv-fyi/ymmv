@@ -2,6 +2,21 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Added
+- **`ymmv --reset-marks` forgets the detected values you said no to.** Each one is marked again
+  on that run, and the publish goes on as usual.
+
+### Changed
+- **`d` asks about each marked value instead of taking them all.** Each marked row gets its own
+  question, as `Editor    Zed → Neovim [Y/n]`. `y` takes the detected value and `n` keeps yours.
+- **A value you keep with `n` is not marked again.** The CLI remembers the answer on this machine
+  until the saved value or the detection changes, and says so after the questions. With no
+  marks left, the confirm is `[Y/n/e=edit]` again.
+- **The edit walk shows the detection.** A marked row's prompt reads
+  `Editor [Zed] (detected: Neovim):`, and Enter keeps your value for that run.
+
 ## [0.11.3] - 2026-09-19
 
 ### Fixed

@@ -47,7 +47,10 @@ via npm Trusted Publishing, with provenance.
 ## Commands
 
 - `ymmv` detects, confirms, and publishes (re-run any time to update: the preview marks values
-  your environment now detects differently and `d` takes them; `ymmv publish` is the same command)
+  your environment now detects differently and `d` asks about each one; `ymmv publish` is the
+  same command). Answer `y` to take the detected value, or `n` to keep yours. The CLI remembers
+  an `n` on this machine and stops marking that value until it or the detection changes.
+- `ymmv --reset-marks` forgets those answers, so every differing value is marked again
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
 - `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own (`-e` works too)
