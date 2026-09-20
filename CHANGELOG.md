@@ -16,6 +16,15 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   card and the same line, with `Nothing to publish.` after it. `ymmv set editor Vim` on a profile
   that already says Vim prints `Editor is already Vim.` Both exit 0, so a scheduled job no longer
   moves your updated date.
+- **A prompt with no value to offer shows an example.** The walk asks
+  `Prompt (e.g. Starship, Oh My Posh):` and `Dotfiles (a URL):` where it used to ask `Prompt:` and
+  `Dotfiles:`. A prompt that already offers a value looks as before.
+- **A dotfiles value typed without `https://` is offered as a link.** `github.com/you/dotfiles`
+  used to publish as plain text that never links, and so did `you/dotfiles`. The walk and
+  `ymmv set dotfiles` now ask `use https://github.com/you/dotfiles? [Y/n]`, and `n` keeps what you
+  typed. `you/dotfiles` is read as GitHub only under your own username. Without a terminal, or
+  under `YMMV_TOKEN`, `ymmv set` does not ask. It stores the value as typed, and stderr shows the
+  command that makes it a link.
 
 ## [0.12.0] - 2026-09-19
 
