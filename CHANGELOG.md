@@ -2,6 +2,21 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **The preview card marks what publishing will change.** Against your live profile, a
+  changed row reads `~ Editor    Zed → Neovim`, a new one `+ Font      Lilex`, and a cleared one
+  `- Shell     zsh → —`. Unchanged rows look as before, and a first publish has no marks.
+- **Running `ymmv` with nothing to change no longer republishes.** The card is followed by
+  `Nothing changed. Last published 3d ago.` and the confirm becomes
+  `Publish to ymmv.fyi/<you> anyway? [y/N/e=edit]`, so Enter leaves your page and its updated
+  date alone. `e` and `d` work from there as before, and `y` publishes anyway.
+- **`ymmv -y` and `ymmv set` write nothing when nothing would change.** `ymmv -y` prints the
+  card and the same line, with `Nothing to publish.` after it. `ymmv set editor Vim` on a profile
+  that already says Vim prints `Editor is already Vim.` Both exit 0, so a scheduled job no longer
+  moves your updated date.
+
 ## [0.12.0] - 2026-09-19
 
 ### Added
