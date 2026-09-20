@@ -109,4 +109,33 @@ describe("prompt lines as output units (spacing convention)", () => {
     await expect(p).resolves.toBe("Zed");
     expect(f.rl.question).toHaveBeenCalledWith("  Editor: ", expect.anything());
   });
+
+  it("an ask() hint is shown, and Enter still returns the default, never the hint", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().ask("Editor", "Zed", "detected: Neovim");
+    await tick();
+    f.answer("");
+    await expect(p).resolves.toBe("Zed");
+    expect(f.rl.question).toHaveBeenCalledWith(
+      "  Editor [Zed] (detected: Neovim): ",
+      expect.anything(),
+    );
+  });
+
+  it("a tight choice continues the caller's unit: no opening blank, and a typo re-asks", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().choice("Shell  zsh → fish", ["y", "n"], "y", "Y/n", {
+      tight: true,
+      exact: true,
+    });
+    await tick();
+    f.answer("nushell"); // starts with n, but only "n"/"no" may be the answer that gets remembered
+    await tick();
+    f.answer("n");
+    await expect(p).resolves.toBe("n");
+    const queries = f.rl.question.mock.calls.map((c) => c[0]);
+    expect(queries).toEqual(["  Shell  zsh → fish [Y/n] ", "  Shell  zsh → fish [Y/n] "]);
+  });
 });

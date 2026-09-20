@@ -11,6 +11,7 @@ import {
   renderProfile,
   sanitizeValue,
   shownValue,
+  takeLine,
   useColor,
 } from "../src/render.js";
 
@@ -26,6 +27,27 @@ describe("shownValue (the form the card shows and Enter hands back)", () => {
   });
   it("leaves a clean value, inner spacing included, untouched", () => {
     expect(shownValue("VS Code")).toBe("VS Code");
+  });
+});
+
+describe("takeLine (one marked row as publish's per-key question)", () => {
+  it("pads the label so a run of questions lines up, with no indent of its own", () => {
+    expect(takeLine("Editor", 8, "Zed", "Neovim", false)).toBe("Editor    Zed → Neovim");
+    expect(takeLine("Terminal", 8, "WezTerm", "VS Code", false)).toBe(
+      "Terminal  WezTerm → VS Code",
+    );
+  });
+  it("sanitizes both values: the saved one is off the wire, the detected one from the env", () => {
+    const line = takeLine("Editor", 6, `Z${ESC}[31med`, `Neo${ESC}[2Jvim`, false);
+    expect(line).toBe("Editor  Zed → Neovim");
+  });
+  it("never links a URL value, and color dims the label and the arrow only", () => {
+    const line = takeLine("Dotfiles", 8, "https://a.example/x", "https://b.example/y", true);
+    expect(line).not.toContain(OSC8_OPEN);
+    expect(line).not.toContain(AMBER);
+    expect(line).toBe(
+      `${ESC}[90mDotfiles${ESC}[0m  https://a.example/x ${ESC}[90m→${ESC}[0m https://b.example/y`,
+    );
   });
 });
 

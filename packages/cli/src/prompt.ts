@@ -22,12 +22,22 @@ export class PromptAborted extends Error {
 }
 
 export interface Prompter {
-  /** Ask for a value, offering `def` as the default; empty input returns `def`. */
-  ask(label: string, def?: string): Promise<string>;
+  /** Ask for a value, offering `def` as the default; empty input returns `def`. `hint` is a faint
+   *  parenthetical after the default, display only: it never changes what Enter returns. */
+  ask(label: string, def?: string, hint?: string): Promise<string>;
   /** Yes/no question; empty input returns `defYes`. */
   confirm(question: string, defYes: boolean): Promise<boolean>;
-  /** Single-letter choice: empty input returns `def`; unmatched input re-asks. */
-  choice(question: string, keys: readonly string[], def: string, hint: string): Promise<string>;
+  /** Single-letter choice: empty input returns `def`; unmatched input re-asks. `tight` skips the
+   *  unit's opening blank line, for a question that continues a unit the caller already opened.
+   *  `exact` takes only the letter itself or yes/no, for a question that shows words the user
+   *  might type back: at `Zed → Neovim [Y/n]`, "neovim" must re-ask, never count as "n". */
+  choice(
+    question: string,
+    keys: readonly string[],
+    def: string,
+    hint: string,
+    opts?: { tight?: boolean; exact?: boolean },
+  ): Promise<string>;
   close(): void;
 }
 
@@ -35,26 +45,39 @@ export interface Prompter {
  * The rendered question line, exported for tests. Defaults carry env-detected or wire-fetched
  * values — the same UNTRUSTED rule as every other print path (render.ts) applies, and this was
  * the one print that skipped it: strip ANSI/control/bidi before the terminal sees the default.
- * With color off the line is byte-identical to the unstyled original.
+ * With color off the line is byte-identical to the unstyled original. The hint is env-derived too
+ * (a detected value), so it gets the same strip; one that sanitizes to nothing prints nothing,
+ * never a bare `()`.
  */
-export function promptLine(label: string, def?: string, color = false): string {
+export function promptLine(label: string, def?: string, color = false, hint?: string): string {
   const c = palette(color);
   const clean = def ? sanitizeValue(def) : def;
-  return `  ${c.faint}${label}${c.reset}${clean ? ` [${clean}]` : ""}: `;
+  const note = hint ? sanitizeValue(hint).trim() : "";
+  return (
+    `  ${c.faint}${label}${c.reset}${clean ? ` [${clean}]` : ""}` +
+    `${note ? ` ${c.faint}(${note})${c.reset}` : ""}: `
+  );
 }
 
 /**
  * Pure choice matcher, exported for tests: empty → `def`; otherwise the first letter of the
  * trimmed lowercased answer must be one of `keys` ("yes" matches "y", "EDIT" matches "e");
- * anything else → null (the caller re-asks). Keys must be unique single letters — a colliding
- * or multi-char key is a programming error, caught loudly at call time.
+ * anything else → null (the caller re-asks). With `exact`, only the letter alone or yes/no match.
+ * Keys must be unique single letters — a colliding or multi-char key is a programming error,
+ * caught loudly at call time.
  */
-export function matchChoice(answer: string, keys: readonly string[], def: string): string | null {
+export function matchChoice(
+  answer: string,
+  keys: readonly string[],
+  def: string,
+  exact = false,
+): string | null {
   if (keys.some((k) => k.length !== 1) || new Set(keys).size !== keys.length) {
     throw new Error(`choice keys must be unique single letters: ${keys.join(",")}`);
   }
   const a = answer.trim().toLowerCase();
   if (a === "") return def;
+  if (exact && a.length > 1 && a !== "yes" && a !== "no") return null;
   const first = a[0] as string;
   return keys.includes(first) ? first : null;
 }
@@ -101,15 +124,16 @@ export function makePrompter(): Prompter {
     }
   };
   return {
-    async ask(label, def) {
+    async ask(label, def, hint) {
       // Empty input accepts the SANITIZED default — what you saw is what you accepted.
       const clean = def ? sanitizeValue(def) : def;
-      const answer = (await question(promptLine(label, def, color))).trim();
+      const answer = (await question(promptLine(label, def, color, hint))).trim();
       return answer === "" ? (clean ?? "") : answer;
     },
     // Prompts are output units (render.ts convention): confirm/choice open with the unit's one
     // blank line here — never in the caller's question string. Field ask()s stay tight: the
-    // 13-key walk is a single unit opened by its hint line.
+    // 13-key walk is a single unit opened by its hint line. A `tight` choice skips the blank the
+    // same way: publish's per-row questions are one unit, opened by the first of them.
     async confirm(q, defYes) {
       const answer = (await question(`\n  ${q} ${c.faint}[${defYes ? "Y/n" : "y/N"}]${c.reset} `))
         .trim()
@@ -117,13 +141,14 @@ export function makePrompter(): Prompter {
       if (answer === "") return defYes;
       return answer === "y" || answer === "yes";
     },
-    async choice(q, keys, def, hint) {
-      let prefix = "\n";
+    async choice(q, keys, def, hint, opts) {
+      let prefix = opts?.tight ? "" : "\n";
       for (;;) {
         const hit = matchChoice(
           await question(`${prefix}  ${q} ${c.faint}[${hint}]${c.reset} `),
           keys,
           def,
+          opts?.exact,
         );
         if (hit !== null) return hit;
         prefix = ""; // a re-ask continues the same question — stays tight under the failed answer
