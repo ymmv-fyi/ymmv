@@ -18,7 +18,7 @@ import type { SetTarget, UnsetTarget } from "./resolve.js";
  * Per-key defaults for the publish edit prompt. An existing published value wins over a fresh
  * detection (never clobber a deliberate choice on republish); detection only fills the gaps.
  * What it silently won over is surfaced by detectionDisagreements, so the card can mark the row
- * and the confirm can offer `d` to take the detection.
+ * and the confirm can offer `d`, which asks about each marked row.
  */
 export function buildDefaults(
   existing: Profile | null,

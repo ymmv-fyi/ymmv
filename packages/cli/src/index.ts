@@ -2,6 +2,7 @@ import { revokeYmmvToken } from "./auth-http.js";
 import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
 import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
 import { login, retirable } from "./device-flow.js";
+import { dismissalsPath } from "./dismissals.js";
 import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
 import { type Codes, colorEnabled, message, palette, sanitizeValue, useColor } from "./render.js";
@@ -27,6 +28,7 @@ export const help = (
 ${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
   ymmv -y                   publish without prompts (required when stdin isn't a TTY)
+  ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
   ymmv set <key> <value>    set one curated key
@@ -165,7 +167,10 @@ export async function main(argv: string[]): Promise<void> {
 async function dispatch(cmd: Command): Promise<void> {
   switch (cmd.kind) {
     case "publish":
-      await interactive(publish, cmd.yes);
+      await interactive(
+        (io) => publish({ ...io, dismissalsPath: dismissalsPath(), resetMarks: cmd.resetMarks }),
+        cmd.yes,
+      );
       break;
     case "view":
       await view(cmd.handle);
