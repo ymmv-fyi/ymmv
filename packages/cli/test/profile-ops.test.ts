@@ -6,6 +6,8 @@ import {
   buildDefaults,
   detectionDisagreements,
   entriesFromMap,
+  profileChanges,
+  sameContent,
   unknownEntries,
 } from "../src/profile-ops.js";
 
@@ -95,6 +97,110 @@ describe("detectionDisagreements", () => {
       ]),
     );
     expect([...out.keys()]).toEqual(["editor", "shell"]);
+  });
+});
+
+describe("profileChanges", () => {
+  const live = prof([
+    { key: "editor", value: "Zed" },
+    { key: "shell", value: "zsh" },
+  ]);
+
+  it("the live values republished as they are: nothing changes", () => {
+    const values = buildDefaults(live, map([]));
+    expect(profileChanges(live, values).size).toBe(0);
+  });
+  it("changed and cleared keys carry the live value, a new key carries null, in CURATED_KEYS order", () => {
+    const out = profileChanges(
+      live,
+      map([
+        ["font", "Lilex"],
+        ["editor", "Neovim"],
+      ]),
+    );
+    expect([...out]).toEqual([
+      ["editor", "Zed"],
+      ["shell", "zsh"],
+      ["font", null],
+    ]);
+  });
+  it("a respelling of the same tool is a change (raw, not canonical: the stored string differs)", () => {
+    const out = profileChanges(prof([{ key: "editor", value: "vim" }]), map([["editor", "Vim"]]));
+    expect([...out]).toEqual([["editor", "vim"]]);
+  });
+  it("a padded stored value is not a change: the defaults it was merged into are trimmed too", () => {
+    const padded = prof([{ key: "editor", value: "  Vim " }]);
+    expect(profileChanges(padded, buildDefaults(padded, map([]))).size).toBe(0);
+  });
+  it("a whitespace-only stored value is absent on both sides", () => {
+    const blank = prof([{ key: "editor", value: "   " }]);
+    expect(profileChanges(blank, buildDefaults(blank, map([["editor", "Vim"]]))).size).toBe(0);
+  });
+  it("a detection that fills a gap is a new key", () => {
+    const out = profileChanges(live, buildDefaults(live, map([["os", "Arch"]])));
+    expect([...out]).toEqual([["os", null]]);
+  });
+  it("newer-taxonomy keys are ignored: publish carries them through verbatim", () => {
+    const p = prof([
+      { key: "launcher", value: "Raycast" } as unknown as Entry,
+      { key: "editor", value: "Zed" },
+    ]);
+    expect(profileChanges(p, map([["editor", "Zed"]])).size).toBe(0);
+  });
+  it("does not mutate the live profile", () => {
+    const p = prof([{ key: "editor", value: " Zed " }]);
+    profileChanges(p, map([["editor", "Vim"]]));
+    expect(p.entries).toEqual([{ key: "editor", value: " Zed " }]);
+  });
+});
+
+describe("sameContent", () => {
+  const live = prof([{ key: "editor", value: "Vim" }], [{ label: "Keyboard", value: "HHKB" }]);
+
+  it("setting a curated key or an extra to what is stored is the same content", () => {
+    const curated = applySet(live, { kind: "curated", key: "editor", value: "Vim" });
+    expect(sameContent(live, curated.entries, curated.extras)).toBe(true);
+    const extra = applySet(live, { kind: "extra", label: "Keyboard", value: "HHKB" });
+    expect(sameContent(live, extra.entries, extra.extras)).toBe(true);
+  });
+  it("a new value, a new key, and a new extra are not", () => {
+    for (const target of [
+      { kind: "curated", key: "editor", value: "Zed" },
+      { kind: "curated", key: "shell", value: "zsh" },
+      { kind: "extra", label: "Launcher", value: "Raycast" },
+    ] as const) {
+      const next = applySet(live, target);
+      expect(sameContent(live, next.entries, next.extras)).toBe(false);
+    }
+  });
+  it("entries compare by key, not position; extras compare in order", () => {
+    const a = { key: "editor", value: "Vim" } as const;
+    const b = { key: "shell", value: "zsh" } as const;
+    const x = { label: "Keyboard", value: "HHKB" };
+    const y = { label: "Launcher", value: "Raycast" };
+    expect(sameContent(prof([a, b], [x, y]), [b, a], [x, y])).toBe(true);
+    expect(sameContent(prof([a, b], [x, y]), [a, b], [y, x])).toBe(false);
+    expect(sameContent(prof([a, b]), [a], [])).toBe(false);
+  });
+  it("the same number of entries under different keys is not the same content", () => {
+    // What a walk that clears one key and fills another sends: the lengths match, the keys do not.
+    const stored = prof([
+      { key: "editor", value: "Vim" },
+      { key: "shell", value: "zsh" },
+    ]);
+    const sent = [
+      { key: "editor", value: "Vim" },
+      { key: "font", value: "Lilex" },
+    ] as Entry[];
+    expect(sameContent(stored, sent, [])).toBe(false);
+  });
+  it("an extra label's casing is a real change (applySet rewrites the stored label)", () => {
+    const next = applySet(live, { kind: "extra", label: "keyboard", value: "HHKB" });
+    expect(sameContent(live, next.entries, next.extras)).toBe(false);
+  });
+  it("a respelled curated value is a real change", () => {
+    const next = applySet(live, { kind: "curated", key: "editor", value: "vim" });
+    expect(sameContent(live, next.entries, next.extras)).toBe(false);
   });
 });
 
