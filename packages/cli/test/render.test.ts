@@ -482,6 +482,87 @@ describe("renderProfile", () => {
       expect(out).not.toContain("(detected");
     });
   });
+
+  describe("changes (preview row marks against the live profile)", () => {
+    const FAINT = `${ESC}[90m`;
+    const RESET = `${ESC}[0m`;
+    const preview = (
+      changes: [CuratedKey, string | null][],
+      color = false,
+      extra: { disagreements?: Map<CuratedKey, string>; mode?: "view" | "preview" } = {},
+    ): string =>
+      renderProfile(FULLISH, {
+        color,
+        site: SITE,
+        mode: "preview",
+        now: at(NOW),
+        changes: new Map(changes),
+        ...extra,
+      });
+    const line = (out: string, label: string): string =>
+      out.split("\n").find((l) => l.includes(label)) ?? "";
+
+    it("marks changed, new and cleared rows in the gutter; the columns hold", () => {
+      const out = preview([
+        ["editor", "Vim"],
+        ["dotfiles", null],
+        ["shell", "zsh"],
+      ]);
+      // "Version Manager" (a gap row) sets the label width: 15, then the two-space gutter.
+      expect(line(out, "Editor")).toBe("~ Editor           Vim → Zed");
+      expect(line(out, "Dotfiles")).toBe("+ Dotfiles         https://git.io/etc");
+      expect(line(out, "Shell")).toBe("- Shell            zsh → —");
+      expect(line(out, "Font")).toBe("  Font             —");
+    });
+    it("a card with no changes is byte-identical to one without the option", () => {
+      const bare = renderProfile(FULLISH, { color: true, site: SITE, mode: "preview" });
+      expect(preview([], true)).toBe(bare);
+    });
+    it("color: amber glyph and incoming value, faint outgoing value and arrow", () => {
+      const out = preview([["editor", "Vim"]], true);
+      expect(line(out, "Editor")).toBe(
+        `${AMBER}~${RESET} ${FAINT}Editor           Vim → ${RESET}${AMBER}Zed${RESET}`,
+      );
+    });
+    it("color: a cleared row spends its amber on the glyph and the —", () => {
+      const out = preview([["shell", "zsh"]], true);
+      expect(line(out, "Shell")).toBe(
+        `${AMBER}-${RESET} ${FAINT}Shell            zsh → ${RESET}${AMBER}—${RESET}`,
+      );
+    });
+    it("a changed URL: the incoming one is the usual link, the outgoing one is never linked", () => {
+      const colored = line(preview([["dotfiles", "https://old.example/dots"]], true), "Dotfiles");
+      expect(colored).toContain(`${OSC8_OPEN}https://git.io/etc`);
+      expect(colored).not.toContain(`${OSC8_OPEN}https://old.example`);
+      expect(colored).toContain("old.example/dots →"); // shortened beside the shortened link
+      expect(colored).not.toContain("https://old.example");
+      // Color off: both addresses in full, like every plain URL.
+      expect(line(preview([["dotfiles", "https://old.example/dots"]]), "Dotfiles")).toBe(
+        "~ Dotfiles         https://old.example/dots → https://git.io/etc",
+      );
+    });
+    it("sanitizes the outgoing value (it came off the wire)", () => {
+      const out = preview([["editor", `V${ESC}[2Jim`]]);
+      expect(out).not.toContain(ESC);
+      expect(line(out, "Editor")).toBe("~ Editor           Vim → Zed");
+    });
+    it("drops `old →` when the old value shows nothing or shows the same as the new one", () => {
+      const ZWSP = String.fromCharCode(0x200b);
+      expect(line(preview([["editor", ZWSP]]), "Editor")).toBe("~ Editor           Zed");
+      expect(line(preview([["editor", `Z${ESC}[2Jed`]]), "Editor")).toBe("~ Editor           Zed");
+      expect(line(preview([["shell", ZWSP]]), "Shell")).toBe("- Shell            —");
+    });
+    it("a row can carry a change mark and a detection note", () => {
+      const out = preview([["editor", "Vim"]], false, {
+        disagreements: new Map<CuratedKey, string>([["editor", "Helix"]]),
+      });
+      expect(line(out, "Editor")).toBe("~ Editor           Vim → Zed  (detected: Helix)");
+    });
+    it("view mode ignores changes", () => {
+      const out = preview([["editor", "Vim"]], false, { mode: "view" });
+      expect(out).toBe(renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) }));
+    });
+  });
 });
 
 describe("nudge / notFound", () => {
@@ -533,6 +614,15 @@ describe("output units (spacing convention)", () => {
     const units = [
       renderProfile(p, { color: false, site: "ymmv.fyi" }),
       renderProfile(p, { color: false, site: "ymmv.fyi", mode: "preview" }),
+      renderProfile(p, {
+        color: false,
+        site: "ymmv.fyi",
+        mode: "preview",
+        changes: new Map<CuratedKey, string | null>([
+          ["editor", "Vim"],
+          ["shell", "zsh"],
+        ]),
+      }),
       renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" }),
       nudge(false),
       notFound("ghost", false, "https://ymmv.fyi"),

@@ -196,6 +196,17 @@ export function relTime(iso: string, now: () => number = Date.now): string {
  * trailing `(detected: X)` note so the user can see what the saved value won over before
  * confirming. The caller decides what "disagrees" means; this only prints. Gap rows never carry
  * one (nothing to disagree with). Env-derived, so the note is sanitized like every value.
+ *
+ * `changes` (preview only, ignored in view mode) holds the keys this publish would change on the
+ * live profile (profile-ops' profileChanges): the live value being replaced or cleared, or null
+ * for a new key. A marked row trades the first indent character for a glyph, so the columns hold:
+ * `~ Editor  Zed → Neovim` changed, `+ Font  Lilex` new, `- Shell  zsh → —` cleared. The glyph
+ * prints in both color modes (three kinds cannot share the diff's amber dot); with color on, the
+ * glyph and the incoming value are amber (a diff difference) and the outgoing value is faint.
+ * The outgoing value is wire data: sanitized, and never linked (takeLine's rule). `old →` is
+ * dropped when the old value shows nothing or shows the same as the new one (a walk re-saving a
+ * value that carried a control sequence), where it would read as a blank or as `Vim → Vim`.
+ * Unmarked rows are byte-identical to a card without `changes`.
  */
 export function renderProfile(
   profile: Profile,
@@ -205,6 +216,7 @@ export function renderProfile(
     mode?: "view" | "preview";
     now?: () => number;
     disagreements?: ReadonlyMap<CuratedKey, string>;
+    changes?: ReadonlyMap<CuratedKey, string | null>;
   },
 ): string {
   const c = palette(opts.color);
@@ -221,6 +233,8 @@ export function renderProfile(
         label: KEY_LABELS[key],
         value: value === undefined ? null : sanitizeValue(value),
         note: preview && value !== undefined ? opts.disagreements?.get(key) : undefined,
+        // undefined = unmarked; null = new key; a string = the live value replaced or cleared.
+        from: preview ? opts.changes?.get(key) : undefined,
       },
     ];
   });
@@ -234,6 +248,14 @@ export function renderProfile(
     ...extras.map((x) => x.label.length),
   );
   const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color) : v);
+  // A marked row's value column up to the incoming value: the gutter, then `old → ` unless it
+  // would not read (see above). A URL is shortened with color on, to sit beside the shortened
+  // incoming link.
+  const outgoing = (from: string | null, to: string | null): string => {
+    const old = shownValue(from ?? "");
+    if (!hasVisibleContent(old) || (to !== null && old === shownValue(to))) return "  ";
+    return `  ${opts.color && isHttpUrl(old) ? displayUrl(old) : old} → `;
+  };
 
   // Every section (rows, extras, updated) pushes its OWN leading blank — the breadcrumb never
   // pre-pays one. A profile with zero curated rows would otherwise stack the breadcrumb's blank
@@ -245,11 +267,24 @@ export function renderProfile(
   if (rows.length) {
     lines.push("");
     for (const r of rows) {
+      const note = r.note ? `  ${c.faint}(detected: ${sanitizeValue(r.note)})${c.reset}` : "";
+      if (r.from !== undefined) {
+        const glyph = r.value === null ? "-" : r.from === null ? "+" : "~";
+        // link() is amber already; everything else incoming (the cleared row's — too) is wrapped.
+        const incoming =
+          r.value !== null && isHttpUrl(r.value)
+            ? val(r.value)
+            : `${c.amber}${r.value ?? MISSING}${c.reset}`;
+        lines.push(
+          `${c.amber}${glyph}${c.reset} ${c.faint}${r.label.padEnd(labelW)}` +
+            `${outgoing(r.from, r.value)}${c.reset}${incoming}${note}`,
+        );
+        continue;
+      }
       if (r.value === null) {
         lines.push(`  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`);
         continue;
       }
-      const note = r.note ? `  ${c.faint}(detected: ${sanitizeValue(r.note)})${c.reset}` : "";
       lines.push(`  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}${note}`);
     }
   }
