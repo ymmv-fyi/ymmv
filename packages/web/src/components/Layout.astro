@@ -248,21 +248,43 @@ const {
         var form = document.querySelector("[data-diff-vs]");
         if (!form) return;
         var input = form.querySelector("input");
-        if (!input) return;
-        try {
-          var last = localStorage.getItem("ymmv-you");
-          if (last && !input.value) input.value = last;
-        } catch (e) {}
+        var error = document.getElementById("diff-cta-error");
+        if (!input || !error) return;
+        var hint = "a GitHub handle: 1-39 letters or digits, with single hyphens between them.";
+        if (form.dataset.diffError !== "true") {
+          try {
+            var last = localStorage.getItem("ymmv-you");
+            if (last && !input.value) input.value = last;
+          } catch (e) {}
+        }
+        function normalizeHandle(value) {
+          var handle = value.trim().replace(/^@+/, "");
+          var prefix = /^(?:(?:https?:\/\/)?(?:www\.)?(?:github\.com|ymmv\.fyi)\/)/i;
+          if (prefix.test(handle)) handle = handle.replace(prefix, "").split(/[/?#]/, 1)[0];
+          return handle;
+        }
+        function clearError() {
+          error.hidden = true;
+          error.textContent = "";
+          input.removeAttribute("aria-describedby");
+          form.dataset.diffError = "false";
+        }
+        input.addEventListener("input", clearError);
         form.addEventListener("submit", function (ev) {
           ev.preventDefault();
-          var you = input.value.trim().replace(/^@+/, "");
+          var you = normalizeHandle(input.value);
           // Mirror the server's isValidHandle (GitHub handle shape, ≤39). Without this, "." or
           // ".." survive encodeURIComponent and the browser normalizes the dot-segments away
           // (silent self-navigation), and garbage would be persisted + prefilled forever.
           if (!/^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you) || you.length > 39) {
+            error.textContent = hint;
+            error.hidden = false;
+            input.setAttribute("aria-describedby", "diff-cta-error");
+            form.dataset.diffError = "true";
             input.focus();
             return;
           }
+          clearError();
           try {
             localStorage.setItem("ymmv-you", you);
           } catch (e) {}

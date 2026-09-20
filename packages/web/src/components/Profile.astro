@@ -19,11 +19,12 @@ import UntrustedValue from "./UntrustedValue.astro";
 interface Props {
   profile: Profile;
   example?: boolean;
+  diffError?: boolean;
   /* more: landing preview only — the count of rows elided from the sample, rendered as an honest
      "+ N more" marker under the readout. Never set on a real profile page. */
   more?: number;
 }
-const { profile, example = false, more = 0 } = Astro.props;
+const { profile, example = false, more = 0, diffError = false } = Astro.props;
 const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
@@ -93,22 +94,38 @@ const revDate = updated_at?.slice(0, 10);
         <p class="cmdline"><InstallCommand /><span class="cmt"># make yours</span></p>
         {/* action → the profile page, whose ?you= handler 302s to the diff: a native
             (script-failed) submit works from anywhere this form renders, including /vs/ nudges */}
-        <form class="diff-cta" action={`/${handle}`} data-diff-vs={handle}>
+        <form
+          class="diff-cta"
+          action={`/${handle}`}
+          data-diff-vs={handle}
+          data-diff-error={diffError ? "true" : "false"}
+        >
           <label>
             <span class="prompt">$ </span>diff vs{" "}
             <input
               class="you"
               name="you"
               placeholder="<you>"
-              maxlength="39"
               autocomplete="off"
               autocapitalize="off"
               spellcheck="false"
+              aria-describedby={diffError ? "diff-cta-error" : undefined}
               aria-label={`your handle — diff ${handle} against you`}
             />
           </label>
           <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
         </form>
+        <p
+          id="diff-cta-error"
+          class="diff-cta-error"
+          role="status"
+          aria-live="polite"
+          hidden={!diffError}
+        >
+          {diffError
+            ? "a GitHub handle: 1-39 letters or digits, with single hyphens between them."
+            : ""}
+        </p>
       </div>
       <noscript>
         {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
