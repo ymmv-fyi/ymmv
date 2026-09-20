@@ -514,6 +514,11 @@ a {
   gap: 8px;
   max-width: 420px;
 }
+.diff-cta-error {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
 .diff-cta label {
   display: flex;
   align-items: baseline;

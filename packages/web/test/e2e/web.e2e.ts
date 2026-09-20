@@ -30,17 +30,39 @@ test.describe("profile render", () => {
     await expect(page.locator(".diff-cta input")).toHaveValue("bardisty");
   });
 
-  test("the diff form blocks empty and invalid handles, strips a leading @", async ({ page }) => {
+  test("the diff form explains invalid handles and accepts @ and profile URLs", async ({
+    page,
+  }) => {
     await page.goto("/antfu");
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu$/); // empty submit stays put…
     await expect(page.locator(".diff-cta input")).toBeFocused(); // …and refocuses the input
+    const hint = page.locator("#diff-cta-error");
+    await expect(hint).toContainText("a GitHub handle: 1-39 letters or digits");
+    await page.fill(".diff-cta input", "https://github.com/bad handle");
+    await expect(hint).toBeHidden();
+    await page.press(".diff-cta input", "Enter");
+    await expect(page).toHaveURL(/\/antfu$/);
+    await expect(hint).toBeVisible();
     await page.fill(".diff-cta input", "..");
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu$/); // dot-segments must never navigate
-    await page.fill(".diff-cta input", "@bardisty");
+    await page.fill(".diff-cta input", "https://github.com/bardisty");
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
+  });
+
+  test("the no-script diff form explains an invalid submitted handle", async ({ request }) => {
+    const normalized = await request.get("/antfu?you=https%3A%2F%2Fymmv.fyi%2Fbardisty");
+    expect(normalized.status()).toBe(200);
+    expect(normalized.url()).toMatch(/\/antfu\/vs\/bardisty$/);
+
+    const res = await request.get("/antfu?you=bad%20handle");
+    expect(res.status()).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('aria-describedby="diff-cta-error"');
+    expect(html).toContain('id="diff-cta-error"');
+    expect(html).toContain("a GitHub handle: 1-39 letters or digits");
   });
 
   test("both session commands click-copy to the clipboard", async ({ page, context }) => {

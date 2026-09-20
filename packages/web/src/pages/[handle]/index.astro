@@ -14,7 +14,10 @@ const raw = String(Astro.params.handle ?? "");
 // server-side so the form still works when its inline script never ran: redirect to the canonical
 // diff URL. Only a valid handle shape redirects (mirrors the form's own guard); anything else
 // falls through and renders the profile. Runs before the D1 read — the redirect needs no data.
-const you = (Astro.url.searchParams.get("you") ?? "").trim().replace(/^@+/, "");
+const submittedYou = Astro.url.searchParams.has("you");
+let you = (Astro.url.searchParams.get("you") ?? "").trim().replace(/^@+/, "");
+const profilePrefix = /^(?:(?:https?:\/\/)?(?:www\.)?(?:github\.com|ymmv\.fyi)\/)/i;
+if (profilePrefix.test(you)) you = you.replace(profilePrefix, "").split(/[/?#]/, 1)[0];
 if (you.length <= 39 && /^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you)) {
   const redirect = Astro.redirect(`/${encodeURIComponent(raw)}/vs/${encodeURIComponent(you)}`, 302);
   // every response carries an explicit edge policy — keep the 302 short-cached like a notfound
@@ -61,5 +64,9 @@ const canonicalPath =
 ---
 
 <Layout title={title} description={description} canonicalPath={canonicalPath}>
-  {result.kind === "live" ? <Profile profile={result.profile} /> : <NotFound handle={raw} />}
+  {result.kind === "live" ? (
+    <Profile profile={result.profile} diffError={submittedYou} />
+  ) : (
+    <NotFound handle={raw} />
+  )}
 </Layout>
