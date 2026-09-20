@@ -1,7 +1,9 @@
 /**
- * Value normalization for the diff — comparison ONLY. Reduces a raw value to a canonical
- * identity token so equality means "same tool," not "same text". Never mutates displayed
- * values (diff rows carry the raw strings; sanitize-at-render still owns untrusted input).
+ * Value normalization — comparison ONLY, shared by the diff and by the CLI's republish marks
+ * (packages/cli/src/profile-ops.ts detectionDisagreements, which decides whether a saved value
+ * and a fresh detection name the same tool). Reduces a raw value to a canonical identity token so
+ * equality means "same tool," not "same text". Never mutates displayed values (diff rows carry
+ * the raw strings; sanitize-at-render still owns untrusted input).
  *
  *     canonical(key, value)
  *        │

@@ -3,6 +3,7 @@ export * from "./diff.js";
 export * from "./display-url.js";
 export * from "./github.js";
 export * from "./keys.js";
+export { canonical } from "./normalize.js";
 export * from "./parse.js";
 export * from "./reserved.js";
 export * from "./tools.js";
