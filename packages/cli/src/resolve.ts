@@ -30,7 +30,7 @@ export type SetTarget =
 export type UnsetTarget = { kind: "curated"; key: CuratedKey } | { kind: "extra"; label: string };
 
 export type Command =
-  | { kind: "publish"; yes: boolean }
+  | { kind: "publish"; yes: boolean; resetMarks: boolean }
   | { kind: "view"; handle: string }
   | { kind: "login" }
   | { kind: "logout" }
@@ -49,6 +49,7 @@ const SET_USAGE = `usage: ymmv set <key> <value>  |  ${SET_EXTRA}`;
 const EXTRA_USAGE = `usage: ${SET_EXTRA}`;
 const UNSET_USAGE = `usage: ymmv unset <key>  |  ${UNSET_EXTRA}`;
 const VIEW_USAGE = "usage: ymmv view <handle>";
+const PUBLISH_USAGE = "usage: ymmv publish [-y | --reset-marks]";
 
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
  *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). */
@@ -72,6 +73,15 @@ function yesOnly(usage: string, rest: string[], make: (yes: boolean) => Command)
   if (rest.length === 0) return make(false);
   if (rest.length === 1 && (rest[0] === "-y" || rest[0] === "--yes")) return make(true);
   return { kind: "error", message: usage };
+}
+
+/** publish's one optional flag: -y/--yes or --reset-marks, never both (-y shows no marks, so the
+ *  pair has nothing to mean). Shared by `ymmv publish <flag>` and the bare `ymmv --reset-marks`. */
+function publishFlags(flags: string[]): Command {
+  if (flags.length === 1 && flags[0] === "--reset-marks") {
+    return { kind: "publish", yes: false, resetMarks: true };
+  }
+  return yesOnly(PUBLISH_USAGE, flags, (yes) => ({ kind: "publish", yes, resetMarks: false }));
 }
 
 // Pre-flight the shared write rules at the argv boundary: the server would 422 these anyway, but
@@ -170,8 +180,10 @@ export function resolveArg(argv: string[]): Command {
 
   // Bare `ymmv` (optionally `-y`) → publish, the default magic. A flag-first tail is refused:
   // the -y consent was given for whatever follows (`ymmv -y delete`), not for a publish.
-  if (first === undefined) return { kind: "publish", yes: false };
+  if (first === undefined) return { kind: "publish", yes: false, resetMarks: false };
   if (first === "-y" || first === "--yes") {
+    // -y shows no marks, so the pair has nothing to mean: say so, not "put -y after the command".
+    if (rest[0] === "--reset-marks") return { kind: "error", message: PUBLISH_USAGE };
     if (rest.length > 0) {
       // Echo the user's own intent when it's a yes-accepting verb; never advertise the
       // destructive delete form to someone who typed something else.
@@ -181,14 +193,13 @@ export function resolveArg(argv: string[]): Command {
         message: `Put ${first} after the command: ymmv ${example} -y. A bare ymmv -y publishes without prompts.`,
       };
     }
-    return { kind: "publish", yes: true };
+    return { kind: "publish", yes: true, resetMarks: false };
   }
+  if (first === "--reset-marks") return publishFlags(argv);
 
   // Reserved verbs.
   if (first === "login" || first === "logout" || first === "update") return noArgs(first, rest);
-  if (first === "publish") {
-    return yesOnly("usage: ymmv publish [-y]", rest, (yes) => ({ kind: "publish", yes }));
-  }
+  if (first === "publish") return publishFlags(rest);
   if (first === "delete") {
     return yesOnly(
       "usage: ymmv delete [-y] (deletes your own profile; takes no handle)",

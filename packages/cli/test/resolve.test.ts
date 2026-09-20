@@ -5,12 +5,12 @@ import { resolveArg } from "../src/resolve.js";
 // The argument resolution table: bare-handle primary, reserved verbs, `view` fallback.
 describe("resolveArg", () => {
   it("bare `ymmv` → publish (the default magic)", () => {
-    expect(resolveArg([])).toEqual({ kind: "publish", yes: false });
+    expect(resolveArg([])).toEqual({ kind: "publish", yes: false, resetMarks: false });
   });
 
   it("`-y` / `--yes` → publish without the confirm", () => {
-    expect(resolveArg(["-y"])).toEqual({ kind: "publish", yes: true });
-    expect(resolveArg(["--yes"])).toEqual({ kind: "publish", yes: true });
+    expect(resolveArg(["-y"])).toEqual({ kind: "publish", yes: true, resetMarks: false });
+    expect(resolveArg(["--yes"])).toEqual({ kind: "publish", yes: true, resetMarks: false });
   });
 
   it("a bare handle → view that handle", () => {
@@ -370,10 +370,44 @@ describe("resolveArg", () => {
   });
 
   it("`publish` word is the explicit default command; -y is its only extra token", () => {
-    expect(resolveArg(["publish"])).toEqual({ kind: "publish", yes: false });
-    expect(resolveArg(["publish", "-y"])).toEqual({ kind: "publish", yes: true });
-    expect(resolveArg(["publish", "--yes"])).toEqual({ kind: "publish", yes: true });
+    expect(resolveArg(["publish"])).toEqual({ kind: "publish", yes: false, resetMarks: false });
+    expect(resolveArg(["publish", "-y"])).toEqual({
+      kind: "publish",
+      yes: true,
+      resetMarks: false,
+    });
+    expect(resolveArg(["publish", "--yes"])).toEqual({
+      kind: "publish",
+      yes: true,
+      resetMarks: false,
+    });
     expect(resolveArg(["publish", "x"]).kind).toBe("error");
+  });
+
+  it("`--reset-marks` → an interactive publish that forgets dismissed marks; never with -y", () => {
+    const reset = { kind: "publish", yes: false, resetMarks: true };
+    expect(resolveArg(["--reset-marks"])).toEqual(reset);
+    expect(resolveArg(["publish", "--reset-marks"])).toEqual(reset);
+    // -y shows no marks, so there is nothing for the pair to mean: refuse instead of picking one.
+    for (const argv of [
+      ["--reset-marks", "-y"],
+      ["-y", "--reset-marks"],
+      ["publish", "-y", "--reset-marks"],
+      ["publish", "--reset-marks", "-y"],
+      ["--reset-marks", "octocat"],
+    ]) {
+      expect(resolveArg(argv).kind).toBe("error");
+    }
+    // Either order names the exclusive pair; "put -y after the command" would lead to a second error.
+    for (const argv of [
+      ["--reset-marks", "-y"],
+      ["-y", "--reset-marks"],
+    ]) {
+      expect(resolveArg(argv)).toEqual({
+        kind: "error",
+        message: "usage: ymmv publish [-y | --reset-marks]",
+      });
+    }
   });
 
   it("`help` deliberately ignores trailing tokens (future `ymmv help <command>` stays open)", () => {

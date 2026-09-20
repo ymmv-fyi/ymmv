@@ -25,6 +25,13 @@ import {
 } from "./api.js";
 import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
+import {
+  addDismissals,
+  type Dismissal,
+  isDismissed,
+  readDismissals,
+  writeDismissals,
+} from "./dismissals.js";
 import { displayError, isTimeoutError, NetworkError } from "./http.js";
 import {
   applySet,
@@ -47,6 +54,7 @@ import {
   sanitizeValue,
   shownValue,
   showsVisibleText,
+  takeLine,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
 import { type Credential, deleteToken, loadCredential } from "./token-store.js";
@@ -58,6 +66,13 @@ export interface InteractiveIO {
   interactive: boolean;
   prompter?: Prompter;
   yes: boolean;
+}
+
+export interface PublishIO extends InteractiveIO {
+  /** Where dismissed detection marks are remembered. Absent = this run only, no file IO. */
+  dismissalsPath?: string;
+  /** Forget every dismissed mark before the first card. */
+  resetMarks?: boolean;
 }
 
 /**
@@ -176,22 +191,27 @@ function savedKeys(existing: Profile | null): ReadonlySet<string> {
 }
 
 /** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key).
+ *  `marked` holds the rows a fresh detection disagrees with: each prompt carries the detected
+ *  value as a faint hint, so Enter there is a keep made with the detection in view.
  *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
   saved: ReadonlySet<string>,
   prompter: Prompter,
+  marked: ReadonlyMap<CuratedKey, string>,
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
   console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
+    const detectedNow = marked.get(key);
+    const hint = detectedNow === undefined ? undefined : `detected: ${detectedNow}`;
     // Re-ask on an over-cap or invisible-only paste instead of letting the server 422 the whole
     // publish after all 13 answers are in. A DETECTED default can fail either rule (an env value
     // of only U+200B survives detection's trim; a stale CLI can see a server-raised cap), and then
     // Enter-to-keep would loop forever — so name the default as the problem and the two ways out.
     for (;;) {
-      const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key))).trim();
+      const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key), hint)).trim();
       const value = answer === "-" ? "" : answer;
       // Enter returns the SANITIZED default (prompt.ts), so compare against that form: a default
       // carrying a bidi control would otherwise never read as "the saved value". A default that
@@ -229,18 +249,22 @@ async function promptEntries(
  *          ├─ no existing profile ────► guided 13 prompts (hint line once) ─┐
  *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
  *          └─► LOOP: preview card (rows a fresh detection disagrees with carry a faint
- *               │     "(detected: X)" note) + carried-note + dup-extra note (recomputed)
+ *               │     "(detected: X)" note, unless that exact disagreement was dismissed in
+ *               │     an earlier run) + carried-note + dup-extra note (recomputed)
  *               ├─ choice "Publish to <site>/<h>?" [Y/n/e=edit] (+d=detected while a row is marked)
  *               ├─ y ──► POST ─┬─ ok ────────────► Published
  *               │              ├─ transient err ─► "…Your answers are kept." ─► LOOP
  *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published."  exit 0
- *               ├─ e ──► 13 prompts prefilled with current answers (resolves every mark) ─► LOOP
- *               ├─ d ──► take every marked detected value ─► LOOP
+ *               ├─ e ──► 13 prompts prefilled with current answers; a marked row's prompt shows
+ *               │        "(detected: X)", and Enter there keeps the value for this run ─► LOOP
+ *               ├─ d ──► per marked row "Label  saved → detected" [Y/n]: y takes the detected
+ *               │        value, n keeps the saved one and dismisses the mark (remembered
+ *               │        across runs; `--reset-marks` forgets) ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
  */
-export async function publish(io: InteractiveIO): Promise<void> {
+export async function publish(io: PublishIO): Promise<void> {
   // No terminal means no confirm step, so publishing needs the explicit -y — the same non-TTY
   // consent gate `ymmv delete` enforces. Detection fills most of a profile now; a scripted bare
   // `ymmv` silently adding newly detected public fields would betray "nothing publishes until
@@ -284,16 +308,10 @@ export async function publish(io: InteractiveIO): Promise<void> {
   const color = colorEnabled();
   const site = displayUrl(BASE);
 
-  // Whether the user has seen a card for the CURRENT answers: a walk resolves marks only after
-  // one, because the loop-top rule walk (and the first-publish walk) runs before any card, and
-  // the prompts never show a detection, so nothing there counts as the user's look at a mark.
-  // A 412 reload resets it: the reloaded values can carry marks no card has shown yet.
-  let cardShown = false;
   // Preview card + its notes, recomputed per render: an edit pass can create or remove the
   // duplicate-extra condition, so the hints must describe THIS iteration's entries. The row
   // marks (`disagreements`) are this iteration's too: a `d`, a walk, or a 412 reload changes them.
   const showCard = (entries: Entry[], disagreements: ReadonlyMap<CuratedKey, string>): void => {
-    cardShown = true;
     console.log(
       renderProfile(newProfile(handle, entries, extras), {
         color,
@@ -339,29 +357,39 @@ export async function publish(io: InteractiveIO): Promise<void> {
   // keeps the decision only where the live value still equals it; a key another device changed
   // is marked afresh, since a decision about the old value says nothing about the new one.
   const kept = new Map<CuratedKey, string>();
+  // Marks the user answered "n" to in the per-key take, this run's and (loaded below, past the
+  // -y branch) earlier runs'. Each is the exact (key, saved, detected) asked about, so unlike
+  // `kept` it needs no 412 care: a reload that changes the live value no longer matches it.
+  let dismissed: Dismissal[] = [];
   let saved = savedKeys(existing);
   // Rows to mark on this card: where a fresh detection names a different tool than the shown
   // value, minus keys the user already decided this session (edited, cleared, taken, kept), minus
-  // detected values the write rules refuse (an invisible one would print "(detected: )", and
-  // taking it would send `d` into the loop-top walk, where the re-ask calls it "the saved value").
+  // disagreements dismissed in this or an earlier run, minus detected values the write rules
+  // refuse (an invisible one would print "(detected: )", and taking it would send `d` into the
+  // loop-top walk, where the re-ask calls it "the saved value").
   const disagreeing = (): Map<CuratedKey, string> => {
     const out = detectionDisagreements(
       values,
       detected,
       new Set([...edits.keys(), ...kept.keys()]),
     );
-    for (const [key, value] of out) if (valueProblem(value) !== undefined) out.delete(key);
+    for (const [key, value] of out) {
+      const current = values.get(key);
+      const hidden = current !== undefined && isDismissed(dismissed, key, current, value);
+      if (hidden || valueProblem(value) !== undefined) out.delete(key);
+    }
     return out;
   };
   const prompt = async (prompter: Prompter): Promise<void> => {
     const before = values;
-    const marked = cardShown ? disagreeing() : new Map<CuratedKey, string>();
-    values = await promptEntries(values, saved, prompter);
+    const marked = disagreeing();
+    values = await promptEntries(values, saved, prompter, marked);
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
       if (after !== before.get(key)) edits.set(key, after);
     }
-    // A walk shows every key; a mark that survives the user's look is a decision, not a gap.
+    // Every marked row's prompt showed its detection; a mark that survives that look is a
+    // decision, not a gap. This run only: persisting takes the per-key "n".
     for (const key of marked.keys()) {
       const value = values.get(key);
       if (!edits.has(key) && value !== undefined) kept.set(key, value);
@@ -390,6 +418,16 @@ export async function publish(io: InteractiveIO): Promise<void> {
       color,
     );
     return;
+  }
+
+  // Past the -y branch on purpose: a scripted run shows no marks, so it reads no dismissals.
+  // `--reset-marks` empties the file before the first card, so it holds even if the user then
+  // walks away from the confirm. It sits behind the login and the profile read like the rest of
+  // the interactive path: a run those stop never got as far as showing a mark.
+  const { dismissalsPath } = io;
+  if (dismissalsPath !== undefined) {
+    if (io.resetMarks) await writeDismissals(dismissalsPath, []);
+    else dismissed = await readDismissals(dismissalsPath);
   }
 
   try {
@@ -455,7 +493,6 @@ export async function publish(io: InteractiveIO): Promise<void> {
             }
             values = rebased;
             for (const [key, value] of kept) if (rebased.get(key) !== value) kept.delete(key);
-            cardShown = false;
             saved = savedKeys(fresh.profile);
             carried = unknownEntries(fresh.profile);
             extras = fresh.profile.extras;
@@ -490,11 +527,53 @@ export async function publish(io: InteractiveIO): Promise<void> {
         return;
       }
       if (ans === "d") {
-        // Taken values are explicit edits: a 412 rebase re-applies them over the reloaded profile.
+        // One question per marked row, even for a single mark: detection is session-contextual
+        // (an editor's terminal, tmux, SSH), so the row the user wants rarely travels alone, and
+        // "n" is the only quick way to say "I know, stop telling me". Taken values are explicit
+        // edits: a 412 rebase re-applies them over the reloaded profile.
         values = new Map(values);
-        for (const [key, value] of disagreements) {
-          values.set(key, value);
-          edits.set(key, value);
+        const width = Math.max(...[...disagreements.keys()].map((k) => KEY_LABELS[k].length));
+        let tight = false;
+        const before = dismissed.length;
+        try {
+          for (const [key, value] of disagreements) {
+            // A marked key always has a value (a gap is never a disagreement); this only narrows.
+            const current = values.get(key);
+            if (current === undefined) continue;
+            const take = await io.prompter.choice(
+              takeLine(KEY_LABELS[key], width, current, value, color),
+              ["y", "n"],
+              "y",
+              "Y/n",
+              { tight, exact: true },
+            );
+            tight = true;
+            if (take === "y") {
+              values.set(key, value);
+              edits.set(key, value);
+            } else {
+              dismissed = [...dismissed, { key, saved: shownValue(current), detected: value }];
+            }
+          }
+        } finally {
+          // In a finally so an "n" answered before a ^C is remembered: it was about the saved
+          // and detected values, not about this publish. A "y" before one is lost with the run.
+          if (dismissalsPath !== undefined && dismissed.length > before) {
+            await addDismissals(dismissalsPath, dismissed.slice(before));
+          }
+        }
+        // The one side effect the row question does not show: an "n" outlives the run. Say so
+        // once the questions are done, with the way back (which forgets every dismissal, not just
+        // these). Only when there is a file for it to live in. A ^C mid-questions skips this: the
+        // prompt line is torn and the abort message owns that moment.
+        const keptNow = dismissed.length - before;
+        if (keptNow > 0 && dismissalsPath !== undefined) {
+          const c = palette(color);
+          console.log(
+            message(
+              `${c.faint}Kept ${keptNow} as saved. ymmv --reset-marks brings every dismissed mark back.${c.reset}`,
+            ),
+          );
         }
         continue;
       }

@@ -14,12 +14,20 @@ vi.mock("../src/device-flow.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/device-flow.js")>()),
   login: vi.fn(),
 }));
+// Partial: only publish is mocked, so the dispatch's io can be inspected without a run that would
+// touch the REAL dismissals file in the user's config dir. Every other command stays real.
+vi.mock("../src/commands.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/commands.js")>()),
+  publish: vi.fn(),
+}));
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { deleteProfile, ProfileChanged, PublishRefusal, publishProfile } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
+import { publish } from "../src/commands.js";
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
+import { dismissalsPath } from "../src/dismissals.js";
 import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
 import {
@@ -299,6 +307,23 @@ describe("ymmv unset dispatch", () => {
     const postInit = fetchFn.mock.calls[1]?.[1] as RequestInit;
     expect(postInit.method).toBe("POST");
     expect(JSON.parse(postInit.body as string).entries).toEqual([]);
+  });
+});
+
+describe("ymmv publish dispatch", () => {
+  // resolve.test proves the flag parses, commands.test proves publish honors it: this is the seam
+  // between them. publish only ever learns where the dismissals live, and whether to empty them,
+  // from what main hands it — wire either one wrong and --reset-marks silently does nothing.
+  it("hands publish the dismissals file, and --reset-marks as the flag that empties it", async () => {
+    await main([]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ dismissalsPath: dismissalsPath(), resetMarks: false, yes: false }),
+    );
+    vi.mocked(publish).mockClear();
+    await main(["--reset-marks"]);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ dismissalsPath: dismissalsPath(), resetMarks: true, yes: false }),
+    );
   });
 });
 
