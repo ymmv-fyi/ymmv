@@ -62,6 +62,8 @@ the short `ymmv` used below:
 - `ymmv` detects, confirms, and publishes. `ymmv publish` is the same command.
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in.
 - `ymmv set editor Neovim` changes one value.
+- `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form, since only a
+  full URL links on your page. The publish prompts offer the same.
 - `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own. `-e` works too.
 - `ymmv unset editor` removes one value, as does `ymmv set editor -`.
 - `ymmv unset --extra "Keyboard"` removes an extra.
