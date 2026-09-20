@@ -202,7 +202,7 @@ async function dispatch(cmd: Command): Promise<void> {
       await runUpdate();
       break;
     case "help":
-      console.log(help(palette(colorEnabled())));
+      console.log(cmd.usage ?? help(palette(colorEnabled())));
       break;
     case "version":
       printVersion();

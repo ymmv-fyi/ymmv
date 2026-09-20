@@ -376,8 +376,42 @@ describe("resolveArg", () => {
     expect(resolveArg(["publish", "x"]).kind).toBe("error");
   });
 
-  it("`help` deliberately ignores trailing tokens (future `ymmv help <command>` stays open)", () => {
-    expect(resolveArg(["help", "extra"]).kind).toBe("help");
+  it("`help` still prints general help for an unknown topic (trailing tokens stay non-breaking)", () => {
+    expect(resolveArg(["help", "extra"])).toEqual({ kind: "help" });
+  });
+
+  it("`help <verb>` and `<verb> --help` print that verb's usage and stay help (exit 0)", () => {
+    const setUsage = 'usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"';
+    const viewUsage = "usage: ymmv view <handle>";
+    const deleteUsage = "usage: ymmv delete [-y] (deletes your own profile; takes no handle)";
+    expect(resolveArg(["help", "set"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["set", "--help"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["set", "-h"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["view", "--help"])).toEqual({ kind: "help", usage: viewUsage });
+    expect(resolveArg(["delete", "--help"])).toEqual({ kind: "help", usage: deleteUsage });
+    expect(resolveArg(["help", "delete"])).toEqual({ kind: "help", usage: deleteUsage });
+    expect(resolveArg(["login", "--help"])).toEqual({ kind: "help", usage: "usage: ymmv login" });
+    expect(resolveArg(["publish", "-h"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv publish [-y]",
+    });
+    expect(resolveArg(["unset", "--help"])).toEqual({
+      kind: "help",
+      usage: 'usage: ymmv unset <key>  |  ymmv unset --extra "Label"',
+    });
+    expect(resolveArg(["update", "--help"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv update",
+    });
+    expect(resolveArg(["logout", "-h"])).toEqual({ kind: "help", usage: "usage: ymmv logout" });
+  });
+
+  it("a real argv error still returns usage as an error (exit 1), not help", () => {
+    expect(resolveArg(["set"])).toEqual({
+      kind: "error",
+      message: 'usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"',
+    });
+    expect(resolveArg(["delete", "oldname", "-y"]).kind).toBe("error");
   });
 
   it("a capitalized verb hints the lowercase command", () => {
