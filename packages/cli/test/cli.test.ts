@@ -15,16 +15,17 @@ vi.mock("../src/device-flow.js", async (importOriginal) => ({
   login: vi.fn(),
 }));
 // Partial: only publish is mocked, so the dispatch's io can be inspected without a run that would
-// touch the REAL dismissals file in the user's config dir. Every other command stays real.
-vi.mock("../src/commands.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/commands.js")>()),
-  publish: vi.fn(),
-}));
+// touch the REAL dismissals file in the user's config dir. runSet is wrapped, not replaced: it runs
+// for real unless a test scripts it, and its arguments can be read. Every other command stays real.
+vi.mock("../src/commands.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/commands.js")>();
+  return { ...actual, publish: vi.fn(), runSet: vi.fn(actual.runSet) };
+});
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import { deleteProfile, ProfileChanged, PublishRefusal, publishProfile } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
-import { publish } from "../src/commands.js";
+import { publish, runSet } from "../src/commands.js";
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { dismissalsPath } from "../src/dismissals.js";
@@ -324,6 +325,50 @@ describe("ymmv publish dispatch", () => {
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ dismissalsPath: dismissalsPath(), resetMarks: true, yes: false }),
     );
+  });
+});
+
+describe("ymmv set dispatch", () => {
+  /** Force both ends' isTTY for a test body (vitest pipes them, so they are normally falsy). */
+  async function withTTY(stdin: boolean, stdout: boolean, body: () => Promise<void>) {
+    const ends = [
+      [process.stdin, stdin],
+      [process.stdout, stdout],
+    ] as const;
+    const saved = ends.map(([end]) => Object.getOwnPropertyDescriptor(end, "isTTY"));
+    for (const [end, value] of ends) {
+      Object.defineProperty(end, "isTTY", { value, configurable: true });
+    }
+    try {
+      await body();
+    } finally {
+      ends.forEach(([end], i) => {
+        const desc = saved[i];
+        if (desc) Object.defineProperty(end, "isTTY", desc);
+        else Reflect.deleteProperty(end, "isTTY");
+      });
+    }
+  }
+  const target = { kind: "curated", key: "dotfiles", value: "me/dots" };
+
+  // commands.test proves runSet asks when handed a prompter: this is the seam that hands it one.
+  // Drop it and every `ymmv set dotfiles me/dots` quietly takes the no-terminal path.
+  it("hands runSet a prompter only with a terminal on both ends", async () => {
+    vi.mocked(runSet).mockResolvedValue(undefined);
+    try {
+      await withTTY(true, true, () => main(["set", "dotfiles", "me/dots"]));
+      expect(runSet).toHaveBeenLastCalledWith(
+        target,
+        expect.objectContaining({ choice: expect.any(Function) }),
+      );
+      // Questions go to stdout: redirected, the terminal would show a silent hang.
+      await withTTY(true, false, () => main(["set", "dotfiles", "me/dots"]));
+      expect(runSet).toHaveBeenLastCalledWith(target, undefined);
+      await withTTY(false, true, () => main(["set", "dotfiles", "me/dots"]));
+      expect(runSet).toHaveBeenLastCalledWith(target, undefined);
+    } finally {
+      vi.mocked(runSet).mockReset();
+    }
   });
 });
 

@@ -176,7 +176,12 @@ async function dispatch(cmd: Command): Promise<void> {
       await view(cmd.handle);
       break;
     case "set":
-      await runSet(cmd.target);
+      // The prompter opens readline only when a question is asked (a scheme-less dotfiles value),
+      // and questions go to stdout: with it redirected the terminal would show a silent hang.
+      await interactive(
+        (io) => runSet(cmd.target, process.stdout.isTTY ? io.prompter : undefined),
+        false,
+      );
       break;
     case "unset":
       await runUnset(cmd.target);

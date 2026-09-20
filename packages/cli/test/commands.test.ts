@@ -1,7 +1,13 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CURATED_KEYS, type CuratedKey, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import {
+  CURATED_KEYS,
+  type CuratedKey,
+  KEY_LABELS,
+  type Profile,
+  SCHEMA_VERSION,
+} from "@ymmv/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ensureLogin/publishProfile resolve identity through the token store; mock it so no real login or
@@ -13,7 +19,7 @@ vi.mock("../src/token-store.js");
 vi.mock("../src/device-flow.js");
 vi.mock("../src/detect.js");
 
-import { publish, runDelete, runSet, runUnset, view } from "../src/commands.js";
+import { publish, runDelete, runSet, runUnset, view, walkHint } from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
@@ -2509,6 +2515,196 @@ describe("publish: a changed detection is marked on the card and taken with d", 
   });
 });
 
+describe("publish: a walk prompt with no default shows an example", () => {
+  /** First publish: no profile yet, so the walk runs up front, then the card, then the POST. */
+  const firstPublish = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+  /** Enter hands back the SANITIZED default, exactly as makePrompter().ask() does. */
+  const keep = () => vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
+  /** The hint (ask's third argument) each ask of `label` carried. */
+  const hintsFor = (ask: { mock: { calls: unknown[][] } }, label: string) =>
+    ask.mock.calls.filter((c) => c[0] === label).map((c) => c[2]);
+
+  it("every bare prompt carries its example; a prefilled one explains itself", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["shell", "zsh"]]));
+    vi.stubGlobal("fetch", firstPublish());
+    const ask = keep();
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(hintsFor(ask, "Shell")).toEqual([undefined]);
+    expect(hintsFor(ask, "Prompt")).toEqual(["e.g. Starship, Oh My Posh"]);
+    expect(hintsFor(ask, "Dotfiles")).toEqual(["a URL"]);
+    for (const key of CURATED_KEYS.filter((k) => k !== "shell")) {
+      expect(hintsFor(ask, KEY_LABELS[key])).toEqual([walkHint(key)]);
+    }
+  });
+
+  it("a marked row keeps its detection hint, and a re-ask keeps the example", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "Zed" }])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let fontAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Font") return sanitizeValue(def ?? "");
+      fontAsks += 1;
+      return fontAsks === 1 ? "x".repeat(300) : "Lilex"; // over the cap, then a real answer
+    });
+    const prompter = stubPrompter({
+      ask,
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(hintsFor(ask, "Editor")).toEqual(["detected: Neovim"]);
+    expect(hintsFor(ask, "Font")).toEqual([walkHint("font"), walkHint("font")]);
+    expect(posted(fetchFn).entries).toContainEqual({ key: "font", value: "Lilex" });
+  });
+
+  it("a detected default that prints as nothing still shows the example", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    // A lone bidi control survives detection's trim and sanitizes to nothing, so the prompt prints
+    // no brackets: without the example this is a bare `Editor:`.
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x061c)]]));
+    vi.stubGlobal("fetch", firstPublish());
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label !== "Editor") return sanitizeValue(def ?? "");
+      editorAsks += 1;
+      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter re-asks, then a value
+    });
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(hintsFor(ask, "Editor")).toEqual([walkHint("editor"), walkHint("editor")]);
+  });
+});
+
+describe("publish: a dotfiles answer typed without a scheme is offered as a link", () => {
+  const OFFER = "use https://github.com/me/dotfiles?";
+  /** Every `use <url>?` question the walk asked, as the full choice call. */
+  const offers = (choice: { mock: { calls: unknown[][] } }) =>
+    choice.mock.calls.filter((c) => String(c[0]).startsWith("use "));
+  /** A first publish whose walk answers only Dotfiles; `offer` answers the link question, and the
+   *  publish question gets `publishAnswers` in order. */
+  async function walkWith(dotfiles: string, offer: "y" | "n", publishAnswers: string[] = ["y"]) {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let walks = 0;
+    const ask = vi.fn(async (label: string, def?: string) => {
+      if (label === "Editor") walks += 1;
+      // The first walk types the value; any later one is Enter all the way down.
+      return walks === 1 && label === "Dotfiles" ? dotfiles : sanitizeValue(def ?? "");
+    });
+    const answers = [...publishAnswers];
+    const choice = vi.fn(async (q: string) =>
+      q.startsWith("use ") ? offer : (answers.shift() ?? "y"),
+    );
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    return { fetchFn, choice };
+  }
+
+  it("y stores the https form", async () => {
+    const { fetchFn, choice } = await walkWith("github.com/me/dotfiles", "y");
+    // Tight (the walk is one unit) and exact (a URL pasted at [Y/n] must re-ask, never read "n").
+    expect(offers(choice)).toEqual([[OFFER, ["y", "n"], "y", "Y/n", { tight: true, exact: true }]]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "dotfiles", value: "https://github.com/me/dotfiles" },
+    ]);
+  });
+
+  it("the user's own user/repo is read as GitHub", async () => {
+    const { fetchFn, choice } = await walkWith("me/dotfiles", "y");
+    expect(offers(choice).map((c) => c[0])).toEqual([OFFER]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "dotfiles", value: "https://github.com/me/dotfiles" },
+    ]);
+  });
+
+  it("n stores it as typed, and keeping it on a later walk does not ask again", async () => {
+    const { fetchFn, choice } = await walkWith("me/dotfiles", "n", ["e", "y"]);
+    expect(offers(choice)).toHaveLength(1); // two walks, one offer
+    expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: "me/dotfiles" }]);
+  });
+
+  it("a value that already links, or has no link form, is never asked about", async () => {
+    // `n/a` and `you/dotfiles` fit the user/repo shape, but the login is "me".
+    const asTyped = ["https://github.com/me/dotfiles", "~/dotfiles", "chezmoi.toml", "n/a"];
+    for (const typed of [...asTyped, "you/dotfiles"]) {
+      const { fetchFn, choice } = await walkWith(typed, "y");
+      expect(offers(choice), typed).toEqual([]);
+      expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: typed }]);
+    }
+  });
+
+  it("^C at the offer aborts the whole publish: nothing is posted, exit 130", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Dotfiles" ? "me/dotfiles" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockRejectedValue(new PromptAborted());
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(choice.mock.calls[0]?.[0]).toBe(OFFER); // the walk aborted AT the offer, before the card
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the read only, never a POST
+    expect(logs.at(-1)).toBe("\n\n  Aborted. Nothing published.");
+    expect(process.exitCode).toBe(130);
+  });
+
+  it('"-" at a saved scheme-less row clears it, with nothing to offer', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(
+          prof("me", [
+            { key: "editor", value: "Zed" },
+            { key: "dotfiles", value: "github.com/me/dots" },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Dotfiles" ? "-" : sanitizeValue(def ?? ""),
+    );
+    const answers = ["e", "y"];
+    const choice = vi.fn(async (q: string) =>
+      q.startsWith("use ") ? "y" : (answers.shift() ?? "y"),
+    );
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(offers(choice)).toEqual([]);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Zed" }]);
+  });
+
+  it("a saved scheme-less value kept with Enter is not asked about", async () => {
+    // The second one reads differently once sanitized, which is the form Enter hands back.
+    const bidi = String.fromCodePoint(0x061c);
+    for (const saved of ["github.com/me/dots", `${bidi}github.com/me/dots`]) {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(own(prof("me", [{ key: "dotfiles", value: saved }])))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
+      const ask = vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
+      await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+      expect(offers(choice), saved).toEqual([]);
+    }
+  });
+});
+
 describe("first-send identity drift is caught on every publish path (id passed through)", () => {
   // Same handle, different account between the command's own login and the send: the handle
   // string can't tell, the id can. One case per publishProfile call site outside the loop.
@@ -2944,6 +3140,173 @@ describe("set", () => {
     await runSet({ kind: "curated", key: "editor", value: "vim" });
     expect(fetchFn).toHaveBeenCalledTimes(2); // the POST went out
     expect(process.exitCode).toBeUndefined();
+  });
+  describe("dotfiles typed without a scheme", () => {
+    const target = { kind: "curated", key: "dotfiles", value: "me/dotfiles" } as const;
+    const LINK = "https://github.com/me/dotfiles";
+    const tty = (choice: Prompter["choice"]) => stubPrompter({ choice });
+
+    it("on a terminal: asks before the read, and y stores the https form", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn(async () => {
+        // A pause between the read and the If-Match POST would only widen the 412 window.
+        expect(fetchFn).not.toHaveBeenCalled();
+        return "y";
+      });
+      await runSet(target, tty(choice));
+      expect(choice.mock.calls).toEqual([
+        // Not tight: here the question is the command's first output, so it opens its own unit.
+        [`use ${LINK}?`, ["y", "n"], "y", "Y/n", { tight: false, exact: true }],
+      ]);
+      expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: LINK }]);
+      expect(logs).toEqual([`\n  Set Dotfiles = ${LINK}. → https://ymmv.fyi/me`]);
+      expect(errs).toEqual([]); // the offer was taken, so there is nothing left to suggest
+    });
+
+    it("on a terminal: n stores it as typed, with no note about a choice just made", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet(target, tty(vi.fn().mockResolvedValue("n")));
+      expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: "me/dotfiles" }]);
+      expect(logs).toEqual(["\n  Set Dotfiles = me/dotfiles. → https://ymmv.fyi/me"]);
+      expect(errs).toEqual([]);
+    });
+
+    it("a question that fails for any other reason is not swallowed", async () => {
+      // Only PromptAborted is the user's own "never mind"; anything else must not read as one.
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn().mockRejectedValue(new Error("readline is gone"));
+      await expect(runSet(target, tty(choice))).rejects.toThrow("readline is gone");
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it("an --extra whose value looks like a repo is neither asked about nor noted", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn();
+      await runSet({ kind: "extra", label: "Dotfiles", value: "me/dotfiles" }, tty(choice));
+      expect(choice).not.toHaveBeenCalled();
+      expect(posted(fetchFn).extras).toEqual([{ label: "Dotfiles", value: "me/dotfiles" }]);
+      expect(errs).toEqual([]);
+    });
+
+    it("on a terminal: y onto a profile that already holds the link writes nothing", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "dotfiles", value: LINK }])));
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet(target, tty(vi.fn().mockResolvedValue("y")));
+      expect(logs).toEqual([`\n  Dotfiles is already ${LINK}.`]);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("^C at the question: nothing is read or written, exit 130", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet(target, tty(vi.fn().mockRejectedValue(new PromptAborted())));
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(logs).toEqual(["\n\n  Cancelled. Nothing set."]);
+      expect(process.exitCode).toBe(130);
+    });
+
+    const NOTE = `\n  Stored as text, not a link. Link it: ymmv set dotfiles ${LINK}`;
+
+    it("with no terminal: stored as typed, and stderr names the link form", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet(target);
+      expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: "me/dotfiles" }]);
+      // stdout stays the result line alone, for `out=$(ymmv set ...)`.
+      expect(logs).toEqual(["\n  Set Dotfiles = me/dotfiles. → https://ymmv.fyi/me"]);
+      expect(errs).toEqual([NOTE]);
+    });
+
+    it("with no terminal: the no-op line is followed by the note too", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "dotfiles", value: "me/dotfiles" }])));
+      vi.stubGlobal("fetch", fetchFn);
+      await runSet(target);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(logs).toEqual(["\n  Dotfiles is already me/dotfiles."]);
+      expect(errs).toEqual([NOTE]);
+    });
+
+    it("with no terminal: a value with no link form gets no note", async () => {
+      for (const value of ["~/dotfiles", "n/a", LINK]) {
+        vi.mocked(loadToken).mockResolvedValue(stored());
+        const fetchFn = vi
+          .fn()
+          .mockResolvedValueOnce(jsonRes(prof("me")))
+          .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+        vi.stubGlobal("fetch", fetchFn);
+        await runSet({ kind: "curated", key: "dotfiles", value });
+        expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value }]);
+      }
+      expect(errs).toEqual([]);
+    });
+
+    it("under YMMV_TOKEN a terminal is never asked: stored as typed, note on stderr", async () => {
+      // `set` is the CI-recommended command, and a CI pty would otherwise block on the question.
+      vi.mocked(loadCredential).mockResolvedValue({
+        base: "B",
+        token: "ymmv_env",
+        handle: "me",
+        github_id: null,
+        source: "env",
+      });
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes({ github_id: 1001, handle: "me" })) // whoami
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn();
+      await runSet(target, tty(choice));
+      expect(choice).not.toHaveBeenCalled();
+      expect(posted(fetchFn, 2).entries).toEqual([{ key: "dotfiles", value: "me/dotfiles" }]);
+      expect(errs).toEqual([NOTE]);
+    });
+
+    it("only dotfiles, and only a value with a link form, is ever asked about", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const ok = () => jsonRes({ ok: true, handle: "me" });
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(ok())
+        .mockResolvedValueOnce(jsonRes(prof("me")))
+        .mockResolvedValueOnce(ok());
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn();
+      await runSet({ kind: "curated", key: "theme", value: "me/dotfiles" }, tty(choice));
+      await runSet({ kind: "curated", key: "dotfiles", value: LINK }, tty(choice));
+      expect(choice).not.toHaveBeenCalled();
+      expect(errs).toEqual([]);
+    });
   });
 });
 

@@ -47,6 +47,7 @@ import { PromptAborted, type Prompter } from "./prompt.js";
 import {
   colorEnabled,
   link,
+  linkForm,
   message,
   notFound,
   nudge,
@@ -193,22 +194,71 @@ function savedKeys(existing: Profile | null): ReadonlySet<string> {
   return new Set((existing?.entries ?? []).map((e) => e.key));
 }
 
+/** Two example values per key, shown at a walk prompt that has no default to explain itself
+ *  ("Prompt" alone reads as a question to anyone who has not met Starship). Hand-written: the
+ *  catalog (TOOLS) lists only tools that need a diff alias, so it has no Starship, tmux or mise.
+ *  A test keeps every name here spelled the way the catalog or the detector spells it. */
+export const KEY_EXAMPLES: Record<Exclude<CuratedKey, "dotfiles">, readonly [string, string]> = {
+  editor: ["Neovim", "VS Code"],
+  os: ["macOS", "Arch Linux"],
+  shell: ["zsh", "fish"],
+  prompt: ["Starship", "Oh My Posh"],
+  terminal: ["Ghostty", "WezTerm"],
+  browser: ["Firefox", "Chrome"],
+  "window-manager": ["Hyprland", "GNOME"],
+  font: ["JetBrains Mono", "Fira Code"],
+  theme: ["Catppuccin", "Tokyo Night"],
+  multiplexer: ["tmux", "Zellij"],
+  "version-manager": ["mise", "nvm"],
+  "ai-tool": ["Claude Code", "Cursor"],
+};
+
+/** The faint parenthetical for a walk prompt with no default. */
+export function walkHint(key: CuratedKey): string {
+  return key === "dotfiles" ? "a URL" : `e.g. ${KEY_EXAMPLES[key].join(", ")}`;
+}
+
+/** A dotfiles value typed without a scheme never links, on the page or in the card: offer its
+ *  https form once and return whichever the user picked. `exact` because the question shows a URL
+ *  the user might paste back, which must re-ask and never count as "n". `tight` inside the walk,
+ *  which is one unit; at `ymmv set` the question is the command's first output and opens its own. */
+async function offerLinkForm(
+  value: string,
+  handle: string,
+  prompter: Prompter,
+  tight: boolean,
+): Promise<string> {
+  const url = linkForm(value, handle);
+  if (url === undefined) return value;
+  const ans = await prompter.choice(`use ${url}?`, ["y", "n"], "y", "Y/n", { tight, exact: true });
+  return ans === "y" ? url : value;
+}
+
 /** Walk the curated keys, offering each detected/existing value as the default ("-" clears a key).
  *  `marked` holds the rows a fresh detection disagrees with: each prompt carries the detected
- *  value as a faint hint, so Enter there is a keep made with the detection in view.
+ *  value as a faint hint, so Enter there is a keep made with the detection in view. A prompt with
+ *  no default carries an example instead. `handle` is whose `user/repo` a dotfiles answer may name.
  *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
   saved: ReadonlySet<string>,
   prompter: Prompter,
   marked: ReadonlyMap<CuratedKey, string>,
+  handle: string,
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
   console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
     const detectedNow = marked.get(key);
-    const hint = detectedNow === undefined ? undefined : `detected: ${detectedNow}`;
+    // A default explains itself (`[Starship]`), so the example is for the bare prompt only: no
+    // default, or one that sanitizes to nothing (promptLine's own test for printing no brackets).
+    const hint =
+      detectedNow !== undefined
+        ? `detected: ${detectedNow}`
+        : sanitizeValue(defaults.get(key) ?? "")
+          ? undefined
+          : walkHint(key);
     // Re-ask on an over-cap or invisible-only paste instead of letting the server 422 the whole
     // publish after all 13 answers are in. A DETECTED default can fail either rule (an env value
     // of only U+200B survives detection's trim; a stale CLI can see a server-raised cap), and then
@@ -235,7 +285,13 @@ async function promptEntries(
         console.log(message(`${c.faint}${note}${c.reset}`));
         continue;
       }
-      if (value) chosen.set(key, value);
+      // A kept default is not re-offered: declining once makes the typed form the default of any
+      // later walk, and Enter there keeps it.
+      const final =
+        key === "dotfiles" && !isDefault
+          ? await offerLinkForm(value, handle, prompter, true)
+          : value;
+      if (final) chosen.set(key, final);
       break;
     }
   }
@@ -270,6 +326,10 @@ async function promptEntries(
  *               │        value, n keeps the saved one and dismisses the mark (remembered
  *               │        across runs; `--reset-marks` forgets) ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
+ *
+ *   Every walk (first run, `e`, the write-rule gate): a prompt with no default shows a faint
+ *   example, and a dotfiles answer typed without a scheme is offered once in its https form,
+ *   "use <url>?" [Y/n].
  *
  *   After a failed POST nothing is called unchanged until a 412 reload settles what is live.
  *   After a lost response (the write may have landed) both abort lines read "Aborted. The
@@ -432,7 +492,7 @@ export async function publish(io: PublishIO): Promise<void> {
   const prompt = async (prompter: Prompter): Promise<void> => {
     const before = values;
     const marked = disagreeing();
-    values = await promptEntries(values, saved, prompter, marked);
+    values = await promptEntries(values, saved, prompter, marked, handle);
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
       if (after !== before.get(key)) edits.set(key, after);
@@ -741,11 +801,39 @@ export async function view(handle: string): Promise<void> {
 }
 
 /** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish (unless
- *  the field already holds exactly that, which writes nothing). */
-export async function runSet(target: SetTarget): Promise<void> {
+ *  the field already holds exactly that, which writes nothing). A dotfiles value typed without a
+ *  scheme gets the walk's offer when `prompter` is given (index.ts passes one only with a terminal
+ *  on both ends) and the login is a person's: `set` is what the README recommends for CI, so under
+ *  YMMV_TOKEN it never waits on a question, pty or not. With no one to ask, the value is stored as
+ *  typed and a faint stderr line names the command that would make it a link. */
+export async function runSet(typed: SetTarget, prompter?: Prompter): Promise<void> {
   const cred = await ensureLogin();
   const handle = requireHandle(cred);
   if (!handle) return;
+  let target = typed;
+  let linkNote: string | undefined;
+  if (typed.kind === "curated" && typed.key === "dotfiles") {
+    if (prompter && cred.source !== "env") {
+      // Asked BEFORE the read: a human pause between it and the If-Match POST would only widen
+      // the window for a 412.
+      try {
+        target = { ...typed, value: await offerLinkForm(typed.value, handle, prompter, false) };
+      } catch (e) {
+        if (e instanceof PromptAborted) {
+          // The first newline closes the interrupted prompt line; then the standard unit.
+          console.log(`\n${message("Cancelled. Nothing set.")}`);
+          process.exitCode = 130;
+          return;
+        }
+        throw e;
+      }
+    } else {
+      const url = linkForm(typed.value, handle);
+      if (url !== undefined) {
+        linkNote = `Stored as text, not a link. Link it: ymmv set dotfiles ${url}`;
+      }
+    }
+  }
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
   // truncated profile. fetchOwnProfile returns null only for the Worker's own "no profile" 404.
   const own = await fetchOwnProfile(cred);
@@ -775,25 +863,35 @@ export async function runSet(target: SetTarget): Promise<void> {
     return;
   }
   if (existing && sameContent(existing, entries, extras)) {
-    // Same argv echo rule as the success line below. Byte-equal only: a respelled value or an
+    // Same echo rule as the success line below. Byte-equal only: a respelled value or an
     // extra label's new casing is a change, and publishes.
     const line =
       target.kind === "curated"
         ? `${KEY_LABELS[target.key]} is already ${sanitizeValue(target.value)}.`
         : `Extra "${sanitizeValue(target.label)}" is already ${sanitizeValue(target.value)}.`;
     console.log(message(line));
+    noteOnStderr(linkNote);
     return; // idempotent no-op, like unset's: exit 0, no network write, the updated date stays
   }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
   });
-  // argv echo: same strip-escapes rule as every rejection echo. The pre-flight only rejects a
-  // value with nothing visible, so one mixing an escape sequence with real text arrives here raw.
+  // Echo of the value set: same strip-escapes rule as every rejection echo. From argv the
+  // pre-flight only rejects a value with nothing visible, so one mixing an escape sequence with
+  // real text arrives here raw (an accepted link form is ASCII by linkForm's own patterns).
   const line =
     target.kind === "curated"
       ? `Set ${KEY_LABELS[target.key]} = ${sanitizeValue(target.value)}.`
       : `Set extra ${sanitizeValue(target.label)} = ${sanitizeValue(target.value)}.`;
   console.log(message(`${line}${pagePointer(res.handle)}`));
+  noteOnStderr(linkNote);
+}
+
+/** A faint aside about a write, on stderr so captured stdout stays the result line alone. */
+function noteOnStderr(note: string | undefined): void {
+  if (note === undefined) return;
+  const c = palette(colorEnabled());
+  console.error(message(`${c.faint}${note}${c.reset}`));
 }
 
 // The suggestion below is meant to be pasted, so the label rides inside it only when it cannot
