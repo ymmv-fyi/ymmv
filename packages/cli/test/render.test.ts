@@ -1,8 +1,9 @@
-import type { CuratedKey, DiffResult, Profile } from "@ymmv/shared";
+import { type CuratedKey, type DiffResult, MAX_VALUE, type Profile } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import {
   isHttpUrl,
   link,
+  linkForm,
   message,
   notFound,
   nudge,
@@ -115,6 +116,81 @@ describe("isHttpUrl", () => {
     // the parser rejects these, so they are text, never a link wearing their raw spoof as label
     expect(isHttpUrl("https://good.com@evil.com:99999")).toBe(false);
     expect(isHttpUrl("https://good.com@[evil.com]")).toBe(false);
+  });
+});
+
+describe("linkForm", () => {
+  it("reads the user's own user/repo as GitHub, and a host path as https", () => {
+    expect(linkForm("me/dotfiles", "me")).toBe("https://github.com/me/dotfiles");
+    expect(linkForm("me/.dotfiles", "me")).toBe("https://github.com/me/.dotfiles");
+    expect(linkForm("me/dotfiles/", "me")).toBe("https://github.com/me/dotfiles");
+    expect(linkForm("Me/dotfiles", "me")).toBe("https://github.com/Me/dotfiles"); // logins fold
+    expect(linkForm(" github.com/me/dotfiles ", "me")).toBe("https://github.com/me/dotfiles");
+    expect(linkForm("codeberg.org/you/dots/", "me")).toBe("https://codeberg.org/you/dots/");
+    expect(linkForm("git.sr.ht/~me/dotfiles", "me")).toBe("https://git.sr.ht/~me/dotfiles");
+  });
+
+  it("never reads someone else's word/word as a repo: the offer defaults to yes", () => {
+    for (const v of ["n/a", "N/A", "src/dotfiles", "yes/no", "nix/home-manager", "you/dotfiles"]) {
+      expect(linkForm(v, "me"), v).toBeUndefined();
+    }
+  });
+
+  it("only ever offers a value that links, and that is safe to print and to paste", () => {
+    for (const v of ["me/dotfiles", "github.com/me/dotfiles", "xn--a.example/%7Eme/", "-a.io/x"]) {
+      const url = linkForm(v, "me") ?? "";
+      expect(isHttpUrl(url), v).toBe(true);
+      // The non-TTY note prints this inside a command, unsanitized: the patterns are the guard.
+      expect(url, v).toMatch(/^https:\/\/[A-Za-z0-9._~%+/-]+$/);
+      expect(sanitizeValue(url), v).toBe(url);
+    }
+  });
+
+  it("has nothing to offer for a value that already links", () => {
+    expect(linkForm("https://github.com/me/dotfiles", "me")).toBeUndefined();
+    expect(linkForm("http://git.io/etc", "me")).toBeUndefined();
+  });
+
+  it("leaves everything that is not plainly a repo or a host path as typed", () => {
+    for (const v of [
+      "",
+      "dotfiles",
+      "chezmoi.toml", // a filename: the slash is what makes a host path
+      "example.com",
+      "a/b/c", // three segments and no dotted host
+      "me/..",
+      "me/.",
+      "~/dotfiles",
+      "./dotfiles",
+      "my dots/repo",
+      "git@github.com:me/dotfiles.git",
+      "github.com/me/dotfiles?tab=readme", // not paste-safe, so not offered
+      "github.com/me/dotfiles#install",
+      "github.com/me/$(id)",
+      "ftp://host/path",
+    ]) {
+      expect(linkForm(v, "me"), v).toBeUndefined();
+    }
+  });
+
+  it("never offers a form over the value cap", () => {
+    const typed = `me/${"r".repeat(MAX_VALUE - 3)}`; // fits as typed, not with the prefix
+    expect(typed.length).toBe(MAX_VALUE);
+    expect(linkForm(typed, "me")).toBeUndefined();
+    expect(linkForm(`me/${"r".repeat(MAX_VALUE - 22)}`, "me")).toHaveLength(MAX_VALUE);
+  });
+
+  it("never offers a host path the https prefix pushes over the cap", () => {
+    const typed = `me.dev/${"p".repeat(MAX_VALUE - 7)}`; // fits as typed, not with the prefix
+    expect(typed.length).toBe(MAX_VALUE);
+    expect(linkForm(typed, "me")).toBeUndefined();
+    expect(linkForm(`me.dev/${"p".repeat(MAX_VALUE - 15)}`, "me")).toHaveLength(MAX_VALUE);
+  });
+
+  it("reads a repo as two segments only, and leaves a host's own casing alone", () => {
+    expect(linkForm("me/dot/files", "me")).toBeUndefined();
+    expect(linkForm("me/../up", "me")).toBeUndefined();
+    expect(linkForm("GitHub.com/me/dots", "me")).toBe("https://GitHub.com/me/dots");
   });
 });
 
