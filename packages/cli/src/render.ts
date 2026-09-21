@@ -163,7 +163,9 @@ export function linkForm(value: string, handle: string): string | undefined {
       : HOST_PATH_RE.test(t)
         ? `https://${t}`
         : undefined;
-  return url !== undefined && url.length <= MAX_VALUE ? url : undefined;
+  // The patterns admit hosts the URL parser may still refuse, and parsers differ: Node 22 rejects
+  // the invalid punycode in `xn--a.example`, Node 26 takes it. Offered means it links HERE.
+  return url !== undefined && url.length <= MAX_VALUE && isHttpUrl(url) ? url : undefined;
 }
 
 // Terminals known to mishandle (not ignore) unknown OSC sequences — never emit OSC-8 there.

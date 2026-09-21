@@ -1,5 +1,5 @@
 import { type CuratedKey, type DiffResult, MAX_VALUE, type Profile } from "@ymmv/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isHttpUrl,
   link,
@@ -137,13 +137,28 @@ describe("linkForm", () => {
   });
 
   it("only ever offers a value that links, and that is safe to print and to paste", () => {
-    for (const v of ["me/dotfiles", "github.com/me/dotfiles", "xn--a.example/%7Eme/", "-a.io/x"]) {
+    for (const v of ["me/dotfiles", "github.com/me/dotfiles", "git.sr.ht/~me/%7Edots/"]) {
       const url = linkForm(v, "me") ?? "";
       expect(isHttpUrl(url), v).toBe(true);
       // The non-TTY note prints this inside a command, unsanitized: the patterns are the guard.
       expect(url, v).toMatch(/^https:\/\/[A-Za-z0-9._~%+/-]+$/);
       expect(sanitizeValue(url), v).toBe(url);
     }
+  });
+
+  it("offers nothing when this runtime's URL parser refuses the https form", () => {
+    // Which hosts a parser refuses varies by Node version (22 rejects `xn--a.example`, 26 takes
+    // it), so the refusal is scripted: the rule under test is that a refused form is not offered.
+    const canParse = vi.spyOn(URL, "canParse").mockReturnValue(false);
+    try {
+      expect(linkForm("github.com/me/dotfiles", "me")).toBeUndefined();
+      expect(linkForm("me/dotfiles", "me")).toBeUndefined();
+    } finally {
+      canParse.mockRestore();
+    }
+    // Unscripted: whatever this runtime decides about a dubious host, offered still means linked.
+    const dubious = linkForm("xn--a.example/x", "me");
+    if (dubious !== undefined) expect(isHttpUrl(dubious)).toBe(true);
   });
 
   it("has nothing to offer for a value that already links", () => {
