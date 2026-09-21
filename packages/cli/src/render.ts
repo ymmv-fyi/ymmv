@@ -387,8 +387,9 @@ export function renderDiff(
     differ: r.status !== "same",
   }));
   const labelW = Math.max(3, ...cells.map((r) => r.label.length));
-  // Column headers echo the web's uppercase letterspaced caps; widths come from what is printed.
-  const theirsHead = theirsLabel.toUpperCase();
+  // Column heads are the handles as stored, faint — the web diff renders them the same way
+  // (DESIGN.md, Diff session), and the heading two lines up already prints them with their casing.
+  const theirsHead = theirsLabel;
   const theirsW = Math.max(theirsHead.length, ...cells.map((r) => r.theirs.length));
 
   const lines: string[] = [
@@ -399,7 +400,7 @@ export function renderDiff(
     "",
   ];
   lines.push(
-    `  ${c.faint}${"".padEnd(labelW)}  ${theirsHead.padEnd(theirsW)}  ${mineLabel.toUpperCase()}${c.reset}`,
+    `  ${c.faint}${"".padEnd(labelW)}  ${theirsHead.padEnd(theirsW)}  ${mineLabel}${c.reset}`,
   );
   for (const r of cells) {
     if (!opts.color) {

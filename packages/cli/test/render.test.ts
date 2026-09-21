@@ -331,10 +331,19 @@ describe("renderDiff", () => {
     expect(color).toMatch(/differs from/);
   });
 
-  it("uppercases the column headers (web parity), leaving row values untouched", () => {
+  it("prints the column heads as the handles are stored (web parity), leaving row values untouched", () => {
     const out = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
-    expect(out).toMatch(/ANTFU\s+YOU/);
+    expect(out).toMatch(/antfu\s+you/);
+    expect(out).not.toMatch(/ANTFU|YOU/);
     expect(out).toContain("fish"); // values keep their case
+  });
+
+  it("keeps the display casing of a mixed-case handle in its column head", () => {
+    const out = renderDiff(DIFF, { color: false, theirsLabel: "OctoCat", mineLabel: "you" });
+    // The heading line above prints the handle with its casing; the head must not disagree.
+    expect(out).toMatch(/how OctoCat differs from you/);
+    expect(out).toMatch(/OctoCat\s+you/);
+    expect(out).not.toContain("OCTOCAT");
   });
 
   it("sanitizes an injected value before it reaches the terminal", () => {

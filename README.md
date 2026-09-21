@@ -39,7 +39,7 @@ Windows, and WSL.
   ```
     how bardisty differs from you
 
-            BARDISTY  YOU
+            bardisty  you
   ~ Editor  Zed       VS Code
   = Shell   bash      bash
   ~ Theme   Gruvbox   Catppuccin

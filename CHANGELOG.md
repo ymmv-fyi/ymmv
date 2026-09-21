@@ -5,6 +5,11 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ## [Unreleased]
 
 ### Changed
+- **The diff's column heads print the handles as they are stored.** `BARDISTY  YOU`
+  became `bardisty  you`, still faint, matching the web diff's lowercase handle heads
+  (DESIGN.md, Diff session). A mixed-case handle keeps its casing: `OctoCat` no longer
+  prints as `OCTOCAT` while the heading two lines up prints it right. Row values are
+  untouched.
 - **The preview card marks what publishing will change.** Against your live profile, a
   changed row reads `~ Editor    Zed → Neovim`, a new one `+ Font      Lilex`, and a cleared one
   `- Shell     zsh → —`. Unchanged rows look as before, and a first publish has no marks.
