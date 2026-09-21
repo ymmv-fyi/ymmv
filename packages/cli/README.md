@@ -21,7 +21,7 @@ Viewing someone while you're logged in diffs their stack against yours:
 ```
   how bardisty differs from you
 
-          BARDISTY  YOU
+          bardisty  you
 ~ Editor  Zed       VS Code
 = Shell   bash      bash
 ~ Theme   Gruvbox   Catppuccin
