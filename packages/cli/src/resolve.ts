@@ -51,13 +51,100 @@ const UNSET_USAGE = `usage: ymmv unset <key>  |  ${UNSET_EXTRA}`;
 const VIEW_USAGE = "usage: ymmv view <handle>";
 const PUBLISH_USAGE = "usage: ymmv publish [-y | --reset-marks]";
 
+/**
+ * Normalize a key candidate: lowercase, spaces and underscores to hyphens.
+ * Accepts "Editor", "window_manager", "window manager", and every KEY_LABELS form.
+ */
+export function normalizeKey(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  let curr = new Array<number>(b.length + 1).fill(0);
+
+  for (let i = 0; i < a.length; i++) {
+    curr[0] = i + 1;
+    for (let j = 0; j < b.length; j++) {
+      const cost = a[i] === b[j] ? 0 : 1;
+      const insertCost = (curr[j] ?? 0) + 1;
+      const deleteCost = (prev[j + 1] ?? 0) + 1;
+      const substCost = (prev[j] ?? 0) + cost;
+      curr[j + 1] = Math.min(insertCost, deleteCost, substCost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length] ?? b.length;
+}
+
+/**
+ * Suggest a curated key for a typo or prefix.
+ *
+ * Checks:
+ * 1. Hyphen-stripped match: e.g. "aitool" -> "ai-tool", "windowmanager" -> "window-manager".
+ * 2. Prefix match for inputs of at least 3 characters: e.g. "wind" -> "window-manager", "term" -> "terminal".
+ * 3. Small edit distance against curated keys (max distance 1 for short strings, max 2 for longer).
+ *
+ * Keeps threshold tight so very short abbreviations like "wm" stay a plain miss.
+ */
+export function suggestCuratedKey(head: string): CuratedKey | undefined {
+  const norm = normalizeKey(head);
+  if (!norm) return undefined;
+
+  // 1. Hyphen-stripped match: "aitool" -> "ai-tool", "versionmanager" -> "version-manager"
+  const unhyphenated = norm.replace(/-/g, "");
+  if (unhyphenated.length >= 3) {
+    for (const key of CURATED_KEYS) {
+      if (unhyphenated === key.replace(/-/g, "")) {
+        return key;
+      }
+    }
+  }
+
+  // 2. Prefix match (require at least 3 characters, e.g. "term", "edit", "wind")
+  if (norm.length >= 3) {
+    const prefixMatches = CURATED_KEYS.filter((key) => key.startsWith(norm));
+    if (prefixMatches.length === 1) {
+      return prefixMatches[0];
+    }
+  }
+
+  // 3. Small edit distance
+  let bestKey: CuratedKey | undefined;
+  let bestDist = Infinity;
+
+  for (const key of CURATED_KEYS) {
+    const dist = editDistance(norm, key);
+    if (norm.length >= 3) {
+      const maxAllowed = norm.length <= 4 ? 1 : 2;
+      if (dist <= maxAllowed && (key.length >= 4 || dist === 0)) {
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestKey = key;
+        }
+      }
+    }
+  }
+
+  return bestKey;
+}
+
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
  *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). */
 function invalidKeyError(head: string, hint: string): Command {
+  const suggestion = suggestCuratedKey(head);
+  const didYouMean = suggestion ? ` Did you mean "${suggestion}"?` : "";
   return {
     kind: "error",
     message:
-      `"${sanitizeValue(head)}" is not a curated key. Valid keys: ${CURATED_KEYS.join(", ")}.\n` +
+      `"${sanitizeValue(head)}" is not a curated key.${didYouMean} Valid keys: ${CURATED_KEYS.join(", ")}.\n` +
       `For anything else, use: ${hint}.`,
   };
 }
@@ -131,15 +218,16 @@ function parseSet(rest: string[]): Command {
     return { kind: "set", target: { kind: "extra", label, value } };
   }
   if (!head) return { kind: "error", message: SET_USAGE };
-  if (!isCuratedKey(head)) return invalidKeyError(head, SET_EXTRA);
+  const key = normalizeKey(head);
+  if (!isCuratedKey(key)) return invalidKeyError(head, SET_EXTRA);
   const value = rest.slice(1).join(" ").trim();
-  if (!value) return { kind: "error", message: `usage: ymmv set ${head} <value>` };
+  if (!value) return { kind: "error", message: `usage: ymmv set ${key} <value>` };
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
   // so multi-token values like "- foo" or "Fira-Code" stay literal sets.
-  if (value === "-") return { kind: "unset", target: { kind: "curated", key: head } };
+  if (value === "-") return { kind: "unset", target: { kind: "curated", key } };
   if (!showsVisibleText(value)) return valueInvisibleError();
   if (value.length > MAX_VALUE) return valueCapError(value);
-  return { kind: "set", target: { kind: "curated", key: head, value } };
+  return { kind: "set", target: { kind: "curated", key, value } };
 }
 
 function parseUnset(rest: string[]): Command {
@@ -157,11 +245,12 @@ function parseUnset(rest: string[]): Command {
     return { kind: "unset", target: { kind: "extra", label } };
   }
   if (!head) return { kind: "error", message: UNSET_USAGE };
-  if (!isCuratedKey(head)) return invalidKeyError(head, UNSET_EXTRA);
+  const key = normalizeKey(head);
+  if (!isCuratedKey(key)) return invalidKeyError(head, UNSET_EXTRA);
   // A trailing value almost certainly means the user meant `set`; silently unsetting would be a
   // destructive surprise.
-  if (rest.length > 1) return { kind: "error", message: `usage: ymmv unset ${head}` };
-  return { kind: "unset", target: { kind: "curated", key: head } };
+  if (rest.length > 1) return { kind: "error", message: `usage: ymmv unset ${key}` };
+  return { kind: "unset", target: { kind: "curated", key } };
 }
 
 export function resolveArg(argv: string[]): Command {
