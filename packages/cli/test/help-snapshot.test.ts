@@ -9,7 +9,7 @@ const PLAIN_HELP = `ymmv: terminal-native developer tool-stack profiles (ymmv.fy
 
 Usage:
   ymmv                      detect your stack, confirm, and publish your profile
-  ymmv -y                   publish without prompts (required when stdin isn't a TTY)
+  ymmv -y                   publish without prompts (required when piped or redirected)
   ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)

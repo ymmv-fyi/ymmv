@@ -12,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ensureLogin/publishProfile resolve identity through the token store; mock it so no real login or
 // disk IO happens, and stub global fetch per branch. device-flow is mocked as insurance against an
-// accidental login() (it should never be reached when loadToken returns a credential). detect is
+// accidental login() (it should never be reached when loadToken returns a credential; the
+// no-stored-login describe drives the stub on purpose). detect is
 // mocked so card-first publishes (which POST the merged defaults directly) never leak this
 // machine's real environment into asserted request bodies.
 vi.mock("../src/token-store.js");
@@ -73,7 +74,14 @@ function posted(fetchFn: { mock: { calls: unknown[][] } }, call = 1): Profile {
 }
 /** Interface-complete scripted prompter — override only what a test drives. */
 function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
-  return { ask: vi.fn(), confirm: vi.fn(), choice: vi.fn(), close: vi.fn(), ...overrides };
+  return {
+    ask: vi.fn(),
+    confirm: vi.fn(),
+    choice: vi.fn(),
+    discardTypeahead: vi.fn(),
+    close: vi.fn(),
+    ...overrides,
+  };
 }
 /** The preview-card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo. */
 const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
@@ -2660,6 +2668,368 @@ describe("publish: a first run asks only for what detection left empty", () => {
   });
 });
 
+describe("publish: with no stored login, the card comes before the GitHub sign-in", () => {
+  const SIGN_IN = "Sign in with GitHub to claim ymmv.fyi/<you>?";
+  const LEAD = "\n  This is what ymmv found. You confirm again before anything publishes.";
+  /** The sign-in card's header line: the handle is unknown until GitHub answers. */
+  const isSignInCard = (l: string) => l.includes("  ymmv.fyi/<you>\n");
+  // No login until login() runs; the stub then stores `after`, which every later read sees, and
+  // leaves a marker so the order of card, question and device flow is observable. mockReset
+  // first: clearAllMocks keeps implementations and queued Once values, so a login rejection
+  // scripted in an earlier describe would still be armed here.
+  let signedIn = false;
+  let after: StoredToken = stored();
+  beforeEach(() => {
+    signedIn = false;
+    after = stored();
+    vi.mocked(loadToken)
+      .mockReset()
+      .mockImplementation(async () => (signedIn ? after : null));
+    vi.mocked(login)
+      .mockReset()
+      .mockImplementation(async () => {
+        logs.push("<device flow>");
+        signedIn = true;
+      });
+  });
+  // Later describes script their own stubs; this closure must not outlive the block.
+  afterEach(() => {
+    vi.mocked(loadToken).mockReset();
+    vi.mocked(login).mockReset();
+  });
+
+  it("shows what detection found and asks before any network or device flow; y goes on to the first run", async () => {
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "zsh"],
+      ]),
+    );
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    // What had happened when the sign-in question was asked: [fetches, logins, lines printed].
+    let atQuestion: number[] = [];
+    const choice = vi.fn(async (q: string) => {
+      if (q === SIGN_IN) {
+        atQuestion = [fetchFn.mock.calls.length, vi.mocked(login).mock.calls.length, logs.length];
+      }
+      return "y";
+    });
+    const ask = vi.fn(async (label: string) => (label === "Font" ? "Lilex" : ""));
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(atQuestion).toEqual([0, 0, 2]); // the card and the lead, both before the question
+    // exact: a typed username ("nick") must re-ask, never count as n.
+    expect(choice.mock.calls[0]).toEqual([SIGN_IN, ["y", "n"], "y", "Y/n", { exact: true }]);
+    const card = logs[0] ?? "";
+    expect(isSignInCard(card)).toBe(true);
+    expect(card).toMatch(/Editor\s+Neovim/);
+    expect(card).toMatch(/Font\s+—/);
+    expect(card).not.toContain("(detected:");
+    // The lead is its own unit under the card: one blank line between them.
+    expect(logs.join("\n")).toMatch(/AI Tool +—\n\n {2}This is what ymmv found\./);
+    expect(logs[1]).toBe(LEAD);
+    const deviceFlow = logs.indexOf("<device flow>");
+    const walk = logs.indexOf("\n  Detected 2 of 13 fields. Enter skips one.");
+    expect(deviceFlow).toBeGreaterThan(1);
+    expect(walk).toBeGreaterThan(deviceFlow);
+    expect(logs.findIndex(isCard)).toBeGreaterThan(walk);
+    expect(choice.mock.calls[1]?.[0]).toBe("Publish to ymmv.fyi/me?");
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "shell", value: "zsh" },
+      { key: "font", value: "Lilex" },
+    ]);
+  });
+
+  it("n signs nothing in and sends nothing: exit 0", async () => {
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn();
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("n") }),
+    });
+    expect(logs.at(-1)).toBe("\n  Nothing published.");
+    expect(login).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("^C at the question aborts like any other prompt", async () => {
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ choice: vi.fn().mockRejectedValue(new PromptAborted()) }),
+    });
+    expect(logs).toContain("\n\n  Aborted. Nothing published.");
+    expect(process.exitCode).toBe(130);
+    expect(login).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("a detection the write rules refuse is blank on the card and a bare prompt in the walk", async () => {
+    // The card and the gap walk read the same map, so a run never sees a value on one and a
+    // question about it on the other.
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "x".repeat(300)],
+        ["shell", "zsh"],
+      ]),
+    );
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async () => "");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") }),
+    });
+    const card = logs.find(isSignInCard) ?? "";
+    expect(card).toMatch(/Editor\s+—/);
+    expect(card).toMatch(/Shell\s+zsh/);
+    expect(card).not.toContain("xxx");
+    expect(askedLabels(ask)).not.toContain("Shell");
+    expect(ask.mock.calls[0]).toEqual(["Editor", undefined, walkHint("editor")]);
+    expect(logs).toContain("\n  Detected 1 of 13 fields. Enter skips one.");
+    expect(posted(fetchFn).entries).toEqual([{ key: "shell", value: "zsh" }]);
+  });
+
+  it("a stored login never sees the card or the question", async () => {
+    signedIn = true;
+    vi.stubGlobal("fetch", firstPublish());
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: vi.fn(async () => ""), choice }),
+    });
+    expect(logs.some(isSignInCard)).toBe(false);
+    expect(choice.mock.calls.map((c) => c[0])).toEqual(["Publish to ymmv.fyi/me?"]);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("forgets what was typed during the sign-in waits, after the last of them", async () => {
+    // The device flow AND the profile read that follows it are waits, not prompts: a key pressed
+    // through either must not answer the question after them (for a returning user, the publish
+    // confirm). Discarding before the read would leave that window open; discarding between two
+    // prompts would drop a pasted answer, so it happens exactly once, last.
+    const discardTypeahead = vi.fn();
+    const at: Record<string, number> = {};
+    const fetchFn = vi.fn(async (...args: unknown[]) => {
+      at.fetch ??= discardTypeahead.mock.calls.length;
+      return (args[1] as RequestInit)?.method === "POST"
+        ? jsonRes({ ok: true, handle: "me" })
+        : missing();
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    vi.mocked(login).mockImplementation(async () => {
+      at.login = discardTypeahead.mock.calls.length;
+      signedIn = true;
+    });
+    const ask = vi.fn(async () => {
+      at.ask ??= discardTypeahead.mock.calls.length;
+      return "";
+    });
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y"), discardTypeahead }),
+    });
+    expect(at.login).toBe(0); // nothing to forget before the device flow ran
+    expect(at.fetch).toBe(0); // nor before the profile read it precedes
+    expect(at.ask).toBe(1); // forgotten once both waits are over
+    expect(discardTypeahead).toHaveBeenCalledTimes(1); // and never between walk prompts
+  });
+
+  it("does not close readline for the device flow", async () => {
+    // Closed, the terminal would fall back to cooked mode: an Enter typed during the wait, or the
+    // second of a double-tapped one at the sign-in question, would queue up and answer the first
+    // question after login, which for a returning user is the Publish confirm. Open, readline
+    // drops it (pinned against real readline in prompt.test.ts).
+    vi.stubGlobal("fetch", firstPublish());
+    const prompter = stubPrompter({
+      ask: vi.fn(async () => ""),
+      choice: vi.fn().mockResolvedValue("y"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(prompter.close).not.toHaveBeenCalled();
+    expect(logs).toContain("\n  Published me → https://ymmv.fyi/me");
+  });
+
+  it("a sign-in question that fails for any other reason is not swallowed", async () => {
+    // Only PromptAborted is the user's own "never mind"; anything else must not read as one.
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockRejectedValue(new Error("readline is gone"));
+    await expect(
+      publish({ interactive: true, yes: false, prompter: stubPrompter({ choice }) }),
+    ).rejects.toThrow("readline is gone");
+    expect(logs.join("\n")).not.toContain("Aborted");
+    expect(process.exitCode).toBeUndefined();
+    expect(login).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // A real login() refuses without a terminal; the stub stands in for both, since what is pinned
+  // here is that -y never shows the card or asks.
+  it.each([
+    ["on a terminal", true],
+    ["without one", false],
+  ])(
+    "-y %s signs in with no card and no question: the flag is the consent",
+    async (_, interactive) => {
+      vi.mocked(detectStack).mockReturnValue(new Map([["shell", "zsh"]]));
+      const fetchFn = firstPublish();
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn();
+      await publish({
+        interactive,
+        yes: true,
+        prompter: interactive ? stubPrompter({ choice }) : undefined,
+      });
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(logs[0]).toBe("<device flow>");
+      expect(logs.some(isSignInCard)).toBe(false);
+      expect(choice).not.toHaveBeenCalled();
+      expect(posted(fetchFn).entries).toEqual([{ key: "shell", value: "zsh" }]);
+    },
+  );
+
+  it("a returning user on a new machine: the card after the sign-in is the saved profile", async () => {
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "Zed" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn();
+    const choice = vi.fn().mockResolvedValueOnce("y").mockResolvedValueOnce("n");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(logs.find(isSignInCard)).toMatch(/Editor\s+Neovim/);
+    expect(logs.find(isCard)).toMatch(/Editor\s+Zed\s+\(detected: Neovim\)/);
+    expect(choice.mock.calls[1]?.[0]).toBe("Publish to ymmv.fyi/me anyway?");
+    expect(logs.at(-1)).toBe("\n  Left as is.");
+    expect(ask).not.toHaveBeenCalled(); // a republish asks nothing up front
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the own read; nothing was sent
+  });
+
+  it("a login that lands elsewhere while the question waits is used, not replaced", async () => {
+    vi.stubGlobal("fetch", firstPublish());
+    const choice = vi.fn(async (q: string) => {
+      if (q === SIGN_IN) signedIn = true; // `ymmv login` finished in another terminal
+      return "y";
+    });
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: vi.fn(async () => ""), choice }),
+    });
+    expect(login).not.toHaveBeenCalled();
+    expect(logs).toContain("\n  Published me → https://ymmv.fyi/me");
+  });
+
+  it("a sign-in that fails ends the run with its reason and sends nothing", async () => {
+    vi.mocked(login).mockRejectedValueOnce(
+      new Error("Authorization denied. Run `ymmv login` to try again."),
+    );
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(
+      publish({
+        interactive: true,
+        yes: false,
+        prompter: stubPrompter({ choice: vi.fn().mockResolvedValue("y") }),
+      }),
+    ).rejects.toThrow("Authorization denied.");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("a sign-in under a reserved GitHub username binds no handle: refused, nothing sent", async () => {
+    after = stored({ handle: null });
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ choice: vi.fn().mockResolvedValue("y") }),
+    });
+    expect(errs).toContain(
+      "\n  Your GitHub username is a reserved word, so no handle is bound. " +
+        "Rename on GitHub, then run `ymmv login` again.",
+    );
+    expect(process.exitCode).toBe(1);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("nothing detected: every row is blank, and the walk after y asks all 13", async () => {
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async () => "");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") }),
+    });
+    const card = logs.find(isSignInCard) ?? "";
+    for (const key of CURATED_KEYS) expect(card).toMatch(new RegExp(`${KEY_LABELS[key]}\\s+—`));
+    expect(logs).toContain("\n  Enter to skip");
+    expect(askedLabels(ask)).toEqual(CURATED_KEYS.map((k) => KEY_LABELS[k]));
+    expect(posted(fetchFn).entries).toEqual([]);
+  });
+
+  it("a sign-in that persisted no token ends the run and sends nothing", async () => {
+    // The device flow returned, but nothing landed in the store: never publish under a login
+    // that does not exist.
+    vi.mocked(login).mockImplementationOnce(async () => {});
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await expect(
+      publish({
+        interactive: true,
+        yes: false,
+        prompter: stubPrompter({ choice: vi.fn().mockResolvedValue("y") }),
+      }),
+    ).rejects.toThrow("Login did not persist a token");
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // `--reset-marks` empties the file at the first card that can carry a mark, which is past the
+  // sign-in: a run that stops here never showed one, so an earlier run's dismissals stand.
+  it.each([
+    ["n", false],
+    ["^C", true],
+  ])("a run that stops at the sign-in (%s) forgets no dismissed mark", async (_, abort) => {
+    const dir = await mkdtemp(join(tmpdir(), "ymmv-signin-"));
+    const path = join(dir, "dismissed-marks.json");
+    const onDisk = '{"dismissed":[{"key":"editor","saved":"Zed","detected":"Neovim"}]}';
+    await writeFile(path, onDisk);
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    try {
+      await publish({
+        interactive: true,
+        yes: false,
+        prompter: stubPrompter({
+          choice: abort
+            ? vi.fn().mockRejectedValue(new PromptAborted())
+            : vi.fn().mockResolvedValue("n"),
+        }),
+        dismissalsPath: path,
+        resetMarks: true,
+      });
+      expect(await readFile(path, "utf8")).toBe(onDisk);
+      expect(login).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("publish: e asks which field", () => {
   const ZED_ZSH: Profile["entries"] = [
     { key: "editor", value: "Zed" },
@@ -4085,6 +4455,26 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
       "Bearer ymmv_env",
     );
     expect(posted(fetchFn, 2).handle).toBe("me");
+  });
+
+  it("an interactive publish under YMMV_TOKEN is a stored login: no sign-in card, no device flow", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(whoami("me"))
+      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(jsonRes({ handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: vi.fn(async () => ""), choice }),
+    });
+    expect(logs.join("\n")).not.toContain("<you>");
+    expect(choice.mock.calls.map((c) => c[0])).toEqual(["Publish to ymmv.fyi/me?"]);
+    expect(login).not.toHaveBeenCalled();
+    expect(urlOf(fetchFn, 0)).toContain("/api/v1/auth/whoami");
   });
 
   it("a matching YMMV_HANDLE passes, compared case-insensitively, and the whoami casing wins", async () => {

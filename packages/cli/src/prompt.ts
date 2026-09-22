@@ -11,9 +11,38 @@ import { type Codes, colorEnabled, palette, sanitizeValue } from "./render.js";
 // bare abort leaves the question() promise unsettled — nodejs/node#53497). So every question runs
 // with an AbortSignal: mid-question ^C aborts it (the await rejects → PromptAborted, and the
 // command prints its own "nothing happened" line + exit code 130); between questions (readline
-// open but idle, e.g. during the POST) there is nothing to settle, so exit 130 directly.
+// open but idle, e.g. during the POST or the sign-in's device flow) there is nothing to settle, so
+// exit 130 directly.
 
-/** Thrown from ask/confirm/choice when the user hits Ctrl+C at the prompt. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+/**
+ * Drop what was typed while no question was pending, exported for the contract test in
+ * prompt.test.ts. Called only at the waits a command announces (the sign-in's device flow, a POST
+ * in flight), never between two prompts: readline hands over a whole stdin chunk at once, so a
+ * paste of "Lilex<Enter>Catppuccin" leaves the second answer sitting here, and clearing before
+ * every question would drop it. Left alone:
+ *   • `line`/`cursor` — the text would sit after the next prompt with the cursor BEFORE it, so
+ *     what the user types there joins it ("y" left over, "n" typed, answer "ny").
+ *   • `prevRows` — readline's own row bookkeeping. Once idle text has wrapped, the next question
+ *     moves the cursor up that many rows and erases downward, taking whatever was printed since
+ *     with it (the profile card, right before the publish confirm).
+ * `line` and `cursor` are documented readline state that readline reassigns itself; `prevRows` is
+ * internal and absent from @types/node, so the cast goes through unknown. The `Pick` keeps the two
+ * public names bound to Interface (a rename upstream fails typecheck); the untyped third is what
+ * the behavioral test in prompt.test.ts is for.
+ */
+export function clearIdleInput(face: Interface): void {
+  const state = face as unknown as Mutable<Pick<Interface, "line" | "cursor">> & {
+    prevRows: number;
+  };
+  state.line = "";
+  state.cursor = 0;
+  state.prevRows = 0;
+}
+
+/** Thrown from ask/confirm/choice on Ctrl+C or Ctrl+D at the prompt, or when an earlier Ctrl+D
+ *  already closed the input. */
 export class PromptAborted extends Error {
   constructor() {
     super("aborted");
@@ -38,6 +67,9 @@ export interface Prompter {
     hint: string,
     opts?: { tight?: boolean; exact?: boolean },
   ): Promise<string>;
+  /** Forget what was typed since the last question. Called after a wait the command announced
+   *  (the device flow, a POST), so a key pressed there cannot answer the next question. */
+  discardTypeahead(): void;
   close(): void;
 }
 
@@ -92,7 +124,10 @@ export function makePrompter(): Prompter {
   let ac: AbortController | null = null;
   const io = (): Interface => {
     if (!rl) {
-      rl = createInterface({ input: stdin, output: stdout });
+      // An idle interface (a POST, the sign-in's device flow) still redraws its prompt on a
+      // terminal resize. readline's default "> " would then appear under the waiting line, so
+      // idle on an empty one; each question sets its own.
+      rl = createInterface({ input: stdin, output: stdout, prompt: "" });
       rl.on("SIGINT", () => {
         if (ac) ac.abort();
         else {
@@ -103,11 +138,16 @@ export function makePrompter(): Prompter {
       // Ctrl+D: readline 'close' leaves a pending question() UNSETTLED (nodejs/node#53497
       // family) — the process would then exit 0 with no message, reading as success to
       // `ymmv && next`. Abort so EOF lands on the same PromptAborted path as ^C. An idle close
-      // (EOF while no question is outstanding, e.g. during the POST) needs nothing: the command
-      // finishes and prints its own outcome.
+      // (EOF while no question is outstanding: during the POST, or the sign-in's device flow)
+      // needs nothing here: a command that asks nothing more prints its own outcome, and a later
+      // question finds the interface closed, which question() reads as the same abort.
       rl.on("close", () => {
         ac?.abort();
       });
+      // fg after Ctrl+Z (not on Windows): readline pauses its input on SIGCONT and leaves the
+      // resume to its owner. Left paused, ^C would do nothing and a held Enter would answer the
+      // next question.
+      rl.on("SIGCONT", () => rl?.resume());
     }
     return rl;
   };
@@ -118,6 +158,11 @@ export function makePrompter(): Prompter {
       return await io().question(query, { signal: controller.signal });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw new PromptAborted();
+      // An interface an idle EOF closed (see the close handler): the same abort as EOF
+      // mid-question, never a raw "readline was closed".
+      if (e instanceof Error && "code" in e && e.code === "ERR_USE_AFTER_CLOSE") {
+        throw new PromptAborted();
+      }
       throw e;
     } finally {
       ac = null;
@@ -153,6 +198,9 @@ export function makePrompter(): Prompter {
         if (hit !== null) return hit;
         prefix = ""; // a re-ask continues the same question — stays tight under the failed answer
       }
+    },
+    discardTypeahead() {
+      if (rl) clearIdleInput(rl);
     },
     close() {
       rl?.close();

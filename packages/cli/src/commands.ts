@@ -75,7 +75,8 @@ export interface InteractiveIO {
 export interface PublishIO extends InteractiveIO {
   /** Where dismissed detection marks are remembered. Absent = this run only, no file IO. */
   dismissalsPath?: string;
-  /** Forget every dismissed mark before the first card. */
+  /** Forget every dismissed mark before the first card that can carry one: past the sign-in and
+   *  the profile read, so a run that stops before them forgets nothing. */
   resetMarks?: boolean;
 }
 
@@ -173,9 +174,9 @@ function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | 
 
 /** Which write rule a curated value fails, or undefined. The ONE predicate behind the four
  *  siblings of the argv pre-flight: promptEntries' re-ask, the first run's drop of a refused
- *  detection, the publish loop's walk gate, and writeRuleRefusal. They must agree exactly, or a
- *  value the gate rejects and the re-ask accepts would walk the 13 prompts forever without ever
- *  reaching a card. */
+ *  detection (firstRunValues), the publish loop's walk gate, and writeRuleRefusal. They must agree
+ *  exactly, or a value the gate rejects and the re-ask accepts would walk the 13 prompts forever
+ *  without ever reaching a card. */
 function valueProblem(value: string): "invisible" | "over-cap" | undefined {
   if (!showsVisibleText(value)) return "invisible";
   if (value.length > MAX_VALUE) return "over-cap";
@@ -193,6 +194,17 @@ function ruleClause(problem: "invisible" | "over-cap", value: string): string {
  *  one of these is the user's own stored value, anything else came from detection. */
 function savedKeys(existing: Profile | null): ReadonlySet<string> {
   return new Set((existing?.entries ?? []).map((e) => e.key));
+}
+
+/** What a first run starts from: detection alone, minus any value the write rules refuse (over
+ *  the cap, zero-width only). Nobody chose a detected value, so a refused one is dropped rather
+ *  than offered: its prompt is an ordinary bare one that Enter skips, and it never sends the
+ *  loop-top gate into a second, full walk. The sign-in card shows this same map, so the card
+ *  before the device flow and the gap walk after it agree. */
+function firstRunValues(detected: Map<CuratedKey, string>): Map<CuratedKey, string> {
+  return new Map(
+    [...buildDefaults(null, detected)].filter(([, value]) => valueProblem(value) === undefined),
+  );
 }
 
 /** Two example values per key, shown at a walk prompt that has no default to explain itself
@@ -330,11 +342,53 @@ async function promptEntries(
   return chosen;
 }
 
+/** The card a run with no login shows before the GitHub sign-in, under a placeholder handle: the
+ *  handle is whichever GitHub account signs in. True to sign in; false once a no or a ^C has
+ *  printed its line (a ^C also sets exit 130). */
+async function askToSignIn(
+  values: Map<CuratedKey, string>,
+  prompter: Prompter,
+  color: boolean,
+  site: string,
+): Promise<boolean> {
+  const you = "<you>";
+  console.log(
+    renderProfile(newProfile(you, entriesFromMap(values), []), { color, site, mode: "preview" }),
+  );
+  console.log(message("This is what ymmv found. You confirm again before anything publishes."));
+  try {
+    // A choice, not a confirm: a stray `e` (the edit key the next card offers) re-asks instead of
+    // reading as a no. `exact` because the question shows <you> and invites a typed username:
+    // "nick" must re-ask, never count as n.
+    const ans = await prompter.choice(
+      `Sign in with GitHub to claim ${site}/${you}?`,
+      ["y", "n"],
+      "y",
+      "Y/n",
+      { exact: true },
+    );
+    if (ans === "y") return true;
+    console.log(message("Nothing published."));
+  } catch (e) {
+    if (!(e instanceof PromptAborted)) throw e;
+    // The first newline closes the interrupted prompt line; then the standard unit.
+    console.log(`\n${message("Aborted. Nothing published.")}`);
+    process.exitCode = 130;
+  }
+  return false;
+}
+
 /**
  * `ymmv` (default) — detect → card-first confirm/edit → upsert. Detection never blocks.
  *
  *   ymmv (publish)
  *     ├─ non-TTY, no -y ──────────────► refuse (needs -y), exit 1
+ *     ├─ TTY, no -y, no stored login ─► card of what detection found, breadcrumb <site>/<you>,
+ *     │                                 then "Sign in with GitHub to claim <site>/<you>?" [Y/n]
+ *     │                                 ├─ n ──► "Nothing published."  exit 0
+ *     │                                 ├─ ^C ─► "Aborted. Nothing published."  exit 130
+ *     │                                 └─ y ──► device flow (skipped when a login landed in the
+ *     │                                          meantime), then on as "interactive" below
  *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ─┬─ changes something ► POST  (no prompts)
  *     │                                               └─ nothing to change ► say so  exit 0
  *     └─ interactive
@@ -368,6 +422,9 @@ async function promptEntries(
  *   a faint example, and a dotfiles answer typed without a scheme is offered once in its https
  *   form, "use <url>?" [Y/n].
  *
+ *   With no login stored, -y runs the device flow before anything prints and shows no sign-in
+ *   card: the flag is the consent.
+ *
  *   After a failed POST nothing is called unchanged until a 412 reload settles what is live.
  *   After a lost response (the write may have landed) both abort lines read "Aborted. The
  *   earlier publish may have completed." for the rest of the run.
@@ -384,13 +441,12 @@ export async function publish(io: PublishIO): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const cred = await ensureLogin();
-  const handle = requireHandle(cred);
-  if (!handle) return;
 
-  // The injected reader is detection's one sanctioned file read (/etc/os-release — see DetectOpts).
-  // Bounded: refuse non-regular files (a FIFO would hang readFileSync) and anything over 64 KiB
-  // (a real os-release is <1 KiB) — linuxDistro() catches the throw and falls back to "Linux".
+  // Detection first: it is local and prints nothing, so a run with no login can show what it
+  // found before the sign-in. The injected reader is detection's one sanctioned file read
+  // (/etc/os-release — see DetectOpts). Bounded: refuse non-regular files (a FIFO would hang
+  // readFileSync) and anything over 64 KiB (a real os-release is <1 KiB) — linuxDistro() catches
+  // the throw and falls back to "Linux".
   const detected = detectStack(process.env, process.platform, {
     readTextFile: (p) => {
       const st = statSync(p);
@@ -398,6 +454,22 @@ export async function publish(io: PublishIO): Promise<void> {
       return readFileSync(p, "utf8");
     },
   });
+  const color = colorEnabled();
+  const site = displayUrl(BASE);
+  // With no login stored, a person at the terminal sees what detection found before anything is
+  // authorized; the confirm after the sign-in shows what would go out (-y is the consent; a
+  // YMMV_TOKEN is a stored login).
+  const known = await loadCredential();
+  if (known === null && io.interactive && io.prompter && !io.yes) {
+    if (!(await askToSignIn(firstRunValues(detected), io.prompter, color, site))) return;
+    // readline stays open through the device flow, so what is typed during it (an Enter, or the
+    // second of a double-tapped one here) is ignored instead of queueing up to answer the first
+    // question after login, which for a returning user is the Publish confirm.
+  }
+  const cred = await ensureLogin(known);
+  const handle = requireHandle(cred);
+  if (!handle) return;
+
   // NOT caught: fetchOwnProfile returns null only on the Worker's own "no profile yet" 404 and
   // THROWS on a real read failure. Swallowing the throw would let a transient error look like "no
   // profile", and the upsert (server does delete-then-insert) would then clobber every curated key
@@ -416,8 +488,6 @@ export async function publish(io: PublishIO): Promise<void> {
   // What the change marks and the nothing-changed check compare against. `existing` stays the
   // profile this run started from (first publish or not); `live` follows a 412 reload.
   let live = existing;
-  const color = colorEnabled();
-  const site = displayUrl(BASE);
 
   // Preview card + its notes, recomputed per render: an edit pass can create or remove the
   // duplicate-extra condition, so the hints must describe THIS iteration's entries. The row
@@ -585,25 +655,29 @@ export async function publish(io: PublishIO): Promise<void> {
   }
 
   // Past the -y branch on purpose: a scripted run shows no marks, so it reads no dismissals.
-  // `--reset-marks` empties the file before the first card, so it holds even if the user then
-  // walks away from the confirm. It sits behind the login and the profile read like the rest of
-  // the interactive path: a run those stop never got as far as showing a mark.
+  // `--reset-marks` empties the file before the first card that can carry a mark (the sign-in
+  // card never does), so it holds even if the user then walks away from the confirm. It sits
+  // behind the login and the profile read like the rest of the interactive path: a run those stop
+  // never got as far as showing a mark.
   const { dismissalsPath } = io;
   if (dismissalsPath !== undefined) {
     if (io.resetMarks) await writeDismissals(dismissalsPath, []);
     else dismissed = await readDismissals(dismissalsPath);
   }
+  // Everything since the sign-in question was a wait, not a prompt: the device flow, the profile
+  // read, this file. Whatever was typed through it is not an answer to the first question below,
+  // which for a returning user is the publish confirm. Last thing before that question, so no
+  // later await can refill the line (the POST's own waits discard again inside the loop).
+  io.prompter.discardTypeahead();
 
   try {
     // First-ever publish: ask only for the gaps, the keys detection left empty (font, theme and
     // dotfiles always; the rest when the environment says nothing). What it did fill is confirmed
-    // on the card, not one Enter at a time. A detected value the write rules refuse (over the cap,
-    // zero-width only) is dropped first: nobody chose it, so its prompt is an ordinary bare one
-    // that Enter skips, and it never sends the loop-top gate below into a second, full walk.
+    // on the card, not one Enter at a time.
     // Republish: card first — Enter publishes, or leaves the page alone when nothing would change
     // (see unchangedLine), e edits.
     if (!existing) {
-      values = new Map([...values].filter(([, value]) => valueProblem(value) === undefined));
+      values = firstRunValues(detected);
       const gaps = CURATED_KEYS.filter((key) => !values.has(key));
       const filled = CURATED_KEYS.length - gaps.length;
       if (gaps.length > 0) {
@@ -688,6 +762,9 @@ export async function publish(io: PublishIO): Promise<void> {
             carried = unknownEntries(fresh.profile);
             extras = fresh.profile.extras;
             ifMatch = fresh.etag;
+            // Same as after the device flow: the POST and its reload were a wait, so a key
+            // pressed during them must not answer the card this loop is about to re-offer.
+            io.prompter.discardTypeahead();
             continue;
           }
           // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the answers
@@ -712,6 +789,7 @@ export async function publish(io: PublishIO): Promise<void> {
               }`,
             ),
           );
+          io.prompter.discardTypeahead(); // the POST was a wait, not a prompt (see the 412 branch)
           continue;
         }
       }
