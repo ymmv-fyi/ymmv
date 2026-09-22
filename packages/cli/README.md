@@ -54,8 +54,8 @@ via npm Trusted Publishing, with provenance.
   `-` cleared. With nothing to change it says so, and Enter publishes nothing. `y` still
   publishes. A first run asks only for the fields it could not detect (font, theme and
   dotfiles always) and shows the rest on the preview. `e` there asks
-  `Which field (Enter for all):` and takes a key or a label, so `font` edits one value and
-  Enter walks all 13.
+  `Which field (Enter for all):` and takes a key or a label, or enough of one to name a single
+  field: `font` edits one value, `win` the window manager. Enter walks all 13.
 - `ymmv --reset-marks` forgets those answers, so every differing value is marked again
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
