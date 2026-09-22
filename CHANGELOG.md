@@ -5,6 +5,14 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ## [Unreleased]
 
 ### Changed
+- **A first `ymmv` asks only for the fields it could not detect.** It used to ask all 13, with
+  the detected values as defaults to Enter through. Now it says how many it found, for example
+  `Detected 8 of 13 fields. Enter skips one.`, and asks for the rest: Font, Theme and Dotfiles,
+  which are never detected, plus anything your environment does not reveal. The card then shows
+  everything, and `e` there changes a detected value.
+- **`e` asks which field to edit.** `Which field (Enter for all):` takes a key or a label, and
+  a prefix is enough: `font`, `window-manager`, `win`. It asks that one prompt and returns to the
+  card. Enter walks all 13 as before.
 - **The preview card marks what publishing will change.** Against your live profile, a
   changed row reads `~ Editor    Zed → Neovim`, a new one `+ Font      Lilex`, and a cleared one
   `- Shell     zsh → —`. Unchanged rows look as before, and a first publish has no marks.
@@ -25,6 +33,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   typed. `you/dotfiles` is read as GitHub only under your own username. Without a terminal, or
   under `YMMV_TOKEN`, `ymmv set` does not ask. It stores the value as typed, and stderr shows the
   command that makes it a link.
+
+### Fixed
+- **A detected value is published the way the preview shows it.** Color codes and control
+  characters in an environment value such as `$TERM_PROGRAM` or `$EDITOR` are removed before the
+  value is offered, where `ymmv -y` and a republish used to store them unseen. A value with
+  nothing left is not offered. Values you saved yourself are not touched.
 
 ## [0.12.0] - 2026-09-19
 

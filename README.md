@@ -18,7 +18,8 @@ npx ymmv-cli@latest           # detect your stack, confirm, go live at ymmv.fyi/
 npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 ```
 
-The first run asks you to sign in with GitHub. Every run after that goes
+The first run asks you to sign in with GitHub, then for the fields it could
+not detect (font, theme and dotfiles always). Every run after that goes
 straight to detect, confirm, publish: the preview marks any value your
 environment now detects differently, and `d` takes the ones you want, so
 updating your page is the same command again. The preview also marks what
@@ -30,7 +31,7 @@ Windows, and WSL.
 
 - **Auto-detection.** It reads your OS, shell, prompt, terminal, editor, multiplexer,
   version manager, window manager, browser, and AI tool from the environment and
-  pre-fills the form. You confirm or edit.
+  shows them on the preview. You confirm or edit.
 - **Nothing publishes until you confirm.** Detection only pre-fills, and `ymmv delete`
   removes everything.
 - **Diffs.** View someone's profile while you're logged in and you'll see how your
@@ -59,7 +60,8 @@ Windows, and WSL.
 Run with `npx ymmv-cli@latest`, or install once with `npm i -g ymmv-cli` for
 the short `ymmv` used below:
 
-- `ymmv` detects, confirms, and publishes. `ymmv publish` is the same command.
+- `ymmv` detects, confirms, and publishes. `ymmv publish` is the same command. At the confirm,
+  `e` edits one field by name, or all of them.
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in.
 - `ymmv set editor Neovim` changes one value.
 - `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form, since only a

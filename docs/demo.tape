@@ -1,6 +1,7 @@
 # Hero gif for the README.
 #   vhs docs/demo.tape  →  docs/demo.gif
-#   Needs: VHS (https://github.com/charmbracelet/vhs), a built `ymmv` on PATH, already logged in.
+#   Needs: VHS (https://github.com/charmbracelet/vhs), a built `ymmv` on PATH, already logged in,
+#   and no published profile yet (the prompts below are a first publish's).
 
 Output docs/demo.gif
 
@@ -18,38 +19,18 @@ Set BorderRadius 12
 # --- publish: detect, confirm, go live ----------------------------------------
 Type "ymmv"
 Enter
-Sleep 2s          # detector runs, then the field prompts appear (first publish: guided walk)
+Sleep 2s          # detector runs, then the gap prompts appear (first publish)
 
-# Enter keeps the detected value; typing overrides it. Fields in CURATED_KEYS order.
-Enter                       # Editor
-Sleep 500ms
-Enter                       # OS
-Sleep 500ms
-Enter                       # Shell
-Sleep 500ms
-Enter                       # Prompt
-Sleep 500ms
-Enter                       # Terminal
-Sleep 500ms
-Type "Zen"                  # Browser
-Enter
-Sleep 500ms
-Enter                       # Window manager
-Sleep 500ms
+# A first publish asks only for what detection left empty: Font, Theme and Dotfiles on a machine
+# where the other ten are detected. Detection that misses a key adds its prompt here, in
+# CURATED_KEYS order, so check the run by hand before recording.
 Type "Lilex"                # Font
 Enter
 Sleep 500ms
 Type "Gruvbox"              # Theme
 Enter
 Sleep 500ms
-Enter                       # Multiplexer
-Sleep 500ms
-Enter                       # Version manager
-Sleep 500ms
 Type "https://git.io/etc"   # Dotfiles
-Enter
-Sleep 500ms
-Type "Claude Code, Codex"   # AI tools
 Enter
 Sleep 2s          # preview card + publish prompt render
 Enter             # accept → POST → live at ymmv.fyi/bardisty
