@@ -18,14 +18,14 @@ npx ymmv-cli@latest           # detect your stack, confirm, go live at ymmv.fyi/
 npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 ```
 
-The first run asks you to sign in with GitHub, then for the fields it could
-not detect (font, theme and dotfiles always). Every run after that goes
-straight to detect, confirm, publish: the preview marks any value your
-environment now detects differently, and `d` takes the ones you want, so
-updating your page is the same command again. The preview also marks what
-publishing will change on your live page: `~` changed, `+` new, `-` cleared.
-If nothing would change, Enter publishes nothing. Works on macOS, Linux,
-Windows, and WSL.
+The first run shows what it detected before you sign in with GitHub, then
+asks for the fields it could not detect (font, theme and dotfiles always).
+Every run after that goes straight to detect, confirm, publish: the preview
+marks any value your environment now detects differently, and `d` takes the
+ones you want, so updating your page is the same command again. The preview
+also marks what publishing will change on your live page: `~` changed,
+`+` new, `-` cleared. If nothing would change, Enter publishes nothing.
+Works on macOS, Linux, Windows, and WSL.
 
 ## What you get
 

@@ -5,6 +5,13 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ## [Unreleased]
 
 ### Changed
+- **A first `ymmv` shows what it detected before you sign in.** It used to open with a GitHub
+  device code. Now the card comes first, then
+  `Sign in with GitHub to claim ymmv.fyi/<you>? [Y/n]`, and `n` exits with `Nothing published.`
+  A stored login and `ymmv -y` skip the question.
+- **`ymmv` and `ymmv delete` need `-y` when their output is piped or redirected.** They used to
+  ask anyway, so `ymmv > log.txt` sat at a question you could not see. Both now stop and name
+  `-y`. That includes `ymmv | tee log.txt`, which used to ask through `tee`.
 - **A first `ymmv` asks only for the fields it could not detect.** It used to ask all 13, with
   the detected values as defaults to Enter through. Now it says how many it found, for example
   `Detected 8 of 13 fields. Enter skips one.`, and asks for the rest: Font, Theme and Dotfiles,
