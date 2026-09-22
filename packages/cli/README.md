@@ -52,7 +52,10 @@ via npm Trusted Publishing, with provenance.
   an `n` on this machine and stops marking that value until it or the detection changes.
   The preview also marks what publishing will change on your live profile: `~` changed, `+` new,
   `-` cleared. With nothing to change it says so, and Enter publishes nothing. `y` still
-  publishes.
+  publishes. A first run asks only for the fields it could not detect (font, theme and
+  dotfiles always) and shows the rest on the preview. `e` there asks
+  `Which field (Enter for all):` and takes a key or a label, so `font` edits one value and
+  Enter walks all 13.
 - `ymmv --reset-marks` forgets those answers, so every differing value is marked again
 - `ymmv <handle>` views a profile, or diffs it against yours when you're logged in
 - `ymmv set editor Neovim` changes one value
