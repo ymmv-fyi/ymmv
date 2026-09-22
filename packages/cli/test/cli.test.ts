@@ -15,17 +15,29 @@ vi.mock("../src/device-flow.js", async (importOriginal) => ({
   login: vi.fn(),
 }));
 // Partial: only publish is mocked, so the dispatch's io can be inspected without a run that would
-// touch the REAL dismissals file in the user's config dir. runSet is wrapped, not replaced: it runs
-// for real unless a test scripts it, and its arguments can be read. Every other command stays real.
+// touch the REAL dismissals file in the user's config dir. runSet and runDelete are wrapped, not
+// replaced: they run for real unless a test scripts them, and their arguments can be read. Every
+// other command stays real.
 vi.mock("../src/commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/commands.js")>();
-  return { ...actual, publish: vi.fn(), runSet: vi.fn(actual.runSet) };
+  return {
+    ...actual,
+    publish: vi.fn(),
+    runSet: vi.fn(actual.runSet),
+    runDelete: vi.fn(actual.runDelete),
+  };
 });
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
-import { deleteProfile, ProfileChanged, PublishRefusal, publishProfile } from "../src/api.js";
+import {
+  deleteProfile,
+  ensureLogin,
+  ProfileChanged,
+  PublishRefusal,
+  publishProfile,
+} from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
-import { publish, runSet } from "../src/commands.js";
+import { publish, runDelete, runSet } from "../src/commands.js";
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { dismissalsPath } from "../src/dismissals.js";
@@ -311,6 +323,27 @@ describe("ymmv unset dispatch", () => {
   });
 });
 
+/** Force both ends' isTTY for a test body (vitest pipes them, so they are normally falsy). */
+async function withTTY(stdin: boolean, stdout: boolean, body: () => Promise<void>) {
+  const ends = [
+    [process.stdin, stdin],
+    [process.stdout, stdout],
+  ] as const;
+  const saved = ends.map(([end]) => Object.getOwnPropertyDescriptor(end, "isTTY"));
+  for (const [end, value] of ends) {
+    Object.defineProperty(end, "isTTY", { value, configurable: true });
+  }
+  try {
+    await body();
+  } finally {
+    ends.forEach(([end], i) => {
+      const desc = saved[i];
+      if (desc) Object.defineProperty(end, "isTTY", desc);
+      else Reflect.deleteProperty(end, "isTTY");
+    });
+  }
+}
+
 describe("ymmv publish dispatch", () => {
   // resolve.test proves the flag parses, commands.test proves publish honors it: this is the seam
   // between them. publish only ever learns where the dismissals live, and whether to empty them,
@@ -326,29 +359,27 @@ describe("ymmv publish dispatch", () => {
       expect.objectContaining({ dismissalsPath: dismissalsPath(), resetMarks: true, yes: false }),
     );
   });
+
+  // Questions are written to stdout: redirected, every prompt is invisible while the command
+  // waits on stdin. publish must take its "needs -y" refusal instead of hanging at a confirm
+  // nobody can see.
+  it("a redirected stdout makes publish non-interactive, with no prompter", async () => {
+    await withTTY(true, false, () => main([]));
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ interactive: false, prompter: undefined }),
+    );
+    vi.mocked(publish).mockClear();
+    await withTTY(true, true, () => main([]));
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interactive: true,
+        prompter: expect.objectContaining({ choice: expect.any(Function) }),
+      }),
+    );
+  });
 });
 
 describe("ymmv set dispatch", () => {
-  /** Force both ends' isTTY for a test body (vitest pipes them, so they are normally falsy). */
-  async function withTTY(stdin: boolean, stdout: boolean, body: () => Promise<void>) {
-    const ends = [
-      [process.stdin, stdin],
-      [process.stdout, stdout],
-    ] as const;
-    const saved = ends.map(([end]) => Object.getOwnPropertyDescriptor(end, "isTTY"));
-    for (const [end, value] of ends) {
-      Object.defineProperty(end, "isTTY", { value, configurable: true });
-    }
-    try {
-      await body();
-    } finally {
-      ends.forEach(([end], i) => {
-        const desc = saved[i];
-        if (desc) Object.defineProperty(end, "isTTY", desc);
-        else Reflect.deleteProperty(end, "isTTY");
-      });
-    }
-  }
   const target = { kind: "curated", key: "dotfiles", value: "me/dots" };
 
   // commands.test proves runSet asks when handed a prompter: this is the seam that hands it one.
@@ -368,6 +399,29 @@ describe("ymmv set dispatch", () => {
       expect(runSet).toHaveBeenLastCalledWith(target, undefined);
     } finally {
       vi.mocked(runSet).mockReset();
+    }
+  });
+});
+
+describe("ymmv delete dispatch", () => {
+  // The same gate as publish, in front of a permanent action: a confirm written to a redirected
+  // stdout would be invisible, so delete gets no prompter and takes its "-y to confirm" refusal.
+  it("hands runDelete a prompter only with a terminal on both ends", async () => {
+    vi.mocked(runDelete).mockResolvedValue(undefined);
+    try {
+      await withTTY(true, true, () => main(["delete"]));
+      expect(runDelete).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          interactive: true,
+          prompter: expect.objectContaining({ confirm: expect.any(Function) }),
+        }),
+      );
+      await withTTY(true, false, () => main(["delete"]));
+      expect(runDelete).toHaveBeenLastCalledWith(
+        expect.objectContaining({ interactive: false, prompter: undefined }),
+      );
+    } finally {
+      vi.mocked(runDelete).mockReset();
     }
   });
 });
@@ -944,6 +998,25 @@ describe("publish auto-reauth", () => {
       await refusal();
       expect(fetchFn).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// publish reads the store itself (to decide whether the sign-in card comes first) and hands the
+// result to ensureLogin, so what the command checked is what it runs under.
+describe("ensureLogin", () => {
+  it("a credential the caller already read is used as read, never looked up again", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: "stranger", github_id: 2002 }));
+    expect(await ensureLogin(MINE)).toEqual(MINE);
+    expect(loadCredential).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("a null is read again, so a login that landed in the meantime is used, not replaced", async () => {
+    // The caller looked before the question and saw nothing; by the answer, `ymmv login` in
+    // another terminal had finished. A second device flow would revoke it.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    expect(await ensureLogin(null)).toEqual(MINE);
+    expect(login).not.toHaveBeenCalled();
   });
 });
 

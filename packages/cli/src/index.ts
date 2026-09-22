@@ -27,7 +27,7 @@ export const help = (
 
 ${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
-  ymmv -y                   publish without prompts (required when stdin isn't a TTY)
+  ymmv -y                   publish without prompts (required when piped or redirected)
   ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
@@ -111,9 +111,12 @@ async function printLatestHint(): Promise<void> {
   );
 }
 
-// Run an interactive command, wiring a real prompter only on a TTY (pipes/CI publish non-interactively).
+// Run an interactive command, wiring a real prompter only with a terminal on BOTH ends
+// (pipes/CI publish non-interactively). Questions go to stdout, so a redirected one hides every
+// prompt while the command waits on stdin: `ymmv > log.txt` would sit at an invisible confirm
+// forever. Without a terminal, publish and delete take their own "needs -y" refusal instead.
 async function interactive(run: (io: InteractiveIO) => Promise<void>, yes: boolean): Promise<void> {
-  const isTTY = Boolean(process.stdin.isTTY);
+  const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const prompter = isTTY ? makePrompter() : undefined;
   try {
     await run({ interactive: isTTY, prompter, yes });
@@ -176,12 +179,8 @@ async function dispatch(cmd: Command): Promise<void> {
       await view(cmd.handle);
       break;
     case "set":
-      // The prompter opens readline only when a question is asked (a scheme-less dotfiles value),
-      // and questions go to stdout: with it redirected the terminal would show a silent hang.
-      await interactive(
-        (io) => runSet(cmd.target, process.stdout.isTTY ? io.prompter : undefined),
-        false,
-      );
+      // The prompter opens readline only when a question is asked (a scheme-less dotfiles value).
+      await interactive((io) => runSet(cmd.target, io.prompter), false);
       break;
     case "unset":
       await runUnset(cmd.target);

@@ -117,9 +117,12 @@ export async function verifyEnvCredential(cred: Credential): Promise<Credential>
 
 /** Ensure a credential exists for the current base (YMMV_TOKEN wins), logging in if needed. An env
  *  credential is returned VERIFIED (see verifyEnvCredential); a file credential never triggers a
- *  lookup, its identity was server-minted at login. */
-export async function ensureLogin(): Promise<Credential> {
-  const existing = await loadCredential();
+ *  lookup, its identity was server-minted at login. `known`: a credential the caller already read,
+ *  not read again, so the command runs under exactly the login it checked (an env one is still
+ *  verified). A null is read again rather than trusted: a login that landed after the caller
+ *  looked is used, not revoked by a second device flow. */
+export async function ensureLogin(known?: Credential | null): Promise<Credential> {
+  const existing = known ?? (await loadCredential());
   if (existing) return existing.source === "env" ? verifyEnvCredential(existing) : existing;
   await login();
   const fresh = await loadCredential();

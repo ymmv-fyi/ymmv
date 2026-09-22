@@ -1,7 +1,10 @@
+import { createInterface } from "node:readline/promises";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { matchChoice, PromptAborted, promptLine } from "../src/prompt.js";
+import { clearIdleInput, matchChoice, PromptAborted, promptLine } from "../src/prompt.js";
 
 const ESC = String.fromCharCode(0x1b); // explicit code point, never a raw literal
+const CR = String.fromCharCode(13);
 
 // Prompt defaults carry env-detected and wire-fetched values — the one print path that used to
 // skip the UNTRUSTED rule. Pin that the rendered line is stripped like every other surface.
@@ -92,5 +95,94 @@ describe("PromptAborted", () => {
     const e = new PromptAborted();
     expect(e).toBeInstanceOf(Error);
     expect(e.name).toBe("PromptAborted");
+  });
+});
+
+// What an open readline does with keys typed while no question is pending (the sign-in's device
+// flow, a POST). A whole line it drops by itself. An unfinished one stays until clearIdleInput
+// (what discardTypeahead runs after a wait) removes it; left, it would join the next answer and
+// erase the card. prompter.test.ts mocks readline away; THIS is where those behaviors are pinned
+// against the real interface, each reset case with the uncleared half showing what it prevents.
+describe("readline contract behind the idle prompter", () => {
+  const tick = () => new Promise<void>((r) => setImmediate(r));
+  const CURSOR_UP = new RegExp(`${ESC}\\[\\d+A`);
+
+  /** A readline on in-memory streams that readline drives as a terminal, plus what it wrote. */
+  function fakeTerminal(columns = 80) {
+    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => {} });
+    const output = Object.assign(new PassThrough(), { isTTY: true, columns, rows: 24 });
+    let written = "";
+    output.on("data", (c: Buffer) => {
+      written += String(c);
+    });
+    const rl = createInterface({ input, output, terminal: true, prompt: "" });
+    return {
+      rl,
+      input,
+      take() {
+        const w = written;
+        written = "";
+        return w;
+      },
+    };
+  }
+
+  /** Answer one question, then type `idle` with no question pending. */
+  async function leaveIdleText(t: ReturnType<typeof fakeTerminal>, idle: string): Promise<void> {
+    const first = t.rl.question("Sign in? ");
+    await tick();
+    t.input.write(`y${CR}`);
+    await first;
+    t.input.write(idle);
+    await tick();
+    expect(t.rl.line).toBe(idle);
+  }
+
+  it("drops a whole line typed while no question was pending: a double-tapped Enter answers once", async () => {
+    const t = fakeTerminal();
+    const first = t.rl.question("Sign in? ");
+    await tick();
+    t.input.write(`y${CR}${CR}`); // the second Enter arrives with no question pending
+    expect(await first).toBe("y");
+    const pending = t.rl.question("Publish? ");
+    await tick();
+    t.input.write(`n${CR}`);
+    // Queued, the stray Enter would have answered "" (the default) before the n was typed.
+    expect(await pending).toBe("n");
+    t.rl.close();
+  });
+
+  it("drops text typed while no question was pending, instead of joining the next answer", async () => {
+    for (const clear of [false, true]) {
+      const t = fakeTerminal();
+      await leaveIdleText(t, "y");
+      if (clear) clearIdleInput(t.rl);
+      const pending = t.rl.question("Publish? ");
+      await tick();
+      t.input.write(CR);
+      // Uncleared, the leftover IS the answer; the cursor sits before it, so a typed "n" would
+      // arrive as "ny" and the first letter would decide the publish.
+      expect(await pending).toBe(clear ? "" : "y");
+      t.rl.close();
+    }
+  });
+
+  it("leaves output printed since the idle text on screen", async () => {
+    for (const clear of [false, true]) {
+      const t = fakeTerminal();
+      await leaveIdleText(t, "x".repeat(240)); // three wrapped rows at 80 columns
+      if (clear) clearIdleInput(t.rl);
+      t.take();
+      const pending = t.rl.question("Publish to ymmv.fyi/me? ");
+      await tick();
+      // Uncleared, readline still counts those rows: it moves the cursor up over them and erases
+      // downward, taking the card publish printed in between with it.
+      expect(t.take()).toStrictEqual(
+        clear ? expect.not.stringMatching(CURSOR_UP) : expect.stringMatching(CURSOR_UP),
+      );
+      t.input.write(CR);
+      await pending;
+      t.rl.close();
+    }
   });
 });

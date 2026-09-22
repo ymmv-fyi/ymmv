@@ -28,6 +28,7 @@ function fakeRl() {
       handlers[ev] = h;
     }),
     close: vi.fn(() => handlers.close?.()), // real readline emits 'close' from close()
+    resume: vi.fn(),
   };
   // answer() resolves the NEWEST pending question — earlier ones may have died by abort.
   return {
@@ -71,6 +72,94 @@ describe("makePrompter abort machinery", () => {
     await tick();
     f.answer("Windows");
     await expect(p2).resolves.toBe("Windows");
+  });
+
+  it("EOF while no question is pending aborts the next question, not a raw readline error", async () => {
+    // Ctrl+D during a POST or the sign-in's device flow: readline closes with nothing to abort,
+    // and a real closed interface rejects every later question with ERR_USE_AFTER_CLOSE.
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const prompter = makePrompter();
+    const p1 = prompter.choice("Publish?", ["y", "n"], "y", "Y/n");
+    await tick();
+    f.answer("y");
+    await expect(p1).resolves.toBe("y");
+    f.fire("close");
+    f.rl.question.mockImplementationOnce(() =>
+      Promise.reject(
+        Object.assign(new Error("readline was closed"), { code: "ERR_USE_AFTER_CLOSE" }),
+      ),
+    );
+    await expect(prompter.choice("Publish?", ["y", "n"], "y", "Y/n")).rejects.toBeInstanceOf(
+      PromptAborted,
+    );
+  });
+
+  it("a question that fails for any other reason is not turned into an abort", async () => {
+    // Only a closed interface is the user's Ctrl+D; a real stdin error must surface as itself.
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const boom = Object.assign(new Error("read EIO"), { code: "EIO" });
+    f.rl.question.mockImplementationOnce(() => Promise.reject(boom));
+    await expect(makePrompter().ask("Font")).rejects.toBe(boom);
+  });
+
+  it("^C while no question is pending (a POST, the sign-in's device flow) exits 130 directly", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const prompter = makePrompter();
+      const p = prompter.choice("Publish?", ["y", "n"], "y", "Y/n");
+      await tick();
+      f.answer("y");
+      await expect(p).resolves.toBe("y");
+      f.fire("SIGINT");
+      expect(write).toHaveBeenCalledWith("\n");
+      expect(exit).toHaveBeenCalledWith(130);
+    } finally {
+      exit.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it("fg after Ctrl+Z resumes the input readline paused, so ^C works again", async () => {
+    // readline pauses its input on SIGCONT and leaves the resume to its owner.
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().ask("Editor");
+    await tick();
+    f.answer("Zed");
+    await p;
+    f.fire("SIGCONT");
+    expect(f.rl.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("discardTypeahead forgets an unfinished line, and does nothing before the first question", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const prompter = makePrompter();
+    expect(() => prompter.discardTypeahead()).not.toThrow(); // no interface open yet
+    const p = prompter.ask("Editor");
+    await tick();
+    f.answer("Zed");
+    await p;
+    Object.assign(f.rl, { line: "y", cursor: 1, prevRows: 3 });
+    prompter.discardTypeahead();
+    expect(f.rl).toMatchObject({ line: "", cursor: 0, prevRows: 0 });
+  });
+
+  it("idles on an empty prompt, so a resize between questions redraws nothing", async () => {
+    // readline redraws its own prompt on a terminal resize even with no question pending; its
+    // default "> " would appear under "waiting for GitHub approval".
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const p = makePrompter().ask("Editor");
+    await tick();
+    f.answer("Zed");
+    await p;
+    expect(vi.mocked(createInterface).mock.lastCall?.[0]).toMatchObject({ prompt: "" });
   });
 });
 
