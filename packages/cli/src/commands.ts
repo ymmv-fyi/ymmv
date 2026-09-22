@@ -171,10 +171,11 @@ function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | 
   return undefined;
 }
 
-/** Which write rule a curated value fails, or undefined. The ONE predicate behind the three
- *  siblings of the argv pre-flight: promptEntries' re-ask, the publish loop's walk gate, and
- *  writeRuleRefusal. They must agree exactly, or a value the gate rejects and the re-ask accepts
- *  would walk the 13 prompts forever without ever reaching a card. */
+/** Which write rule a curated value fails, or undefined. The ONE predicate behind the four
+ *  siblings of the argv pre-flight: promptEntries' re-ask, the first run's drop of a refused
+ *  detection, the publish loop's walk gate, and writeRuleRefusal. They must agree exactly, or a
+ *  value the gate rejects and the re-ask accepts would walk the 13 prompts forever without ever
+ *  reaching a card. */
 function valueProblem(value: string): "invisible" | "over-cap" | undefined {
   if (!showsVisibleText(value)) return "invisible";
   if (value.length > MAX_VALUE) return "over-cap";
@@ -218,6 +219,28 @@ export function walkHint(key: CuratedKey): string {
   return key === "dotfiles" ? "a URL" : `e.g. ${KEY_EXAMPLES[key].join(", ")}`;
 }
 
+/** How a field name compares: case and the key's hyphen aside ("Window manager" names
+ *  `window-manager`). Trimmed last as well as first: a half-typed `os-` folds to `os `, and
+ *  the trailing space would then match nothing. */
+export const fieldName = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[-\s]+/g, " ")
+    .trim();
+
+/** The curated key an answer to "Which field" names, by key or by label: an exact name wins, else
+ *  a prefix ("win" is Window manager). Several keys back means the prefix fits them all ("t" is
+ *  Terminal and Theme), none means nothing matched; either way the caller re-asks. */
+export function resolveField(answer: string): CuratedKey | readonly CuratedKey[] | undefined {
+  const typed = fieldName(answer);
+  if (typed === "") return undefined;
+  const names = (key: CuratedKey): string[] => [fieldName(key), fieldName(KEY_LABELS[key])];
+  const exact = CURATED_KEYS.find((key) => names(key).includes(typed));
+  if (exact !== undefined) return exact;
+  const hits = CURATED_KEYS.filter((key) => names(key).some((n) => n.startsWith(typed)));
+  return hits.length === 1 ? hits[0] : hits.length === 0 ? undefined : hits;
+}
+
 /** A dotfiles value typed without a scheme never links, on the page or in the card: offer its
  *  https form once and return whichever the user picked. `exact` because the question shows a URL
  *  the user might paste back, which must re-ask and never count as "n". `tight` inside the walk,
@@ -238,6 +261,8 @@ async function offerLinkForm(
  *  `marked` holds the rows a fresh detection disagrees with: each prompt carries the detected
  *  value as a faint hint, so Enter there is a keep made with the detection in view. A prompt with
  *  no default carries an example instead. `handle` is whose `user/repo` a dotfiles answer may name.
+ *  `only` narrows the walk to those keys (a first run's gaps, one field under `e`); the rest keep
+ *  their default unasked. `lead` is the line that opens the walk.
  *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
@@ -245,11 +270,18 @@ async function promptEntries(
   prompter: Prompter,
   marked: ReadonlyMap<CuratedKey, string>,
   handle: string,
+  only?: ReadonlySet<CuratedKey>,
+  lead = 'Enter to keep, "-" to clear',
 ): Promise<Map<CuratedKey, string>> {
   const c = palette(colorEnabled());
-  console.log(message(`${c.faint}Enter to keep, "-" to clear${c.reset}`));
+  console.log(message(`${c.faint}${lead}${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
+    if (only && !only.has(key)) {
+      const unasked = defaults.get(key);
+      if (unasked !== undefined) chosen.set(key, unasked);
+      continue;
+    }
     const detectedNow = marked.get(key);
     // A default explains itself (`[Starship]`), so the example is for the bare prompt only: no
     // default, or one that sanitizes to nothing (promptLine's own test for printing no brackets).
@@ -260,7 +292,7 @@ async function promptEntries(
           ? undefined
           : walkHint(key);
     // Re-ask on an over-cap or invisible-only paste instead of letting the server 422 the whole
-    // publish after all 13 answers are in. A DETECTED default can fail either rule (an env value
+    // publish after every answer is in. A DETECTED default can fail either rule (an env value
     // of only U+200B survives detection's trim; a stale CLI can see a server-raised cap), and then
     // Enter-to-keep would loop forever — so name the default as the problem and the two ways out.
     for (;;) {
@@ -306,8 +338,11 @@ async function promptEntries(
  *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ─┬─ changes something ► POST  (no prompts)
  *     │                                               └─ nothing to change ► say so  exit 0
  *     └─ interactive
- *          ├─ no existing profile ────► guided 13 prompts (hint line once) ─┐
- *          ├─ existing profile ───────► (skip prompts) ─────────────────────┤
+ *          ├─ no existing profile ────► drop detections the write rules refuse, then prompts
+ *          │                            for the gaps only, under "Detected N of 13 fields.
+ *          │                            Enter skips one." ("Enter to skip" when nothing was
+ *          │                            detected; no gaps: no walk) ────────────────────────────┐
+ *          ├─ existing profile ───────► (skip prompts) ─────────────────────────────────────────┤
  *          └─► LOOP: preview card (rows a fresh detection disagrees with carry a faint
  *               │     "(detected: X)" note, unless that exact disagreement was dismissed in
  *               │     an earlier run; rows the publish would change on the live profile carry
@@ -320,16 +355,18 @@ async function promptEntries(
  *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published." ("Left as is." at the anyway prompt)  exit 0
- *               ├─ e ──► 13 prompts prefilled with current answers; a marked row's prompt shows
- *               │        "(detected: X)", and Enter there keeps the value for this run ─► LOOP
+ *               ├─ e ──► "Which field (Enter for all)": a key or label (a prefix will do) asks
+ *               │        that one prompt, Enter asks all 13; prefilled with current answers. A
+ *               │        marked row's prompt shows "(detected: X)", and Enter there keeps the
+ *               │        value for this run ─► LOOP
  *               ├─ d ──► per marked row "Label  saved → detected" [Y/n]: y takes the detected
  *               │        value, n keeps the saved one and dismisses the mark (remembered
  *               │        across runs; `--reset-marks` forgets) ─► LOOP
  *               └─ ^C ─► PromptAborted ► "Aborted. Nothing published."  exit 130
  *
- *   Every walk (first run, `e`, the write-rule gate): a prompt with no default shows a faint
- *   example, and a dotfiles answer typed without a scheme is offered once in its https form,
- *   "use <url>?" [Y/n].
+ *   Every walk (the first run's gaps, `e`, the write-rule gate): a prompt with no default shows
+ *   a faint example, and a dotfiles answer typed without a scheme is offered once in its https
+ *   form, "use <url>?" [Y/n].
  *
  *   After a failed POST nothing is called unchanged until a 412 reload settles what is live.
  *   After a lost response (the write may have landed) both abort lines read "Aborted. The
@@ -489,10 +526,17 @@ export async function publish(io: PublishIO): Promise<void> {
     }
     return out;
   };
-  const prompt = async (prompter: Prompter): Promise<void> => {
+  // `only` narrows the walk (see promptEntries). The marks narrow with it: a row the walk never
+  // asked about was not looked at, so it is neither hinted nor counted as kept below.
+  const prompt = async (
+    prompter: Prompter,
+    only?: ReadonlySet<CuratedKey>,
+    lead?: string,
+  ): Promise<void> => {
     const before = values;
     const marked = disagreeing();
-    values = await promptEntries(values, saved, prompter, marked, handle);
+    if (only) for (const key of marked.keys()) if (!only.has(key)) marked.delete(key);
+    values = await promptEntries(values, saved, prompter, marked, handle, only, lead);
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
       if (after !== before.get(key)) edits.set(key, after);
@@ -508,8 +552,9 @@ export async function publish(io: PublishIO): Promise<void> {
   // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
   // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
   if (!io.interactive || !io.prompter || io.yes) {
-    // Detection (env-derived values land in the defaults verbatim) and a value saved before a
-    // rule existed both skip the argv and prompt pre-flights, and this branch has no re-ask to
+    // Detection (an env value is sanitized on its way into the defaults, which still lets an
+    // over-cap or zero-width-only one through) and a value saved before a rule existed both skip
+    // the argv and prompt pre-flights, and this branch has no re-ask to
     // recover with — refuse locally instead of shipping a doomed POST; the interactive path
     // recovers through the re-prompt/edit loop.
     const entries = assemble();
@@ -550,10 +595,27 @@ export async function publish(io: PublishIO): Promise<void> {
   }
 
   try {
-    // First-ever publish: guided walk up front (nothing merged worth previewing yet). Republish:
-    // card first — Enter publishes, or leaves the page alone when nothing would change (see
-    // unchangedLine), e edits.
-    if (!existing) await prompt(io.prompter);
+    // First-ever publish: ask only for the gaps, the keys detection left empty (font, theme and
+    // dotfiles always; the rest when the environment says nothing). What it did fill is confirmed
+    // on the card, not one Enter at a time. A detected value the write rules refuse (over the cap,
+    // zero-width only) is dropped first: nobody chose it, so its prompt is an ordinary bare one
+    // that Enter skips, and it never sends the loop-top gate below into a second, full walk.
+    // Republish: card first — Enter publishes, or leaves the page alone when nothing would change
+    // (see unchangedLine), e edits.
+    if (!existing) {
+      values = new Map([...values].filter(([, value]) => valueProblem(value) === undefined));
+      const gaps = CURATED_KEYS.filter((key) => !values.has(key));
+      const filled = CURATED_KEYS.length - gaps.length;
+      if (gaps.length > 0) {
+        await prompt(
+          io.prompter,
+          new Set(gaps),
+          filled > 0
+            ? `Detected ${filled} of ${CURATED_KEYS.length} fields. Enter skips one.`
+            : "Enter to skip",
+        );
+      }
+    }
     const failsRule = ([, v]: [CuratedKey, string]) => valueProblem(v) !== undefined;
     for (;;) {
       // Never offer a card the server would 422 and this loop would re-offer unchanged: when a
@@ -628,7 +690,7 @@ export async function publish(io: PublishIO): Promise<void> {
             ifMatch = fresh.etag;
             continue;
           }
-          // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the 13 answers
+          // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the answers
           // the user just typed — print why and re-enter the loop (card + Y/n/e). Deterministic
           // failures pass through: PromptAborted (^C during the re-login device flow) keeps its
           // exit-130 contract, and PublishRefusal means retrying the SAME attempt can never
@@ -711,7 +773,28 @@ export async function publish(io: PublishIO): Promise<void> {
         }
         continue;
       }
-      await prompt(io.prompter); // "e": edit, prefilled with current answers
+      // "e": one field, or Enter for the whole walk, prefilled with current answers either way.
+      // A name that fits no field, or more than one, re-asks: guessing would walk the user
+      // through a prompt they did not ask for.
+      for (;;) {
+        // Matched in the form the note echoes, so a pasted bidi mark cannot make `font` miss.
+        const answer = (await io.prompter.ask("Which field", undefined, "Enter for all")).trim();
+        const typed = shownValue(answer);
+        const all = answer === "" || fieldName(typed) === "all";
+        const field = all ? undefined : resolveField(typed);
+        if (all || typeof field === "string") {
+          await prompt(io.prompter, typeof field === "string" ? new Set([field]) : undefined);
+          break;
+        }
+        // A stray escape or bidi mark names nothing and would echo as `""`: just ask again.
+        if (!showsVisibleText(typed)) continue;
+        const c = palette(color);
+        const note =
+          field === undefined
+            ? `no field called "${typed}"`
+            : `"${typed}" matches ${field.map((k) => KEY_LABELS[k]).join(", ")}`;
+        console.log(message(`${c.faint}${note}${c.reset}`));
+      }
     }
   } catch (e) {
     if (e instanceof PromptAborted) {

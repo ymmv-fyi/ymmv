@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type CuratedKey, canonical, TOOLS } from "@ymmv/shared";
+import { CURATED_KEYS, type CuratedKey, canonical, TOOLS } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { KEY_EXAMPLES } from "../src/commands.js";
 import { DETECTED_KEYS } from "../src/detect.js";
@@ -29,6 +29,21 @@ describe("walk hints", () => {
         const inCatalog = TOOLS.some((t) => t.key === key && t.canonical === name);
         expect(inCatalog || detectSource.includes(`"${name}"`), `${key}: ${name}`).toBe(true);
       }
+    }
+  });
+
+  // A first run asks for the keys detection never fills, and both READMEs name them. A detector
+  // that learns one of these makes that sentence wrong, so it fails here first.
+  it("the keys no detector fills are the ones the READMEs say a first run always asks", () => {
+    const detected: readonly CuratedKey[] = DETECTED_KEYS;
+    expect(CURATED_KEYS.filter((k) => !detected.includes(k))).toEqual([
+      "font",
+      "theme",
+      "dotfiles",
+    ]);
+    for (const readme of ["../../../README.md", "../README.md"]) {
+      const text = readFileSync(new URL(readme, import.meta.url), "utf8").replace(/\s+/g, " ");
+      expect(text, readme).toContain("(font, theme and dotfiles always)");
     }
   });
 });
