@@ -132,7 +132,7 @@ export function makePrompter(): Prompter {
     },
     // Prompts are output units (render.ts convention): confirm/choice open with the unit's one
     // blank line here — never in the caller's question string. Field ask()s stay tight: the
-    // 13-key walk is a single unit opened by its hint line. A `tight` choice skips the blank the
+    // walk is a single unit opened by its hint line. A `tight` choice skips the blank the
     // same way: publish's per-row questions are one unit, opened by the first of them.
     async confirm(q, defYes) {
       const answer = (await question(`\n  ${q} ${c.faint}[${defYes ? "Y/n" : "y/N"}]${c.reset} `))

@@ -19,7 +19,16 @@ vi.mock("../src/token-store.js");
 vi.mock("../src/device-flow.js");
 vi.mock("../src/detect.js");
 
-import { publish, runDelete, runSet, runUnset, view, walkHint } from "../src/commands.js";
+import {
+  fieldName,
+  publish,
+  resolveField,
+  runDelete,
+  runSet,
+  runUnset,
+  view,
+  walkHint,
+} from "../src/commands.js";
 import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
@@ -68,6 +77,14 @@ function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
 }
 /** The preview-card header line ("  ymmv.fyi/me\n") — distinct from the Published URL echo. */
 const isCard = (l: string) => l.includes("  ymmv.fyi/me\n");
+/** The fetches of a first publish: no profile yet (so the gap walk runs up front), then the POST. */
+const firstPublish = () =>
+  vi
+    .fn()
+    .mockResolvedValueOnce(missing())
+    .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+/** The label of every `ask`, in order: which prompts a run showed. */
+const askedLabels = (ask: { mock: { calls: unknown[][] } }) => ask.mock.calls.map((c) => c[0]);
 
 let logs: string[];
 let errs: string[];
@@ -302,8 +319,8 @@ describe("publish", () => {
     const body = posted(fetchFn);
     expect(body.entries).toContainEqual(foreign);
     expect(body.entries).toContainEqual({ key: "editor", value: "Vim" });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one prompt per curated key, no more
-    expect(ask.mock.calls.some((c) => /launcher/i.test(String(c[0])))).toBe(false);
+    // The field question (Enter = all), then one prompt per curated key, no more.
+    expect(askedLabels(ask)).toEqual(["Which field", ...CURATED_KEYS.map((k) => KEY_LABELS[k])]);
   });
 
   it("prints the Published confirmation after y (the line has a positive pin, not just negatives)", async () => {
@@ -1001,18 +1018,19 @@ describe("publish", () => {
   });
 
   it("an over-cap DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
-    // The other half of the default-is-the-problem rule: a server-side cap raise (or a generous
-    // YMMV_API origin) hands a stale CLI an over-cap default, and Enter returns it unchanged.
+    // The other half of the default-is-the-problem rule: an over-cap env value fills a key the
+    // saved profile lacks, and Enter returns it unchanged. (A first run drops such a detection
+    // before its walk, so this is a republish: the loop-top gate walks the prompts.)
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(detectStack).mockReturnValue(new Map([["editor", "x".repeat(300)]]));
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(own(prof("me", [{ key: "shell", value: "zsh" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
     const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return "";
+      if (label !== "Editor") return def ?? "";
       editorAsks += 1;
       return editorAsks === 1 ? (def ?? "") : "Helix"; // Enter keeps the (over-cap) default
     });
@@ -1022,7 +1040,10 @@ describe("publish", () => {
       /the detected value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
-    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
   });
 
   it("an invisible-only interactive answer re-prompts in place instead of a 422 after the walk", async () => {
@@ -1049,21 +1070,21 @@ describe("publish", () => {
   });
 
   it("an invisible-only DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
-    // Detection only trims env values, so a $EDITOR of U+061C U+200B lands in the defaults. The
-    // real prompter returns the SANITIZED default on Enter (the bidi control U+061C stripped, the
-    // zero-width space kept), and the note must still say the detected value is the problem and
-    // offer "-"; then a typed visible value publishes.
+    // A $EDITOR of U+061C U+200B fills a key the saved profile lacks: the bidi control is
+    // stripped on the way into the defaults, the zero-width space is not, so the loop-top gate
+    // walks the prompts. The note must say the detected value is the problem and offer "-";
+    // then a typed visible value publishes. (A first run drops such a detection before its walk.)
     vi.mocked(loadToken).mockResolvedValue(stored());
     const detected = `${String.fromCodePoint(0x061c)}${String.fromCodePoint(0x200b)}`;
     vi.mocked(detectStack).mockReturnValue(new Map([["editor", detected]]));
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(own(prof("me", [{ key: "shell", value: "zsh" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
     const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return "";
+      if (label !== "Editor") return def ?? "";
       editorAsks += 1;
       // Enter keeps the default, in the sanitized form makePrompter().ask() returns it.
       return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix";
@@ -1074,7 +1095,10 @@ describe("publish", () => {
       /the detected value has no visible text\. Type a value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
-    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
   });
 
   it("a republish walks the prompts first when a detected gap-filler has no visible text", async () => {
@@ -1104,15 +1128,17 @@ describe("publish", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2); // no 422 round-trip
   });
 
-  it("Enter on a DETECTED default that sanitizes to nothing re-asks instead of silently clearing", async () => {
+  it("Enter on a SAVED default that sanitizes to nothing re-asks instead of silently clearing", async () => {
     // A bidi-only default (U+202E) displays as nothing and the real prompter returns "" for it on
     // Enter. Under "Enter to keep", treating that "" as "skip the key" would clear it and a 412
-    // rebase would replay the clear; it must re-ask with the saved-value note instead.
+    // rebase would replay the clear; it must re-ask with the saved-value note instead. Only a
+    // saved value gets here: a detection that shows as nothing never enters the defaults.
     vi.mocked(loadToken).mockResolvedValue(stored());
-    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x202e)]]));
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: String.fromCodePoint(0x202e) }])),
+      )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
@@ -1124,7 +1150,7 @@ describe("publish", () => {
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(logs.join("\n")).toMatch(
-      /the detected value has no visible text\. Type a value or - to clear/,
+      /the saved value has no visible text\. Type a value or - to clear/,
     );
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
@@ -1134,15 +1160,10 @@ describe("publish", () => {
     // The note promises "Type a value or - to clear". Clearing must actually take: "-" makes the
     // value empty, and an empty value skips the visibility test rather than re-asking forever.
     vi.mocked(loadToken).mockResolvedValue(stored());
-    vi.mocked(detectStack).mockReturnValue(
-      new Map([
-        ["editor", String.fromCodePoint(0x200b)],
-        ["os", "macOS"],
-      ]),
-    );
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x200b)]]));
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(own(prof("me", [{ key: "os", value: "macOS" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
@@ -1695,13 +1716,14 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(missing())
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
+    // The first run never asks about a detected key, so typing over one goes through `e`.
     const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
+      label === "Which field" ? "editor" : label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
     );
-    const choice = vi.fn().mockResolvedValue("y");
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(logs.join("\n")).not.toContain("(detected");
-    expect(choiceCalls(choice)).toEqual([THREE]);
+    expect(choiceCalls(choice)).toEqual([THREE, THREE]);
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Zed" }]);
   });
 
@@ -2515,13 +2537,326 @@ describe("publish: a changed detection is marked on the card and taken with d", 
   });
 });
 
-describe("publish: a walk prompt with no default shows an example", () => {
-  /** First publish: no profile yet, so the walk runs up front, then the card, then the POST. */
-  const firstPublish = () =>
-    vi
+describe("publish: a first run asks only for what detection left empty", () => {
+  const DETECTED: [CuratedKey, string][] = [
+    ["editor", "Neovim"],
+    ["os", "macOS"],
+    ["shell", "zsh"],
+    ["prompt", "Starship"],
+    ["terminal", "Ghostty"],
+    ["browser", "Firefox"],
+    ["window-manager", "Aerospace"],
+    ["multiplexer", "tmux"],
+    ["version-manager", "mise"],
+    ["ai-tool", "Claude Code"],
+  ];
+
+  it("ten detected: Font, Theme and Dotfiles are the only prompts, under the count line", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map(DETECTED));
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const typed: Record<string, string> = { Font: "Lilex", Theme: "Gruvbox" };
+    const ask = vi.fn(async (label: string) => typed[label] ?? "");
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(askedLabels(ask)).toEqual(["Font", "Theme", "Dotfiles"]);
+    expect(logs).toContain("\n  Detected 10 of 13 fields. Enter skips one.");
+    expect(logs.join("\n")).not.toContain("Enter to keep");
+    expect(logs.findIndex((l) => l.includes("Detected 10 of 13"))).toBeLessThan(
+      logs.findIndex(isCard),
+    );
+    // Detected and typed values together, in card order; Dotfiles was skipped.
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Neovim" },
+      { key: "os", value: "macOS" },
+      { key: "shell", value: "zsh" },
+      { key: "prompt", value: "Starship" },
+      { key: "terminal", value: "Ghostty" },
+      { key: "browser", value: "Firefox" },
+      { key: "window-manager", value: "Aerospace" },
+      { key: "font", value: "Lilex" },
+      { key: "theme", value: "Gruvbox" },
+      { key: "multiplexer", value: "tmux" },
+      { key: "version-manager", value: "mise" },
+      { key: "ai-tool", value: "Claude Code" },
+    ]);
+  });
+
+  it("nothing detected: every key is a gap, and the lead line claims no detection", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal("fetch", firstPublish());
+    const ask = vi.fn(async () => "");
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(askedLabels(ask)).toEqual(CURATED_KEYS.map((k) => KEY_LABELS[k]));
+    expect(logs).toContain("\n  Enter to skip");
+    expect(logs.join("\n")).not.toContain("Detected");
+  });
+
+  it("no gaps: no prompts and no lead line, straight to the card", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ...DETECTED,
+        ["font", "Lilex"],
+        ["theme", "Gruvbox"],
+        ["dotfiles", "https://x.dev"],
+      ]),
+    );
+    vi.stubGlobal("fetch", firstPublish());
+    const ask = vi.fn();
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(ask).not.toHaveBeenCalled();
+    expect(logs.join("\n")).not.toMatch(/Detected|Enter to/);
+    expect(logs.filter(isCard)).toHaveLength(1);
+  });
+
+  it("a detection the write rules refuse is dropped: a bare prompt Enter skips, left out of the count", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "x".repeat(300)],
+        ["os", String.fromCodePoint(0x200b)],
+        ["shell", "zsh"],
+      ]),
+    );
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async () => "");
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs).toContain("\n  Detected 1 of 13 fields. Enter skips one.");
+    // Each refused detection is asked once, as the bare prompt with its example: no default to
+    // keep, so Enter skipped it and nothing was re-asked.
+    expect(askedLabels(ask)).toEqual(
+      CURATED_KEYS.filter((k) => k !== "shell").map((k) => KEY_LABELS[k]),
+    );
+    expect(ask.mock.calls[0]).toEqual(["Editor", undefined, walkHint("editor")]);
+    expect(logs.join("\n")).not.toContain("the detected value");
+    expect(posted(fetchFn).entries).toEqual([{ key: "shell", value: "zsh" }]);
+  });
+
+  it("a detected value publishes as the card shows it, never with bytes the card hid", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const esc = String.fromCodePoint(0x1b);
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["terminal", `Ghostty${esc}[31m`],
+        ["editor", String.fromCodePoint(0x061c)],
+      ]),
+    );
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async () => "");
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    // Terminal was never asked about, so nothing but the card stood between env and POST. The
+    // bidi-only editor shows as nothing, so it is not a detection at all.
+    expect(askedLabels(ask)).not.toContain("Terminal");
+    expect(logs).toContain("\n  Detected 1 of 13 fields. Enter skips one.");
+    expect(posted(fetchFn).entries).toEqual([{ key: "terminal", value: "Ghostty" }]);
+  });
+});
+
+describe("publish: e asks which field", () => {
+  const ZED_ZSH: Profile["entries"] = [
+    { key: "editor", value: "Zed" },
+    { key: "shell", value: "zsh" },
+  ];
+  /** A republish of ZED_ZSH. `fields` answers each "Which field" in order, `values` the field
+   *  prompts by label (anything else is Enter), `choices` the publish question. */
+  async function run(fields: string[], values: Record<string, string>, choices: string[]) {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(missing())
+      .mockResolvedValueOnce(own(prof("me", ZED_ZSH)))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const queue = [...fields];
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Which field" ? (queue.shift() ?? "") : (values[label] ?? sanitizeValue(def ?? "")),
+    );
+    const answers = [...choices];
+    const choice = vi.fn(async () => answers.shift() ?? "y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    return { ask, choice, fetchFn };
+  }
+  const lastCard = () => logs.filter(isCard).at(-1) ?? "";
+
+  it("resolveField: every key and every label names its own field", () => {
+    for (const key of CURATED_KEYS) {
+      expect(resolveField(key)).toBe(key);
+      expect(resolveField(KEY_LABELS[key])).toBe(key);
+      expect(resolveField(`  ${KEY_LABELS[key].toUpperCase()} `)).toBe(key);
+    }
+  });
+
+  // The exact pass only earns its place once one name prefixes another. None does today, so this
+  // is the tripwire: a new key or label that breaks the assumption fails here, where the comment
+  // says what to do, instead of silently turning a whole name into "ambiguous, re-ask".
+  it("resolveField: no curated name is a proper prefix of another", () => {
+    const names = CURATED_KEYS.flatMap((k) => [k, KEY_LABELS[k]].map(fieldName));
+    for (const name of names) {
+      expect(
+        names.filter((other) => other !== name && other.startsWith(name)),
+        name,
+      ).toEqual([]);
+    }
+  });
+
+  it("resolveField: an exact name beats a prefix, a shared prefix returns every fit", () => {
+    expect(resolveField("os")).toBe("os");
+    expect(resolveField("ai")).toBe("ai-tool");
+    expect(resolveField("version manager")).toBe("version-manager");
+    expect(resolveField("t")).toEqual(["terminal", "theme"]);
+    // A half-typed hyphenated key: the hyphen folds to a space that must not survive.
+    expect(resolveField("os-")).toBe("os");
+    expect(resolveField("theme-")).toBe("theme");
+    expect(resolveField("-editor")).toBe("editor");
+    expect(resolveField("window-")).toBe("window-manager");
+    expect(resolveField("keyboard")).toBeUndefined();
+    expect(resolveField("   ")).toBeUndefined();
+  });
+
+  it("the question is an ask with the way to the full walk as its hint", async () => {
+    const { ask } = await run([""], {}, ["e", "y"]);
+    expect(ask.mock.calls[0]).toEqual(["Which field", undefined, "Enter for all"]);
+  });
+
+  it.each(["", "all", " ALL "])("%j walks all 13 under the keep/clear line", async (answer) => {
+    const { ask } = await run([answer], {}, ["e", "y"]);
+    expect(askedLabels(ask)).toEqual(["Which field", ...CURATED_KEYS.map((k) => KEY_LABELS[k])]);
+    expect(logs).toContain('\n  Enter to keep, "-" to clear');
+  });
+
+  it("a field name asks that one prompt, prefilled, and leaves the other rows alone", async () => {
+    const { ask, fetchFn } = await run(["editor"], { Editor: "Helix" }, ["e", "y"]);
+    expect(ask.mock.calls.map((c) => [c[0], c[1]])).toEqual([
+      ["Which field", undefined],
+      ["Editor", "Zed"],
+    ]);
+    expect(logs).toContain('\n  Enter to keep, "-" to clear');
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
+  });
+
+  it.each(["window-manager", "Window manager", "WINDOW  MANAGER", "win"])(
+    "%j names the window manager",
+    async (answer) => {
+      const label = KEY_LABELS["window-manager"];
+      const { ask, fetchFn } = await run([answer], { [label]: "Hyprland" }, ["e", "y"]);
+      expect(askedLabels(ask)).toEqual(["Which field", label]);
+      expect(posted(fetchFn).entries).toContainEqual({ key: "window-manager", value: "Hyprland" });
+    },
+  );
+
+  it("a name that fits no field says so and asks again", async () => {
+    const { ask } = await run(["keyboard", "font"], { Font: "Lilex" }, ["e", "y"]);
+    expect(logs).toContain('\n  no field called "keyboard"');
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field", "Font"]);
+  });
+
+  it("a prefix that fits several names them and asks again", async () => {
+    const { ask } = await run(["t", "theme"], { Theme: "Gruvbox" }, ["e", "y"]);
+    expect(logs).toContain('\n  "t" matches Terminal, Theme');
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field", "Theme"]);
+  });
+
+  it("an answer with nothing visible asks again without quoting an empty name", async () => {
+    const { ask } = await run([String.fromCodePoint(0x061c), "font"], { Font: "Lilex" }, [
+      "e",
+      "y",
+    ]);
+    expect(logs.join("\n")).not.toContain("no field called");
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field", "Font"]);
+  });
+
+  it("a bidi mark pasted with the name does not make it miss", async () => {
+    const { ask } = await run([`${String.fromCodePoint(0x200e)}font`], { Font: "Lilex" }, [
+      "e",
+      "y",
+    ]);
+    expect(askedLabels(ask)).toEqual(["Which field", "Font"]);
+  });
+
+  it("the echoed answer is sanitized", async () => {
+    const { ask } = await run([`x${String.fromCodePoint(0x1b)}[31my`, ""], {}, ["e", "y"]);
+    expect(logs).toContain('\n  no field called "xy"');
+    expect(logs.join("\n")).not.toContain(String.fromCodePoint(0x1b));
+    expect(askedLabels(ask)).toEqual([
+      "Which field",
+      "Which field",
+      ...CURATED_KEYS.map((k) => KEY_LABELS[k]),
+    ]);
+  });
+
+  it("a field edit leaves the marks on rows it never asked about", async () => {
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const { choice } = await run(["font"], { Font: "Lilex" }, ["e", "y"]);
+    expect(lastCard()).toContain("(detected: Neovim)");
+    expect(lastCard()).toContain("(detected: fish)");
+    expect(choice.mock.calls.at(-1)?.[1]).toContain("d");
+  });
+
+  it("Enter at a marked field keeps that row only; the other mark stays", async () => {
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["editor", "Neovim"],
+        ["shell", "fish"],
+      ]),
+    );
+    const { ask, fetchFn } = await run(["editor"], {}, ["e", "y"]);
+    expect(ask.mock.calls[1]).toEqual(["Editor", "Zed", "detected: Neovim"]);
+    expect(lastCard()).not.toContain("(detected: Neovim)");
+    expect(lastCard()).toContain("(detected: fish)");
+    expect(posted(fetchFn).entries).toEqual(ZED_ZSH);
+  });
+
+  it("a 412 after a field edit re-applies the edit over the reloaded profile", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", ZED_ZSH), '"A"'))
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "emacs" }]), '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string, def?: string) =>
+      label === "Which field" ? "font" : label === "Font" ? "Lilex" : sanitizeValue(def ?? ""),
+    );
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(posted(fetchFn, 3).entries).toEqual([
+      { key: "editor", value: "emacs" },
+      { key: "font", value: "Lilex" },
+    ]);
+  });
+
+  it("^C at the question aborts like any other prompt", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValueOnce(own(prof("me", ZED_ZSH)));
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      ask: vi.fn().mockRejectedValue(new PromptAborted()),
+      choice: vi.fn().mockResolvedValue("e"),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(logs.join("\n")).toContain("Aborted. Nothing published.");
+    expect(process.exitCode).toBe(130);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("publish: a walk prompt with no default shows an example", () => {
   /** Enter hands back the SANITIZED default, exactly as makePrompter().ask() does. */
   const keep = () => vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
   /** The hint (ask's third argument) each ask of `label` carried. */
@@ -2533,13 +2868,17 @@ describe("publish: a walk prompt with no default shows an example", () => {
     vi.mocked(detectStack).mockReturnValue(new Map([["shell", "zsh"]]));
     vi.stubGlobal("fetch", firstPublish());
     const ask = keep();
-    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    // The first run asks the gaps only, so Shell is met on the full walk `e` + Enter opens.
+    const prompter = stubPrompter({
+      ask,
+      choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
+    });
     await publish({ interactive: true, yes: false, prompter });
     expect(hintsFor(ask, "Shell")).toEqual([undefined]);
-    expect(hintsFor(ask, "Prompt")).toEqual(["e.g. Starship, Oh My Posh"]);
-    expect(hintsFor(ask, "Dotfiles")).toEqual(["a URL"]);
+    expect(hintsFor(ask, "Prompt")).toEqual(Array(2).fill("e.g. Starship, Oh My Posh"));
+    expect(hintsFor(ask, "Dotfiles")).toEqual(["a URL", "a URL"]);
     for (const key of CURATED_KEYS.filter((k) => k !== "shell")) {
-      expect(hintsFor(ask, KEY_LABELS[key])).toEqual([walkHint(key)]);
+      expect(hintsFor(ask, KEY_LABELS[key])).toEqual([walkHint(key), walkHint(key)]);
     }
   });
 
@@ -2567,12 +2906,20 @@ describe("publish: a walk prompt with no default shows an example", () => {
     expect(posted(fetchFn).entries).toContainEqual({ key: "font", value: "Lilex" });
   });
 
-  it("a detected default that prints as nothing still shows the example", async () => {
+  it("a saved default that prints as nothing still shows the example", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
-    // A lone bidi control survives detection's trim and sanitizes to nothing, so the prompt prints
-    // no brackets: without the example this is a bare `Editor:`.
-    vi.mocked(detectStack).mockReturnValue(new Map([["editor", String.fromCodePoint(0x061c)]]));
-    vi.stubGlobal("fetch", firstPublish());
+    // A lone bidi control saved before the visibility rule sanitizes to nothing, so the prompt
+    // prints no brackets: without the example this is a bare `Editor:`. (A detection that shows
+    // as nothing never becomes a default.) The write-rule gate opens the walk.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          own(prof("me", [{ key: "editor", value: String.fromCodePoint(0x061c) }])),
+        )
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })),
+    );
     let editorAsks = 0;
     const ask = vi.fn(async (label: string, def?: string) => {
       if (label !== "Editor") return sanitizeValue(def ?? "");
@@ -2970,6 +3317,37 @@ describe("set", () => {
     expect(errs.join("\n")).toMatch(
       /The detected Terminal value has no visible text\. Set one: ymmv set terminal <value>\./,
     );
+  });
+
+  it("-y leaves out a DETECTED value that shows as nothing and publishes the rest", async () => {
+    // Color codes alone are not a detection (buildDefaults), so there is nothing to refuse: the
+    // zero-width case above still exits 1 because sanitizing leaves that value in place.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["terminal", `${String.fromCodePoint(0x1b)}[31m`],
+        ["shell", "zsh"],
+      ]),
+    );
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(posted(fetchFn).entries).toEqual([{ key: "shell", value: "zsh" }]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("-y publishes a DETECTED value in the form the card shows, never the bytes behind it", async () => {
+    // The other half of the sanitize rule: a value that keeps visible text is published clean.
+    // Nothing on this path asks about it, so the card is the only place it is ever shown — the
+    // escape bytes used to ride through it into the POST.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const esc = String.fromCodePoint(0x1b);
+    vi.mocked(detectStack).mockReturnValue(new Map([["terminal", `Ghostty${esc}[31m`]]));
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(posted(fetchFn).entries).toEqual([{ key: "terminal", value: "Ghostty" }]);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("-y names a SAVED value as saved, not detected, when the stored profile carries it", async () => {

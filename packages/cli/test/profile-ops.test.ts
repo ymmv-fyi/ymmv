@@ -17,6 +17,32 @@ function prof(entries: Profile["entries"] = [], extras: Profile["extras"] = []):
 const map = (pairs: [CuratedKey, string][]): Map<CuratedKey, string> => new Map(pairs);
 
 describe("buildDefaults", () => {
+  it("a detected value goes in as the card shows it; one that shows as nothing is left out", () => {
+    const esc = String.fromCodePoint(0x1b);
+    const detected = map([
+      ["terminal", `Ghostty${esc}[31m`],
+      ["editor", String.fromCodePoint(0x202e)],
+    ]);
+    expect([...buildDefaults(null, detected)]).toEqual([["terminal", "Ghostty"]]);
+  });
+
+  it("a detection filling a gap on a republish is sanitized too", () => {
+    // The CHANGELOG names a republish: nothing asks about a gap detection, so the card is the
+    // only place it is shown before the POST.
+    const esc = String.fromCodePoint(0x1b);
+    const d = buildDefaults(
+      prof([{ key: "shell", value: "zsh" }]),
+      map([["terminal", `Ghostty${esc}[31m`]]),
+    );
+    expect(d.get("terminal")).toBe("Ghostty");
+  });
+
+  it("a saved value stays as stored, control bytes and all: it is the user's own", () => {
+    const raw = `Ghostty${String.fromCodePoint(0x1b)}[31m`;
+    const d = buildDefaults(prof([{ key: "terminal", value: raw }]), map([["terminal", "kitty"]]));
+    expect(d.get("terminal")).toBe(raw);
+  });
+
   it("an existing published value wins over a fresh detection", () => {
     const d = buildDefaults(prof([{ key: "editor", value: "Vim" }]), map([["editor", "Neovim"]]));
     expect(d.get("editor")).toBe("Vim");

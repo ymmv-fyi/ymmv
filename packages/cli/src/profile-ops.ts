@@ -19,6 +19,12 @@ import type { SetTarget, UnsetTarget } from "./resolve.js";
  * detection (never clobber a deliberate choice on republish); detection only fills the gaps.
  * What it silently won over is surfaced by detectionDisagreements, so the card can mark the row
  * and the confirm can offer `d`, which asks about each marked row.
+ *
+ * A detected value goes in as the card shows it (shownValue): it reaches the POST with no prompt
+ * in between (a first run asks only the gaps, a republish and `-y` ask nothing), and the card
+ * prints the sanitized form; unsanitized, an ANSI sequence in an env value would publish unseen.
+ * One that shows as nothing is not a detection. A saved value stays as stored: it is the user's
+ * own.
  */
 export function buildDefaults(
   existing: Profile | null,
@@ -29,8 +35,8 @@ export function buildDefaults(
   );
   const out = new Map<CuratedKey, string>();
   for (const key of CURATED_KEYS) {
-    const value = existingByKey.get(key) ?? detected.get(key);
-    if (value?.trim()) out.set(key, value.trim());
+    const value = existingByKey.get(key) ?? shownValue(detected.get(key) ?? "");
+    if (value.trim()) out.set(key, value.trim());
   }
   return out;
 }
