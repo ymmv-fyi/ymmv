@@ -39,7 +39,8 @@ npm i -g ymmv-cli
 When a newer release exists, the CLI mentions it after a command (interactive terminals only)
 and `ymmv update` upgrades a global install in place.
 
-The first run shows what it detected, then asks for a one-time GitHub sign-in.
+The first run shows what it detected, then asks for a one-time GitHub sign-in. On a local
+terminal, Enter copies the code and opens the sign-in page in your browser.
 Works on macOS, Linux, Windows, and WSL. Nothing is published until you confirm
 (detection only pre-fills), and `ymmv delete` removes everything. Releases are
 published from GitHub Actions via npm Trusted Publishing, with provenance.
