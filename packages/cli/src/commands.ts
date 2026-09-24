@@ -466,7 +466,7 @@ export async function publish(io: PublishIO): Promise<void> {
     // second of a double-tapped one here) is ignored instead of queueing up to answer the first
     // question after login, which for a returning user is the Publish confirm.
   }
-  const cred = await ensureLogin(known);
+  const cred = await ensureLogin(known, io.prompter);
   const handle = requireHandle(cred);
   if (!handle) return;
 
@@ -648,7 +648,10 @@ export async function publish(io: PublishIO): Promise<void> {
       return;
     }
     printPublished(
-      await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
+      await publishProfile(newProfile(handle, entries, extras), cred, {
+        ifMatch,
+        prompter: io.prompter,
+      }),
       color,
     );
     return;
@@ -719,7 +722,10 @@ export async function publish(io: PublishIO): Promise<void> {
       if (ans === "y") {
         try {
           printPublished(
-            await publishProfile(newProfile(handle, entries, extras), cred, { ifMatch }),
+            await publishProfile(newProfile(handle, entries, extras), cred, {
+              ifMatch,
+              prompter: io.prompter,
+            }),
             color,
           );
           return;
@@ -966,9 +972,10 @@ export async function view(handle: string): Promise<void> {
  *  scheme gets the walk's offer when `prompter` is given (index.ts passes one only with a terminal
  *  on both ends) and the login is a person's: `set` is what the README recommends for CI, so under
  *  YMMV_TOKEN it never waits on a question, pty or not. With no one to ask, the value is stored as
- *  typed and a faint stderr line names the command that would make it a link. */
+ *  typed and a faint stderr line names the command that would make it a link. The same `prompter`
+ *  carries the sign-in's browser offer when there is no login yet. */
 export async function runSet(typed: SetTarget, prompter?: Prompter): Promise<void> {
-  const cred = await ensureLogin();
+  const cred = await ensureLogin(undefined, prompter);
   const handle = requireHandle(cred);
   if (!handle) return;
   let target = typed;
@@ -1036,6 +1043,7 @@ export async function runSet(typed: SetTarget, prompter?: Prompter): Promise<voi
   }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
+    prompter,
   });
   // Echo of the value set: same strip-escapes rule as every rejection echo. From argv the
   // pre-flight only rejects a value with nothing visible, so one mixing an escape sequence with
@@ -1072,9 +1080,11 @@ function extraHint(existing: Profile, label: string): string {
   return `\n(unset takes just the label: ymmv unset --extra "${shown}")`;
 }
 
-/** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST. */
-export async function runUnset(target: UnsetTarget): Promise<void> {
-  const cred = await ensureLogin();
+/** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST.
+ *  `prompter` (index.ts passes one only with a terminal on both ends) is for the sign-in alone:
+ *  unset asks nothing itself. */
+export async function runUnset(target: UnsetTarget, prompter?: Prompter): Promise<void> {
+  const cred = await ensureLogin(undefined, prompter);
   const handle = requireHandle(cred);
   if (!handle) return;
   // NOT caught (same reason as publish): a transient read failure must abort, never republish a
@@ -1106,6 +1116,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
   }
   const res = await publishProfile(newProfile(handle, entries, extras), cred, {
     ifMatch: own?.etag,
+    prompter,
   });
   // removed.* comes off the wire — sanitize it, as every echo here is (runSet's argv one too).
   const line =
@@ -1117,7 +1128,7 @@ export async function runUnset(target: UnsetTarget): Promise<void> {
 
 /** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */
 export async function runDelete(io: InteractiveIO): Promise<void> {
-  const cred = await ensureLogin();
+  const cred = await ensureLogin(undefined, io.prompter);
   // BASE-derived like every other printed page reference — consent for a permanent delete must
   // name the host actually being hit (YMMV_API can point this at a dev/staging Worker). Delete acts
   // on the TOKEN's account (the request carries no handle), so the handle named here must be one

@@ -179,17 +179,19 @@ async function dispatch(cmd: Command): Promise<void> {
       await view(cmd.handle);
       break;
     case "set":
-      // The prompter opens readline only when a question is asked (a scheme-less dotfiles value).
+      // The prompter opens readline for a question (a scheme-less dotfiles value) or a sign-in (its
+      // device-flow wait and browser offer).
       await interactive((io) => runSet(cmd.target, io.prompter), false);
       break;
     case "unset":
-      await runUnset(cmd.target);
+      await interactive((io) => runUnset(cmd.target, io.prompter), false);
       break;
     case "delete":
       await interactive(runDelete, cmd.yes);
       break;
     case "login": {
-      await login();
+      // The browser offer waits for Enter like any question, so it needs a terminal on both ends.
+      await interactive((io) => login({ prompter: io.prompter }), false);
       // Standalone login only — an ensureLogin() mid-publish must not say "run ymmv" while it runs.
       const c = palette(colorEnabled());
       console.log(message(`${c.faint}next: run ymmv to publish your stack${c.reset}`));

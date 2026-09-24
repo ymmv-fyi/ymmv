@@ -12,7 +12,8 @@ import { type Codes, colorEnabled, palette, sanitizeValue } from "./render.js";
 // with an AbortSignal: mid-question ^C aborts it (the await rejects → PromptAborted, and the
 // command prints its own "nothing happened" line + exit code 130); between questions (readline
 // open but idle, e.g. during the POST or the sign-in's device flow) there is nothing to settle, so
-// exit 130 directly.
+// exit 130 directly. An offer (the sign-in's "Press Enter to open github.com") is a question that
+// counts as idle here: it is optional, a wait runs behind it, and ^C there exits 130 the same way.
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -50,6 +51,15 @@ export class PromptAborted extends Error {
   }
 }
 
+/** A caller broke the one-pending-question rule (a code bug, never user input). Thrown loudly:
+ *  readline itself would silently drop the second question's callback and hang. */
+export class PrompterMisuse extends Error {
+  constructor(what: string) {
+    super(what);
+    this.name = "PrompterMisuse";
+  }
+}
+
 export interface Prompter {
   /** Ask for a value, offering `def` as the default; empty input returns `def`. `hint` is a faint
    *  parenthetical after the default, display only: it never changes what Enter returns. */
@@ -67,6 +77,14 @@ export interface Prompter {
     hint: string,
     opts?: { tight?: boolean; exact?: boolean },
   ): Promise<string>;
+  /** A line the user may answer with Enter while a wait runs behind it (the sign-in's browser
+   *  offer). True on Enter, whatever was typed; false once `signal` withdraws it or the input
+   *  ends. ^C exits 130 as in any wait. Only one of these or a question at a time, either way
+   *  round, or PrompterMisuse: an offer throws it synchronously, a question rejects with it. */
+  offer(text: string, signal: AbortSignal): Promise<boolean>;
+  /** Open the input now instead of at the first question, so keys pressed during a coming wait
+   *  reach readline (a whole line typed there is dropped) instead of queueing in the terminal. */
+  open(): void;
   /** Forget what was typed since the last question. Called after a wait the command announced
    *  (the device flow, a POST), so a key pressed there cannot answer the next question. */
   discardTypeahead(): void;
@@ -120,7 +138,8 @@ export function makePrompter(): Prompter {
   const c: Codes = palette(color);
   // One controller PER QUESTION (created in question(), cleared in its finally): a ^C landing in
   // the microtask gap after an answered question must not leave a flagged controller behind that
-  // would instantly abort the NEXT question. `ac === null` therefore means "no question pending".
+  // would instantly abort the NEXT question. `ac === null` therefore means no question() is
+  // pending; an offer may be (see `offering`), and it never sets `ac`.
   let ac: AbortController | null = null;
   const io = (): Interface => {
     if (!rl) {
@@ -140,10 +159,18 @@ export function makePrompter(): Prompter {
       // `ymmv && next`. Abort so EOF lands on the same PromptAborted path as ^C. An idle close
       // (EOF while no question is outstanding: during the POST, or the sign-in's device flow)
       // needs nothing here: a command that asks nothing more prints its own outcome, and a later
-      // question finds the interface closed, which question() reads as the same abort.
+      // question finds the interface closed, which question() reads as the same abort. An offer
+      // pending at EOF has no `ac` either: ^D rejects it at once, an input that just ends (the
+      // terminal went away) leaves it pending until its withdrawal, and offer() reads both as false.
       rl.on("close", () => {
         ac?.abort();
       });
+      // An input error (EIO: the terminal went away) reads like EOF: readline re-emits it here,
+      // where with no listener Node would throw it. The close waits a tick because close() itself
+      // can raise one (a failed setRawMode(false) before `closed` is set), and closing again from
+      // inside it would recurse until the stack overflows; by the next tick it is closed.
+      const face = rl;
+      face.on("error", () => process.nextTick(() => face.close()));
       // fg after Ctrl+Z (not on Windows): readline pauses its input on SIGCONT and leaves the
       // resume to its owner. Left paused, ^C would do nothing and a held Enter would answer the
       // next question.
@@ -151,11 +178,11 @@ export function makePrompter(): Prompter {
     }
     return rl;
   };
-  const question = async (query: string): Promise<string> => {
-    const controller = new AbortController();
-    ac = controller;
+  // An offer is pending (see offer below). Checked by every question, as `ac` is by offer.
+  let offering = false;
+  const readLine = async (query: string, signal: AbortSignal): Promise<string> => {
     try {
-      return await io().question(query, { signal: controller.signal });
+      return await io().question(query, { signal });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw new PromptAborted();
       // An interface an idle EOF closed (see the close handler): the same abort as EOF
@@ -164,6 +191,14 @@ export function makePrompter(): Prompter {
         throw new PromptAborted();
       }
       throw e;
+    }
+  };
+  const question = async (query: string): Promise<string> => {
+    if (offering) throw new PrompterMisuse("a question was asked while an offer was pending");
+    const controller = new AbortController();
+    ac = controller;
+    try {
+      return await readLine(query, controller.signal);
     } finally {
       ac = null;
     }
@@ -198,6 +233,29 @@ export function makePrompter(): Prompter {
         if (hit !== null) return hit;
         prefix = ""; // a re-ask continues the same question — stays tight under the failed answer
       }
+    },
+    // Tight: the offer continues the unit its waiting line opened. It never sets `ac`, so the
+    // SIGINT handler sees an idle interface and exits 130, as it would during the wait itself.
+    offer(text, signal) {
+      // Synchronous, so the misuse reaches the caller before it starts the wait behind the offer.
+      if (ac || offering) {
+        throw new PrompterMisuse("an offer was made while another question was pending");
+      }
+      offering = true;
+      return (async () => {
+        try {
+          await readLine(`  ${text} `, signal);
+          return true;
+        } catch (e) {
+          if (e instanceof PromptAborted) return false;
+          throw e;
+        } finally {
+          offering = false;
+        }
+      })();
+    },
+    open() {
+      io();
     },
     discardTypeahead() {
       if (rl) clearIdleInput(rl);

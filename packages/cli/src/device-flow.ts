@@ -1,8 +1,10 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
+import { findLauncher, type Launcher } from "./browser.js";
 import { BASE } from "./config.js";
 import { causeText, isTimeoutError, REQUEST_TIMEOUT_MS, safeFetch, wireText } from "./http.js";
-import { colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
+import type { Prompter } from "./prompt.js";
+import { type Codes, colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
 import { peekCredential, saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
@@ -178,6 +180,73 @@ export async function pollForToken(dc: DeviceCode, deps: PollDeps = {}): Promise
   throw new Error("Device code expired. Run `ymmv login` again.");
 }
 
+/** The one page the browser offer ever opens, and only when GitHub's reply names exactly it (it
+ *  always does). No wire bytes reach an opener: some re-parse their argument (wslview hands it to
+ *  PowerShell inside double quotes, where `$(...)` runs), and a forged reply must not be able to
+ *  aim Enter at another github.com page, such as an OAuth authorize page for someone's app. */
+const DEVICE_PAGE = "https://github.com/login/device";
+
+/** What the offer puts on the clipboard: GitHub's user codes look like WXYZ-1234. Anything else
+ *  off the wire is not copied, and the offer then does not promise a copy. */
+const COPYABLE_CODE = /^[A-Za-z0-9-]{4,16}$/;
+
+function launchNote(copied: boolean, opened: boolean): string | undefined {
+  if (!copied && !opened) return "couldn't copy the code or open a browser; use the link above";
+  if (!copied) return "couldn't copy the code; type it in";
+  if (!opened) return "couldn't open a browser; use the link above";
+  return undefined;
+}
+
+/**
+ * Poll with the browser offer up (#78). The poll does not wait for the offer, so approving through
+ * the printed link needs no Enter, and GitHub's answer, whatever it is, withdraws the offer. The
+ * work Enter starts is never awaited. Once the offer is withdrawn no further step starts (a copy
+ * or open already running finishes on its own), and no note prints after "Logged in".
+ *
+ *   offer ─┬─ Enter ─► copy (if copyable) ─► open ─► faint note on a failure (each: if still up)
+ *          ├─ ^C ────► the prompter's idle exit (130), as in the wait itself
+ *          └─ ^D / withdrawn ─► false
+ *   poll ──► settles ─► withdraw the offer ─► await the question only
+ */
+async function pollWithOffer(
+  dc: DeviceCode,
+  deps: PollDeps,
+  prompter: Prompter,
+  launcher: Launcher,
+  code: string,
+  c: Codes,
+): Promise<string> {
+  const copy = COPYABLE_CODE.test(code) ? launcher.copy : null;
+  const line = copy
+    ? "Press Enter to copy the code and open github.com in your browser."
+    : "Press Enter to open github.com in your browser.";
+  // The code request was a wait: a key pressed during it must not answer the offer.
+  prompter.discardTypeahead();
+  const withdraw = new AbortController();
+  // A failed input (a stdin error) only loses the offer, never the login. A misuse bug (another
+  // question pending) throws from offer() itself, before the poll starts.
+  const asked = prompter.offer(line, withdraw.signal).catch(() => false);
+  void asked
+    .then(async (pressed) => {
+      const { signal } = withdraw;
+      if (!pressed || signal.aborted) return;
+      // Copy first: the code must be on the clipboard before the browser takes focus.
+      const copied = copy ? await copy(code) : true;
+      if (signal.aborted) return; // GitHub answered during the copy: no stale tab
+      const opened = await launcher.open(DEVICE_PAGE);
+      const note = launchNote(copied, opened);
+      // Tight under the offer line: readline's Enter already ended it.
+      if (note && !signal.aborted) console.log(`  ${c.faint}${note}${c.reset}`);
+    })
+    .catch(() => {}); // an optional side task: nothing here may crash the login it rides on
+  try {
+    return await pollForToken(dc, deps);
+  } finally {
+    withdraw.abort();
+    await asked;
+  }
+}
+
 /** A stored credential login and logout can retire on THIS server: same base, and a token that is
  *  more than whitespace (a hand-edited file). Sent as `revoke`, a blank token would draw a 400
  *  from the Worker and wedge every login; sent to logout, it parses as no bearer at all. Shared
@@ -188,9 +257,20 @@ export function retirable(
   return cred != null && cred.base === BASE && cred.token.trim() !== "";
 }
 
+export interface LoginDeps extends PollDeps {
+  /** The command's prompter, given only with a terminal on both ends. The browser offer asks
+   *  through it: publish keeps its readline open through the sign-in, and a second readline on
+   *  the same stdin would fight it for every key. */
+  prompter?: Prompter;
+}
+
 /**
  * Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
- * `deps` is for tests (inject sleep/now/fetch); production calls login() with real timers.
+ * `deps` is for tests (inject sleep/now/fetch); production passes only the prompter.
+ *
+ * With a prompter and a browser on this machine (not over SSH, an opener found), the device flow
+ * offers to open github.com under the waiting line (see pollWithOffer). Without either, it prints
+ * exactly the two lines it always has.
  *
  * A previously stored token is handled around the overwrite (server mint is multi-token, so an
  * unrevoked predecessor stays live with no local reference left to revoke it by):
@@ -212,7 +292,7 @@ export function retirable(
  * purpose: a corrupt handle in the file reads as logged-out everywhere else, but the token inside
  * may still be live.
  */
-export async function login(deps: PollDeps = {}): Promise<void> {
+export async function login(deps: LoginDeps = {}): Promise<void> {
   // The device flow needs a human to read a code and visit a URL, so it cannot complete without a
   // terminal. Refuse fast in a piped/CI/non-TTY context instead of printing a code nobody reads and
   // blocking on the ~15-minute GitHub poll. (publish/set/delete reach here via ensureLogin.)
@@ -248,6 +328,15 @@ export async function login(deps: PollDeps = {}): Promise<void> {
       ),
     );
   }
+  const { prompter } = deps;
+  // Before anything waits, offer or not: from here on keys reach readline, which drops a whole
+  // line typed with no question pending and holds a partial one for the discards below. Left to
+  // the terminal they would queue for the first question to come: an offer nobody has seen yet,
+  // or `ymmv delete`'s confirm. The idle prompt is empty, so the output stays the same.
+  prompter?.open();
+  // Looked up while GitHub is asked for the code: a PATH walk can be slow (WSL's /mnt/c entries),
+  // and only the offer needs its answer. findLauncher never rejects.
+  const finding = prompter ? findLauncher() : null;
   const dc = await requestDeviceCode(deps);
   // user_code/verification_uri come off the wire — sanitize/link like every other print surface.
   // Linkify ONLY a github.com https URI: a middlebox-minted 200 must not turn this line into a
@@ -255,13 +344,18 @@ export async function login(deps: PollDeps = {}): Promise<void> {
   const verifyUri = /^https:\/\/github\.com\//.test(dc.verification_uri)
     ? link(dc.verification_uri, color)
     : sanitizeValue(dc.verification_uri);
+  const code = sanitizeValue(dc.user_code);
   console.log(
     message(
-      `Open ${verifyUri} and enter code: ${c.bold}${sanitizeValue(dc.user_code)}${c.reset}\n` +
+      `Open ${verifyUri} and enter code: ${c.bold}${code}${c.reset}\n` +
         `${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}`,
     ),
   );
-  const accessToken = await pollForToken(dc, deps);
+  const launcher = await finding;
+  const accessToken =
+    prompter && launcher && dc.verification_uri === DEVICE_PAGE
+      ? await pollWithOffer(dc, deps, prompter, launcher, code, c)
+      : await pollForToken(dc, deps);
   // The device flow takes minutes: a concurrent login may have replaced the stored token since
   // the pre-flow peek. Re-read right before the mint so the server retires what the file ACTUALLY
   // holds (the pre-flow `prior` still owns the cross-base warn; `retirable` owns what counts).
@@ -303,4 +397,8 @@ export async function login(deps: PollDeps = {}): Promise<void> {
         : "Logged in. No handle bound (your GitHub username is a reserved word).",
     ),
   );
+  // Everything since the input opened was a wait. A key typed there (an unfinished `y`) would
+  // otherwise sit in readline's line and pre-fill the caller's next question: for `ymmv delete`,
+  // a default-No confirm that Enter would then answer yes.
+  prompter?.discardTypeahead();
 }
