@@ -4,6 +4,13 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 
 ## [Unreleased]
 
+### Added
+- **Signing in can copy the code and open GitHub.** Under the one-time code, the sign-in now asks
+  `Press Enter to copy the code and open github.com in your browser.` Enter puts the code on
+  your clipboard and opens the sign-in page, so there is nothing to retype. Approving through
+  the printed link works as before, without pressing Enter. Over SSH, or where no browser can be
+  opened, the sign-in shows the link and code as it always has.
+
 ### Changed
 - **A first `ymmv` shows what it detected before you sign in.** It used to open with a GitHub
   device code. Now the card comes first, then
