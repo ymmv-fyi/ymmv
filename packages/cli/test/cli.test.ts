@@ -15,15 +15,16 @@ vi.mock("../src/device-flow.js", async (importOriginal) => ({
   login: vi.fn(),
 }));
 // Partial: only publish is mocked, so the dispatch's io can be inspected without a run that would
-// touch the REAL dismissals file in the user's config dir. runSet and runDelete are wrapped, not
-// replaced: they run for real unless a test scripts them, and their arguments can be read. Every
-// other command stays real.
+// touch the REAL dismissals file in the user's config dir. runSet, runUnset and runDelete are
+// wrapped, not replaced: they run for real unless a test scripts them, and their arguments can be
+// read. Every other command stays real.
 vi.mock("../src/commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/commands.js")>();
   return {
     ...actual,
     publish: vi.fn(),
     runSet: vi.fn(actual.runSet),
+    runUnset: vi.fn(actual.runUnset),
     runDelete: vi.fn(actual.runDelete),
   };
 });
@@ -37,12 +38,13 @@ import {
   publishProfile,
 } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
-import { publish, runDelete, runSet } from "../src/commands.js";
+import { publish, runDelete, runSet, runUnset } from "../src/commands.js";
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { dismissalsPath } from "../src/dismissals.js";
 import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
+import type { Prompter } from "../src/prompt.js";
 import {
   type Credential,
   deleteToken,
@@ -1233,5 +1235,69 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
     expect(deleteToken).toHaveBeenCalledTimes(1);
     // The note is diagnostic (stderr): "logged out" must not read as "unauthenticated".
     expect(errs.join("\n")).toContain("YMMV_TOKEN is set and still authenticates");
+  });
+});
+
+// The sign-in's browser offer (#78) asks through the command's own prompter, so every path into
+// login() must hand that object over: a missed one ships with no offer and every other test green.
+// What login() does with it is device-flow.test.ts's business.
+describe("the sign-in gets the command's prompter", () => {
+  // Only its identity is checked: login() is mocked and never calls it.
+  const PROMPTER = { offer: vi.fn() } as unknown as Prompter;
+  beforeEach(() => {
+    vi.mocked(login).mockReset();
+    vi.mocked(login).mockResolvedValue(undefined);
+  });
+
+  it("ymmv login: a prompter only with a terminal on both ends (the offer is a line on stdout awaiting Enter)", async () => {
+    await withTTY(true, true, () => main(["login"]));
+    expect(login).toHaveBeenCalledWith({
+      prompter: expect.objectContaining({ offer: expect.any(Function) }),
+    });
+    vi.mocked(login).mockClear();
+    await withTTY(true, false, () => main(["login"]));
+    expect(login).toHaveBeenCalledWith({ prompter: undefined });
+  });
+
+  it("ymmv unset: routed through the same terminal check, for its sign-in", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => status(404, { error: "not_found" })),
+    );
+    await withTTY(true, true, () => main(["unset", "shell"]));
+    expect(runUnset).toHaveBeenCalledWith(
+      { kind: "curated", key: "shell" },
+      expect.objectContaining({ offer: expect.any(Function) }),
+    );
+    vi.mocked(runUnset).mockClear();
+    await withTTY(true, false, () => main(["unset", "shell"]));
+    expect(runUnset).toHaveBeenCalledWith({ kind: "curated", key: "shell" }, undefined);
+  });
+
+  it("ensureLogin: a login it has to run gets the prompter", async () => {
+    vi.mocked(loadToken).mockResolvedValueOnce(null).mockResolvedValue(stored());
+    await ensureLogin(null, PROMPTER);
+    expect(login).toHaveBeenCalledWith({ prompter: PROMPTER });
+  });
+
+  it("publishProfile: the re-login after a 401 gets the prompter", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(status(401))
+        .mockResolvedValueOnce(ok({ handle: "carol" })),
+    );
+    await publishProfile(PROFILE, MINE, { prompter: PROMPTER });
+    expect(login).toHaveBeenCalledWith({ prompter: PROMPTER });
+  });
+
+  it("publishProfile: a login because the store emptied mid-command gets it too", async () => {
+    vi.mocked(loadToken).mockResolvedValueOnce(null).mockResolvedValue(stored());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ handle: "carol" })));
+    await publishProfile(PROFILE, MINE, { prompter: PROMPTER });
+    expect(login).toHaveBeenCalledWith({ prompter: PROMPTER });
   });
 });

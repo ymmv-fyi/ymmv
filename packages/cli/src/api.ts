@@ -19,6 +19,7 @@ import {
   wireText,
   withRetryHint,
 } from "./http.js";
+import type { Prompter } from "./prompt.js";
 import { message, sanitizeValue } from "./render.js";
 import { type Credential, deleteToken, loadCredential } from "./token-store.js";
 
@@ -79,9 +80,9 @@ async function rateLimitMessage(res: Response): Promise<string> {
  *  may have landed", and no POST is in flight during a login (none sent yet, or the one sent was
  *  answered 401/409). ensureLogin runs OUTSIDE any loop (the commands' own first login: publish,
  *  set, unset, delete), so a raw MintRejected there is just an error. */
-async function loginOrRefuse(): Promise<Credential> {
+async function loginOrRefuse(prompter?: Prompter): Promise<Credential> {
   try {
-    await login();
+    await login({ prompter });
   } catch (e) {
     if (e instanceof MintRejected) throw new PublishRefusal(e.message);
     if (e instanceof NetworkError || isTimeoutError(e)) throw new Error(displayError(e));
@@ -120,11 +121,15 @@ export async function verifyEnvCredential(cred: Credential): Promise<Credential>
  *  lookup, its identity was server-minted at login. `known`: a credential the caller already read,
  *  not read again, so the command runs under exactly the login it checked (an env one is still
  *  verified). A null is read again rather than trusted: a login that landed after the caller
- *  looked is used, not revoked by a second device flow. */
-export async function ensureLogin(known?: Credential | null): Promise<Credential> {
+ *  looked is used, not revoked by a second device flow. `prompter`: the command's own, so the
+ *  sign-in can offer to open the browser through it (login() never opens a second readline). */
+export async function ensureLogin(
+  known?: Credential | null,
+  prompter?: Prompter,
+): Promise<Credential> {
   const existing = known ?? (await loadCredential());
   if (existing) return existing.source === "env" ? verifyEnvCredential(existing) : existing;
-  await login();
+  await login({ prompter });
   const fresh = await loadCredential();
   if (!fresh) throw new Error(NOT_PERSISTED);
   return fresh;
@@ -143,11 +148,12 @@ export interface PublishResult {
  *  site can't silently downgrade the first send to the handle-only check (see the drift guard).
  *  `ifMatch`: the ETag of the read this merge was built on (fetchOwnProfile); sent as If-Match so
  *  the server refuses (412 → ProfileChanged) if the profile changed in between. Omitted for a
- *  first publish (nothing was read), which is unconditional. */
+ *  first publish (nothing was read), which is unconditional. `prompter`: the command's own, for a
+ *  re-login below (the browser offer asks through it). */
 export async function publishProfile(
   profile: Profile,
   expected: Credential,
-  opts: { ifMatch?: string } = {},
+  opts: { ifMatch?: string; prompter?: Prompter } = {},
 ): Promise<PublishResult> {
   const send = (c: Credential) =>
     safeFetch(
@@ -178,7 +184,7 @@ export async function publishProfile(
     // GitHub auth challenge mid-publish reads as a phishing surprise. Same sanctioned print as
     // the heal below.
     console.log(message("Not logged in. Logging in to publish."));
-    cred = await loginOrRefuse();
+    cred = await loginOrRefuse(opts.prompter);
   }
   // The credential actually SENT, not just the one the caller merged under: a re-read that came
   // back env-sourced (YMMV_TOKEN set while `expected` was a file login) is raw and must not go out.
@@ -233,7 +239,8 @@ export async function publishProfile(
       ),
     );
     if (was401) await deleteToken();
-    cred = await loginOrRefuse(); // never ensureLogin(): no second, unexplained device flow
+    // never ensureLogin(): no second, unexplained device flow
+    cred = await loginOrRefuse(opts.prompter);
     // NEVER retry a pre-reauth merge under a different identity. The merge was built from a read
     // of the OLD handle, which after a rename may be a squatter's profile, and a re-login is a
     // device flow that ANY GitHub account can approve in the browser tab. The handle string

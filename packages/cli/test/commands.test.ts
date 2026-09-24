@@ -78,6 +78,8 @@ function stubPrompter(overrides: Partial<Prompter> = {}): Prompter {
     ask: vi.fn(),
     confirm: vi.fn(),
     choice: vi.fn(),
+    offer: vi.fn(),
+    open: vi.fn(),
     discardTypeahead: vi.fn(),
     close: vi.fn(),
     ...overrides,
@@ -4769,5 +4771,129 @@ describe("file credential never triggers the identity lookup", () => {
       "GET /api/v1/u/me", // view "mine" (public: display only)
       "DELETE /api/v1/profile",
     ]);
+  });
+});
+
+// The sign-in's browser offer (#78) asks through the command's own prompter: login() must get
+// exactly that object, never make its own readline. login is mocked here, so what it does with
+// the prompter (the offer, and clearing what was typed during the wait before it returns) is
+// device-flow.test.ts's business; this pins that each command hands the prompter over, and that
+// the question it asks next goes through that same one.
+describe("the sign-in gets the command's own prompter", () => {
+  let signedIn = false;
+  beforeEach(() => {
+    signedIn = false;
+    vi.mocked(loadToken)
+      .mockReset()
+      .mockImplementation(async () => (signedIn ? stored() : null));
+    vi.mocked(login)
+      .mockReset()
+      .mockImplementation(async () => {
+        signedIn = true;
+      });
+  });
+  afterEach(() => {
+    vi.mocked(loadToken).mockReset();
+    vi.mocked(login).mockReset();
+  });
+
+  it("publish, after the sign-in card", async () => {
+    vi.stubGlobal("fetch", firstPublish());
+    const prompter = stubPrompter({
+      choice: vi.fn().mockResolvedValue("y"),
+      ask: vi.fn().mockResolvedValue(""),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("publish -y in a terminal: the offer never blocks, so -y gets it too", async () => {
+    vi.stubGlobal("fetch", firstPublish());
+    const prompter = stubPrompter();
+    await publish({ interactive: true, yes: true, prompter });
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("set", async () => {
+    vi.stubGlobal("fetch", firstPublish());
+    const prompter = stubPrompter();
+    await runSet({ kind: "curated", key: "editor", value: "Vim" }, prompter);
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("unset", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(missing()));
+    const prompter = stubPrompter();
+    await runUnset({ kind: "curated", key: "shell" }, prompter);
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("delete: and the permanent-delete confirm is asked on that same prompter", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const confirm = vi.fn().mockResolvedValue(false);
+    const prompter = stubPrompter({ confirm });
+    await runDelete({ interactive: true, yes: false, prompter });
+    expect(login).toHaveBeenCalledWith({ prompter });
+    const [loginAt] = vi.mocked(login).mock.invocationCallOrder;
+    const [confirmAt] = confirm.mock.invocationCallOrder;
+    expect(confirmAt).toBeGreaterThan(loginAt as number);
+  });
+});
+
+describe("a re-login mid-write (the POST answered 401) gets the command's prompter too", () => {
+  beforeEach(() => {
+    vi.mocked(detectStack).mockReturnValue(new Map([["shell", "zsh"]]));
+    vi.mocked(loadToken).mockReset().mockResolvedValue(stored());
+    vi.mocked(login).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    vi.mocked(loadToken).mockReset();
+    vi.mocked(login).mockReset();
+  });
+  /** The own-profile read, a POST answered 401 (token revoked), then the retry. */
+  const healed = (read: Response = missing()) =>
+    vi
+      .fn()
+      .mockResolvedValueOnce(read)
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+
+  it("publish -y", async () => {
+    const fetchFn = healed();
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter();
+    await publish({ interactive: true, yes: true, prompter });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("publish, at the confirm", async () => {
+    const fetchFn = healed();
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter({
+      choice: vi.fn().mockResolvedValue("y"),
+      ask: vi.fn().mockResolvedValue(""),
+    });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("set", async () => {
+    const fetchFn = healed();
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter();
+    await runSet({ kind: "curated", key: "editor", value: "Vim" }, prompter);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(login).toHaveBeenCalledWith({ prompter });
+  });
+
+  it("unset", async () => {
+    const fetchFn = healed(own(prof("me", [{ key: "shell", value: "zsh" }])));
+    vi.stubGlobal("fetch", fetchFn);
+    const prompter = stubPrompter();
+    await runUnset({ kind: "curated", key: "shell" }, prompter);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(login).toHaveBeenCalledWith({ prompter });
   });
 });
