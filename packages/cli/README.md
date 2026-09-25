@@ -66,7 +66,10 @@ published from GitHub Actions via npm Trusted Publishing, with provenance.
 - `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own (`-e` works too)
 - `ymmv unset editor` removes one value (`ymmv set editor -` works too); `ymmv unset --extra "Keyboard"` removes an extra
 - `ymmv delete` removes your profile (`ymmv delete -y` skips the confirm, for scripts)
-- `ymmv login` / `ymmv logout` sign in / out
+- `ymmv login` signs in with GitHub. Already logged in, it names the account and asks before
+  signing in again (`ymmv login -y` skips the question, and is required when the output is
+  piped or redirected)
+- `ymmv logout` signs out
 - `ymmv update` updates the CLI to the latest release (runs the matching upgrade for npm, pnpm,
   and bun global installs; via npx it prints the invocation to use instead; anything else gets
   the commands to run by hand)

@@ -12,6 +12,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   opened, the sign-in shows the link and code as it always has.
 
 ### Changed
+- **`ymmv login` says who you are logged in as.** It used to start a new sign-in even with a
+  working login, and finishing it signed that login out. Now it prints
+  `Logged in as <you> (ymmv.fyi/<you>).` and asks `Log in again? [y/N]`. `y` or `ymmv login -y`
+  signs in again, which is how a GitHub rename gets picked up. With output piped or redirected
+  it does not ask: like `ymmv` and `ymmv delete`, it needs `-y`. `ymmv logout` names the account:
+  `Logged out <you>.`
 - **A first `ymmv` shows what it detected before you sign in.** It used to open with a GitHub
   device code. Now the card comes first, then
   `Sign in with GitHub to claim ymmv.fyi/<you>? [Y/n]`, and `n` exits with `Nothing published.`
@@ -49,6 +55,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   command that makes it a link.
 
 ### Fixed
+- **After `Session expired`, the next command signs you in.** The refused login used to stay on
+  disk, so running `ymmv` again said `Session expired` again. It is now removed, and the next
+  `ymmv` or `ymmv login` starts the sign-in.
 - **A detected value is published the way the preview shows it.** Color codes and control
   characters in an environment value such as `$TERM_PROGRAM` or `$EDITOR` are removed before the
   value is offered, where `ymmv -y` and a republish used to store them unseen. A value with

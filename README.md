@@ -70,7 +70,10 @@ the short `ymmv` used below:
 - `ymmv unset editor` removes one value, as does `ymmv set editor -`.
 - `ymmv unset --extra "Keyboard"` removes an extra.
 - `ymmv delete` removes your profile. `ymmv delete -y` skips the confirm, for scripts.
-- `ymmv login` / `ymmv logout` sign in and out.
+- `ymmv login` signs in with GitHub. If you're already logged in, it names the account and
+  asks before signing in again. `ymmv login -y` skips the question, and is required when the
+  output is piped or redirected.
+- `ymmv logout` signs out.
 - `ymmv update` updates the CLI to the latest release. Use it to keep a global install current.
 - `ymmv version` prints the CLI version.
 
