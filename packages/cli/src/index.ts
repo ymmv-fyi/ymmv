@@ -4,12 +4,13 @@ import {
   localTokenKept,
   publish,
   runDelete,
+  runLogin,
   runSet,
   runUnset,
   view,
 } from "./commands.js";
 import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
-import { login, retirable } from "./device-flow.js";
+import { retirable } from "./device-flow.js";
 import { dismissalsPath } from "./dismissals.js";
 import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
@@ -44,7 +45,8 @@ ${c.faint}Usage:${c.reset}
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
   ymmv unset --extra "L"    remove a free-form extra
   ymmv delete [-y]          delete your profile (permanent; -y skips the confirm)
-  ymmv login | logout       GitHub device-flow auth
+  ymmv login [-y]           log in with GitHub, or see who you are (-y logs in again)
+  ymmv logout               log out
   ymmv update               update ymmv-cli to the latest release
   ymmv help | version
 
@@ -99,7 +101,14 @@ async function logout(): Promise<void> {
   } catch {
     kept = true;
   }
-  console.log(message(revoked ? "Logged out." : "Logged out (no active session on this server)."));
+  // Names the account the token was bound to; token.json is untrusted print input. A file only
+  // peekCredential could read carries no handle worth trusting, and neither does one that strips
+  // to nothing: both say plain "Logged out".
+  const handle = stored?.handle ? sanitizeValue(stored.handle) : "";
+  const who = handle ? ` ${handle}` : "";
+  console.log(
+    message(revoked ? `Logged out${who}.` : `Logged out${who} (no active session on this server).`),
+  );
   if (kept) console.error(localTokenKept());
 }
 
@@ -132,7 +141,9 @@ async function printLatestHint(): Promise<void> {
 // Run an interactive command, wiring a real prompter only with a terminal on BOTH ends
 // (pipes/CI publish non-interactively). Questions go to stdout, so a redirected one hides every
 // prompt while the command waits on stdin: `ymmv > log.txt` would sit at an invisible confirm
-// forever. Without a terminal, publish and delete take their own "needs -y" refusal instead.
+// forever. Without a terminal, publish and delete take their own "needs -y" refusal instead, and
+// so does login over a stored login when only stdout is redirected (a stdin that is not a terminal
+// is login()'s own refusal).
 async function interactive(run: (io: InteractiveIO) => Promise<void>, yes: boolean): Promise<void> {
   const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const prompter = isTTY ? makePrompter() : undefined;
@@ -207,14 +218,11 @@ async function dispatch(cmd: Command): Promise<void> {
     case "delete":
       await interactive(runDelete, cmd.yes);
       break;
-    case "login": {
-      // The browser offer waits for Enter like any question, so it needs a terminal on both ends.
-      await interactive((io) => login({ prompter: io.prompter }), false);
-      // Standalone login only — an ensureLogin() mid-publish must not say "run ymmv" while it runs.
-      const c = palette(colorEnabled());
-      console.log(message(`${c.faint}next: run ymmv to publish your stack${c.reset}`));
+    case "login":
+      // The already-logged-in question and the browser offer both wait on stdin and write to
+      // stdout, so they need a terminal on both ends.
+      await interactive(runLogin, cmd.yes);
       break;
-    }
     case "logout":
       await logout();
       // True on every branch above (revoked, nothing stored, or a failed revoke): the env token

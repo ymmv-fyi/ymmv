@@ -167,6 +167,7 @@ describe("ymmv logout", () => {
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");
     expect(deleteTokenIf).toHaveBeenCalledWith("t");
+    expect(logs).toContain("\n  Logged out carol.");
   });
 
   it("a token file that can't be removed after the revoke is a note, never a failed logout", async () => {
@@ -177,12 +178,29 @@ describe("ymmv logout", () => {
     );
     await main(["logout"]);
     expect(deleteTokenIf).toHaveBeenCalledTimes(1);
-    expect(logs).toContain("\n  Logged out.");
+    expect(logs).toContain("\n  Logged out carol.");
     expect(errs).toContain(
       "\n  (couldn't remove the local token file; that login no longer works)",
     );
     expect(errs.join("\n")).not.toContain("EPERM");
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a login with no handle bound, or a hostile one in the file, names no raw handle", async () => {
+    vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
+    await main(["logout"]);
+    expect(logs).toContain("\n  Logged out.");
+    const esc = String.fromCharCode(0x1b);
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: `carol${esc}[31m` }));
+    await main(["logout"]);
+    expect(logs).toContain("\n  Logged out carol.");
+    expect(logs.join("\n")).not.toContain(esc);
+    // A handle that strips to nothing names no one: plain "Logged out.", never "Logged out ."
+    logs.length = 0;
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: `${esc}[31m` }));
+    await main(["logout"]);
+    expect(logs).toContain("\n  Logged out.");
   });
 
   it("clears a token file loadToken refuses (corrupt handle): revokes the live token inside, deletes the file", async () => {
@@ -294,7 +312,7 @@ describe("ymmv logout", () => {
     vi.mocked(revokeYmmvToken).mockResolvedValue(false);
     await main(["logout"]);
     expect(deleteTokenIf).toHaveBeenCalledWith("t");
-    expect(logs).toContain("\n  Logged out (no active session on this server).");
+    expect(logs).toContain("\n  Logged out carol (no active session on this server).");
   });
 
   it("prints the revoke-unreachable warning as an indented unit on stderr", async () => {
@@ -319,9 +337,38 @@ describe("arg errors through main()", () => {
 describe("ymmv login", () => {
   it("prints the next-step hint after a STANDALONE login only", async () => {
     vi.mocked(login).mockResolvedValue(undefined);
+    // clearAllMocks keeps implementations: without this, a stored login left by an earlier test
+    // would send this run down a different branch.
+    vi.mocked(loadToken).mockResolvedValue(null);
     await main(["login"]);
     expect(login).toHaveBeenCalledTimes(1);
     expect(logs).toContain("\n  next: run ymmv to publish your stack");
+  });
+
+  // runLogin's branches are commands.test's business: this is the seam that hands it -y. Dropped,
+  // `ymmv login -y` would stop at the question it exists to skip (here, on the real stdin).
+  it("`ymmv login -y` with a stored login and a terminal goes straight to the device flow", async () => {
+    vi.mocked(login).mockReset();
+    vi.mocked(login).mockResolvedValue(undefined);
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    await withTTY(true, true, () => main(["login", "-y"]));
+    expect(login).toHaveBeenCalledWith({
+      prompter: expect.objectContaining({ confirm: expect.any(Function) }),
+    });
+    expect(logs.join("\n")).not.toContain("Logged in as");
+  });
+
+  it("`ymmv login > file` with a stored login needs -y (stdout hides the question)", async () => {
+    vi.mocked(login).mockReset();
+    vi.mocked(login).mockResolvedValue(undefined);
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    await withTTY(true, false, () => main(["login"]));
+    expect(login).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("Re-run with -y to log in again: ymmv login -y");
+    process.exitCode = undefined;
+    await withTTY(true, false, () => main(["login", "-y"]));
+    expect(login).toHaveBeenCalledWith({ prompter: undefined });
   });
 });
 
@@ -1289,7 +1336,7 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
     expect(process.exitCode).toBeUndefined();
     expect(revokeYmmvToken).toHaveBeenCalledWith("t"); // the FILE token, never the env one
     expect(deleteTokenIf).toHaveBeenCalledWith("t");
-    expect(logs.join("\n")).toContain("Logged out.");
+    expect(logs.join("\n")).toContain("Logged out carol.");
   });
 
   it("logout with YMMV_TOKEN set keeps file semantics and notes the env token persists", async () => {
@@ -1313,6 +1360,9 @@ describe("the sign-in gets the command's prompter", () => {
   beforeEach(() => {
     vi.mocked(login).mockReset();
     vi.mocked(login).mockResolvedValue(undefined);
+    // clearAllMocks keeps implementations: a stored login left by an earlier test would put
+    // `ymmv login` at its already-logged-in question, on the real stdin.
+    vi.mocked(loadToken).mockResolvedValue(null);
   });
 
   it("ymmv login: a prompter only with a terminal on both ends (the offer is a line on stdout awaiting Enter)", async () => {

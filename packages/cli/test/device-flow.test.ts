@@ -410,8 +410,9 @@ describe("login() orchestration", () => {
     logSpy.mockRestore();
   });
 
-  it("warns on stderr when YMMV_TOKEN is set — BEFORE the device flow starts (Ctrl+C window)", async () => {
-    // The saved login would be shadowed: loadCredential prefers the env token on every read.
+  it("with YMMV_TOKEN set, still completes and saves, and leaves the warn to `ymmv login`", async () => {
+    // The warn moved to runLogin, ahead of its already-logged-in question: no other path reaches
+    // login() with the env token set, and a second copy here would print it twice.
     vi.stubEnv("YMMV_TOKEN", "ymmv_env");
     vi.mocked(mintYmmvToken).mockResolvedValue({
       token: "ymmv_abc",
@@ -422,29 +423,18 @@ describe("login() orchestration", () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errs.push(a.join(" "));
     });
-    const logs: string[] = [];
-    const logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
-      logs.push(a.join(" "));
-    });
-    const fetchFn = fetchSeq(DC, { access_token: "gho_x" }) as ReturnType<typeof vi.fn>;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await withTTY(true, async () => {
-        await login({ fetch: fetchFn as unknown as typeof fetch, sleep: noSleep, now: at0 });
+        await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
       });
-      expect(errs.join("\n")).toContain("YMMV_TOKEN is set and takes precedence");
-      // BEFORE the flow, not merely somewhere: the warn's whole point is the Ctrl+C window
-      // ahead of the device-code request. Call order pins it.
-      const warnOrder = (errSpy as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
-      const firstFetchOrder = fetchFn.mock.invocationCallOrder[0];
-      expect(warnOrder).toBeDefined();
-      expect(warnOrder as number).toBeLessThan(firstFetchOrder as number);
-      // Still completes and saves: the login is legitimate, just shadowed until the env is unset.
+      // The login is legitimate, just shadowed until the env is unset.
       expect(saveToken).toHaveBeenCalledWith({
         token: "ymmv_abc",
         handle: "carol",
         github_id: 4242,
       });
-      expect(logs.join("\n")).toContain("Logged in as carol.");
+      expect(errs.join("\n")).not.toContain("YMMV_TOKEN");
     } finally {
       vi.unstubAllEnvs();
       errSpy.mockRestore();

@@ -32,7 +32,7 @@ export type UnsetTarget = { kind: "curated"; key: CuratedKey } | { kind: "extra"
 export type Command =
   | { kind: "publish"; yes: boolean; resetMarks: boolean }
   | { kind: "view"; handle: string }
-  | { kind: "login" }
+  | { kind: "login"; yes: boolean }
   | { kind: "logout" }
   | { kind: "set"; target: SetTarget }
   | { kind: "unset"; target: UnsetTarget }
@@ -63,7 +63,7 @@ function invalidKeyError(head: string, hint: string): Command {
 }
 
 /** Verbs that take nothing: any trailing token is a usage error, never silently dropped. */
-function noArgs(verb: "login" | "logout" | "update", rest: string[]): Command {
+function noArgs(verb: "logout" | "update", rest: string[]): Command {
   return rest.length === 0 ? { kind: verb } : { kind: "error", message: `usage: ymmv ${verb}` };
 }
 
@@ -187,7 +187,8 @@ export function resolveArg(argv: string[]): Command {
     if (rest.length > 0) {
       // Echo the user's own intent when it's a yes-accepting verb; never advertise the
       // destructive delete form to someone who typed something else.
-      const example = rest[0] === "delete" || rest[0] === "publish" ? rest[0] : "publish";
+      const example =
+        rest[0] === "delete" || rest[0] === "publish" || rest[0] === "login" ? rest[0] : "publish";
       return {
         kind: "error",
         message: `Put ${first} after the command: ymmv ${example} -y. A bare ymmv -y publishes without prompts.`,
@@ -198,7 +199,10 @@ export function resolveArg(argv: string[]): Command {
   if (first === "--reset-marks") return publishFlags(argv);
 
   // Reserved verbs.
-  if (first === "login" || first === "logout" || first === "update") return noArgs(first, rest);
+  if (first === "logout" || first === "update") return noArgs(first, rest);
+  if (first === "login") {
+    return yesOnly("usage: ymmv login [-y]", rest, (yes) => ({ kind: "login", yes }));
+  }
   if (first === "publish") return publishFlags(rest);
   if (first === "delete") {
     return yesOnly(

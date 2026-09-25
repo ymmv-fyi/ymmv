@@ -25,6 +25,7 @@ import {
 } from "./api.js";
 import { BASE } from "./config.js";
 import { detectStack } from "./detect.js";
+import { login, NO_HANDLE_BOUND } from "./device-flow.js";
 import {
   addDismissals,
   type Dismissal,
@@ -61,7 +62,7 @@ import {
   takeLine,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
-import { type Credential, deleteTokenIf, loadCredential } from "./token-store.js";
+import { type Credential, deleteTokenIf, loadCredential, loadToken } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
 // token store. Each command keeps its IO at the edges so the branching logic stays testable.
@@ -1198,4 +1199,67 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
   }
   console.log(message(`Deleted ${target}. Run \`ymmv\` to publish again.`));
   if (kept) console.error(localTokenKept());
+}
+
+/**
+ * `ymmv login`. Logging in again is the only way to see which account a stored login is bound to,
+ * and a completed device flow retires that login, so a stored one is named first and the flow
+ * waits for a yes. -y goes straight to the flow: a re-login is how a GitHub rename is rebound.
+ *
+ *   YMMV_TOKEN set ─► warn (stderr)
+ *   stored login for this server, no -y ─► "Logged in as <handle> (<page>)."
+ *     ├─ a prompter ─► Log in again? [y/N] ─┬─ n / Enter ─► exit 0, nothing changed
+ *     │                                     ├─ ^C / ^D ───► exit 130
+ *     │                                     └─ y ─────────► the device flow
+ *     └─ output piped or redirected (stdin a terminal) ─► "needs -y" (stderr), exit 1
+ *   anything else ─► the device flow (login() refuses a stdin that is not a terminal)
+ */
+export async function runLogin(io: InteractiveIO): Promise<void> {
+  // Before the stored login is named: every command reads the env token first, so the account
+  // below is not the one they run as. Here, not in login(): the reauth paths never run with it.
+  if (process.env.YMMV_TOKEN) {
+    console.error(
+      message(
+        "YMMV_TOKEN is set and takes precedence over the stored login. A login here is saved " +
+          "but not used until you unset it.",
+      ),
+    );
+  }
+  // loadToken, not peekCredential: a file it refuses (another server, a corrupt field) reads as
+  // logged out, and login() still deals with the token inside (retires it, or warns of the server).
+  const stored = await loadToken();
+  if (stored && !io.yes) {
+    // token.json is untrusted print input, like every other echo. A handle with nothing left
+    // after the strip names nothing, so it reads as no handle.
+    const handle = stored.handle === null ? "" : sanitizeValue(stored.handle);
+    const state = handle
+      ? `Logged in as ${handle} (${link(`${BASE}/${handle}`, colorEnabled())}).`
+      : NO_HANDLE_BOUND;
+    if (io.prompter) {
+      console.log(message(state));
+      let again: boolean;
+      try {
+        again = await io.prompter.confirm("Log in again?", false);
+      } catch (e) {
+        if (!(e instanceof PromptAborted)) throw e;
+        // Closes the interrupted prompt line. The line above already says what stands.
+        console.log("");
+        process.exitCode = 130;
+        return;
+      }
+      if (!again) return;
+    } else if (process.stdin.isTTY) {
+      // Output piped or redirected: the question would be invisible, and a flow finished through
+      // `| tee` would retire this login unasked. The same -y consent `ymmv` and `ymmv delete` ask
+      // for there. A stdin that is not a terminal falls through to login(), which says the device
+      // flow can't run at all: -y would not help.
+      console.error(message(`${state} Re-run with -y to log in again: ymmv login -y`));
+      process.exitCode = 1;
+      return;
+    }
+  }
+  await login({ prompter: io.prompter });
+  // Standalone login only: an ensureLogin() mid-publish must not say "run ymmv" while it runs.
+  const c = palette(colorEnabled());
+  console.log(message(`${c.faint}next: run ymmv to publish your stack${c.reset}`));
 }

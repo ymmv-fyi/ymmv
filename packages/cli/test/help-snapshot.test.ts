@@ -18,7 +18,8 @@ Usage:
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
   ymmv unset --extra "L"    remove a free-form extra
   ymmv delete [-y]          delete your profile (permanent; -y skips the confirm)
-  ymmv login | logout       GitHub device-flow auth
+  ymmv login [-y]           log in with GitHub, or see who you are (-y logs in again)
+  ymmv logout               log out
   ymmv update               update ymmv-cli to the latest release
   ymmv help | version
 

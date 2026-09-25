@@ -257,6 +257,11 @@ export function retirable(
   return cred != null && cred.base === BASE && cred.token.trim() !== "";
 }
 
+/** What login says for an account bound to no handle, and what `ymmv login` says of a stored
+ *  one. */
+export const NO_HANDLE_BOUND =
+  "Logged in. No handle bound (your GitHub username is a reserved word).";
+
 export interface LoginDeps extends PollDeps {
   /** The command's prompter, given only with a terminal on both ends. The browser offer asks
    *  through it: publish keeps its readline open through the sign-in, and a second readline on
@@ -271,6 +276,11 @@ export interface LoginDeps extends PollDeps {
  * With a prompter and a browser on this machine (not over SSH, an opener found), the device flow
  * offers to open github.com under the waiting line (see pollWithOffer). Without either, it prints
  * exactly the two lines it always has.
+ *
+ * Asks nothing about a stored login and says nothing about YMMV_TOKEN: both are the standalone
+ * command's (runLogin). Every other caller (publish's 401/409 heal, ensureLogin) reaches here only
+ * once a login is needed (nothing stored, or the stored one refused), and no path reaches here
+ * with YMMV_TOKEN set except `ymmv login` itself.
  *
  * A previously stored token is handled around the overwrite (server mint is multi-token, so an
  * unrevoked predecessor stays live with no local reference left to revoke it by):
@@ -300,16 +310,6 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
     throw new Error(
       "Device login needs an interactive terminal. Run `ymmv login` in a real terminal " +
         "(a piped or CI shell can't complete the GitHub device flow).",
-    );
-  }
-  // Warn BEFORE the device flow burns a round trip: the saved login stays shadowed while the env
-  // token wins every credential read. Diagnostic, so stderr; the user can Ctrl+C here.
-  if (process.env.YMMV_TOKEN) {
-    console.error(
-      message(
-        "YMMV_TOKEN is set and takes precedence over stored logins. This login will be saved " +
-          "but not used until you unset it.",
-      ),
     );
   }
   const prior = await peekCredential();
@@ -390,13 +390,7 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
       console.error(message(`${c.faint}(couldn't revoke the previous session's token)${c.reset}`));
     }
   }
-  console.log(
-    message(
-      minted.handle
-        ? `Logged in as ${minted.handle}.`
-        : "Logged in. No handle bound (your GitHub username is a reserved word).",
-    ),
-  );
+  console.log(message(minted.handle ? `Logged in as ${minted.handle}.` : NO_HANDLE_BOUND));
   // Everything since the input opened was a wait. A key typed there (an unfinished `y`) would
   // otherwise sit in readline's line and pre-fill the caller's next question: for `ymmv delete`,
   // a default-No confirm that Enter would then answer yes.
