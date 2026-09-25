@@ -144,10 +144,25 @@ async function printLatestHint(): Promise<void> {
 // forever. Without a terminal, publish and delete take their own "needs -y" refusal instead, and
 // so does login over a stored login when only stdout is redirected (a stdin that is not a terminal
 // is login()'s own refusal).
-async function interactive(run: (io: InteractiveIO) => Promise<void>, yes: boolean): Promise<void> {
+async function interactive(
+  run: (io: InteractiveIO) => Promise<void>,
+  yes: boolean,
+  { openEarly = true } = {},
+): Promise<void> {
   const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const prompter = isTTY ? makePrompter() : undefined;
+  // Open the input before the command's first wait (detection, the profile read, a sign-in's code
+  // request). Left closed, the terminal holds every key and hands them to readline as the first
+  // question opens it, so an Enter pressed during the wait answers that question as it is asked:
+  // for a returning user, the default-Y Publish confirm. Open, a whole line typed with no question
+  // pending is dropped and the first question clears an unfinished one. The idle prompt is empty,
+  // so nothing prints. An open input also puts the terminal in raw mode, which stops a background
+  // run (SIGTTOU) and eats keys typed for the shell. So publish, delete and login open it, whose
+  // questions are confirms a stray Enter must not answer; set and unset pass `openEarly: false`
+  // to stay runnable in the background; and -y asks nothing. A sign-in such a run still needs
+  // opens the input in login().
   try {
+    if (openEarly && !yes) prompter?.open();
     await run({ interactive: isTTY, prompter, yes });
   } finally {
     prompter?.close();
@@ -208,12 +223,15 @@ async function dispatch(cmd: Command): Promise<void> {
       await view(cmd.handle);
       break;
     case "set":
-      // The prompter opens readline for a question (a scheme-less dotfiles value) or a sign-in (its
-      // device-flow wait and browser offer).
-      await interactive((io) => runSet(cmd.target, io.prompter), false);
+      // The prompter serves a question (a scheme-less dotfiles value) or a sign-in (its
+      // device-flow wait and browser offer). Not opened early, so a `ymmv set ... &` that asks
+      // nothing stays runnable: that question is an optional link offer and opens the input as it
+      // is asked, and a sign-in opens it itself.
+      await interactive((io) => runSet(cmd.target, io.prompter), false, { openEarly: false });
       break;
     case "unset":
-      await interactive((io) => runUnset(cmd.target, io.prompter), false);
+      // Asks nothing but a sign-in, which opens the input itself.
+      await interactive((io) => runUnset(cmd.target, io.prompter), false, { openEarly: false });
       break;
     case "delete":
       await interactive(runDelete, cmd.yes);
