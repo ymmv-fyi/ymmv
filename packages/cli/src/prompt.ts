@@ -3,26 +3,32 @@ import { createInterface, type Interface } from "node:readline/promises";
 import { type Codes, colorEnabled, palette, sanitizeValue } from "./render.js";
 
 // Thin readline wrapper. The commands depend on the `Prompter` INTERFACE (not readline directly),
-// so tests inject a scripted prompter and never touch stdin. The real one is created lazily and
-// only on a TTY — non-interactive runs (pipes, CI) skip it entirely, and publishing there
-// requires an explicit -y (the flag IS the consent when there's no confirm step).
+// so tests inject a scripted prompter and never touch stdin. The real one exists only on a TTY —
+// non-interactive runs (pipes, CI) skip it entirely, and publishing there requires an explicit -y
+// (the flag IS the consent when there's no confirm step).
+//
+// The input opens at open() or at the first question, whichever comes first; which commands open
+// it early, and why, is index.ts's interactive(). While it is open, readline drops a whole line
+// typed with no question pending, and the first question clears an unfinished one.
 //
 // Ctrl+C: readline swallows SIGINT and merely PAUSES unless an 'SIGINT' listener exists (and a
 // bare abort leaves the question() promise unsettled — nodejs/node#53497). So every question runs
 // with an AbortSignal: mid-question ^C aborts it (the await rejects → PromptAborted, and the
-// command prints its own "nothing happened" line + exit code 130); between questions (readline
-// open but idle, e.g. during the POST or the sign-in's device flow) there is nothing to settle, so
-// exit 130 directly. An offer (the sign-in's "Press Enter to open github.com") is a question that
-// counts as idle here: it is optional, a wait runs behind it, and ^C there exits 130 the same way.
+// command prints its own "nothing happened" line + exit code 130); outside a question (readline
+// open but idle, e.g. before the first one, during the POST or the sign-in's device flow) there is
+// nothing to settle, so exit 130 directly. An offer (the sign-in's "Press Enter to open
+// github.com") is a question that counts as idle here: it is optional, a wait runs behind it, and
+// ^C there exits 130 the same way.
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 /**
  * Drop what was typed while no question was pending, exported for the contract test in
- * prompt.test.ts. Called only at the waits a command announces (the sign-in's device flow, a POST
- * in flight), never between two prompts: readline hands over a whole stdin chunk at once, so a
- * paste of "Lilex<Enter>Catppuccin" leaves the second answer sitting here, and clearing before
- * every question would drop it. Left alone:
+ * prompt.test.ts. Called at the waits a command announces (the sign-in's device flow, a POST in
+ * flight) and before an interface's FIRST question (everything before it was a wait), never
+ * between two prompts: readline hands over a whole stdin chunk at once, so a paste of
+ * "Lilex<Enter>Catppuccin" leaves the second answer sitting here, and clearing before every
+ * question would drop it. Left alone:
  *   • `line`/`cursor` — the text would sit after the next prompt with the cursor BEFORE it, so
  *     what the user types there joins it ("y" left over, "n" typed, answer "ny").
  *   • `prevRows` — readline's own row bookkeeping. Once idle text has wrapped, the next question
@@ -83,10 +89,12 @@ export interface Prompter {
    *  round, or PrompterMisuse: an offer throws it synchronously, a question rejects with it. */
   offer(text: string, signal: AbortSignal): Promise<boolean>;
   /** Open the input now instead of at the first question, so keys pressed during a coming wait
-   *  reach readline (a whole line typed there is dropped) instead of queueing in the terminal. */
+   *  reach readline (a whole line typed there is dropped) instead of queueing in the terminal.
+   *  A second call does nothing. */
   open(): void;
   /** Forget what was typed since the last question. Called after a wait the command announced
-   *  (the device flow, a POST), so a key pressed there cannot answer the next question. */
+   *  (the device flow, a POST), so a key pressed there cannot answer the next question. The
+   *  first question on an interface does this by itself for what was typed while it sat open. */
   discardTypeahead(): void;
   close(): void;
 }
@@ -134,6 +142,9 @@ export function matchChoice(
 
 export function makePrompter(): Prompter {
   let rl: Interface | null = null;
+  // No question or offer has read from `rl` yet (see readLine). Set per interface: after close(),
+  // io() makes a fresh one.
+  let unasked = false;
   const color = colorEnabled();
   const c: Codes = palette(color);
   // One controller PER QUESTION (created in question(), cleared in its finally): a ^C landing in
@@ -143,10 +154,11 @@ export function makePrompter(): Prompter {
   let ac: AbortController | null = null;
   const io = (): Interface => {
     if (!rl) {
-      // An idle interface (a POST, the sign-in's device flow) still redraws its prompt on a
-      // terminal resize. readline's default "> " would then appear under the waiting line, so
-      // idle on an empty one; each question sets its own.
+      // An idle interface (the command's start, a POST, the sign-in's device flow) still redraws
+      // its prompt on a terminal resize. readline's default "> " would then appear under the
+      // waiting line, so idle on an empty one; each question sets its own.
       rl = createInterface({ input: stdin, output: stdout, prompt: "" });
+      unasked = true;
       rl.on("SIGINT", () => {
         if (ac) ac.abort();
         else {
@@ -157,11 +169,12 @@ export function makePrompter(): Prompter {
       // Ctrl+D: readline 'close' leaves a pending question() UNSETTLED (nodejs/node#53497
       // family) — the process would then exit 0 with no message, reading as success to
       // `ymmv && next`. Abort so EOF lands on the same PromptAborted path as ^C. An idle close
-      // (EOF while no question is outstanding: during the POST, or the sign-in's device flow)
-      // needs nothing here: a command that asks nothing more prints its own outcome, and a later
-      // question finds the interface closed, which question() reads as the same abort. An offer
-      // pending at EOF has no `ac` either: ^D rejects it at once, an input that just ends (the
-      // terminal went away) leaves it pending until its withdrawal, and offer() reads both as false.
+      // (EOF while no question is outstanding: before the first, during the POST, or the
+      // sign-in's device flow) needs nothing here: a command that asks nothing more prints its
+      // own outcome, and a later question finds the interface closed, which question() reads as
+      // the same abort. An offer pending at EOF has no `ac` either: ^D rejects it at once, an
+      // input that just ends (the terminal went away) leaves it pending until its withdrawal, and
+      // offer() reads both as false.
       rl.on("close", () => {
         ac?.abort();
       });
@@ -181,8 +194,21 @@ export function makePrompter(): Prompter {
   // An offer is pending (see offer below). Checked by every question, as `ac` is by offer.
   let offering = false;
   const readLine = async (query: string, signal: AbortSignal): Promise<string> => {
+    const face = io();
+    // The first question or offer on this interface: everything typed before it was typed during
+    // a wait, so it is no answer. One event-loop turn first, because an interface reads the
+    // terminal only from the next tick: held keys that reach readline in that turn are dropped
+    // (a whole line as idle, an unfinished one by the clear). That covers an Enter pressed at
+    // launch when the input opened early, on Unix; a Windows console, or an interface this call
+    // just made, can deliver later. Only this once — see clearIdleInput for why never before a
+    // later question.
+    if (unasked) {
+      unasked = false;
+      await new Promise<void>((r) => setImmediate(r));
+      clearIdleInput(face);
+    }
     try {
-      return await io().question(query, { signal });
+      return await face.question(query, { signal });
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") throw new PromptAborted();
       // An interface an idle EOF closed (see the close handler): the same abort as EOF

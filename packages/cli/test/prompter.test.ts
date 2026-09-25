@@ -16,10 +16,12 @@ function fakeRl() {
   const question = vi.fn(
     (_q: string, opts: { signal: AbortSignal }) =>
       new Promise<string>((resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        // Real readline rejects at once on a signal that is already aborted: the first read waits
+        // a turn before it asks, and an abort can land in it.
+        if (opts.signal.aborted) return abort();
         resolvers.push(resolve);
-        opts.signal.addEventListener("abort", () =>
-          reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
-        );
+        opts.signal.addEventListener("abort", abort);
       }),
   );
   const rl = {
@@ -170,7 +172,16 @@ describe("makePrompter abort machinery", () => {
     expect(f.rl.resume).toHaveBeenCalledTimes(1);
   });
 
-  it("discardTypeahead forgets an unfinished line, and does nothing before the first question", async () => {
+  it("close() before the first question reaches readline: that question is the abort", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const prompter = makePrompter();
+    const p = prompter.confirm("Delete?", false);
+    prompter.close(); // inside the first read's wait, before readline has the question
+    await expect(p).rejects.toBeInstanceOf(PromptAborted);
+  });
+
+  it("discardTypeahead forgets an unfinished line, and does nothing with no interface open", async () => {
     const f = fakeRl();
     vi.mocked(createInterface).mockReturnValue(f.rl as never);
     const prompter = makePrompter();
@@ -208,6 +219,20 @@ describe("offer: the sign-in's optional Enter, with a wait running behind it", (
     f.answer("anything");
     await expect(p).resolves.toBe(true);
     expect(f.rl.question).toHaveBeenCalledWith(`  ${LINE} `, expect.anything());
+  });
+
+  it("an offer withdrawn before it reaches readline answers false, and frees the prompter", async () => {
+    const f = fakeRl();
+    vi.mocked(createInterface).mockReturnValue(f.rl as never);
+    const prompter = makePrompter();
+    const withdraw = new AbortController();
+    const offered = prompter.offer(LINE, withdraw.signal);
+    withdraw.abort(); // the poll settled inside the first read's wait
+    await expect(offered).resolves.toBe(false);
+    const q = prompter.confirm("Delete?", false);
+    await tick();
+    f.answer("");
+    await expect(q).resolves.toBe(false);
   });
 
   it("withdrawing it answers false (the poll won), never a PromptAborted", async () => {

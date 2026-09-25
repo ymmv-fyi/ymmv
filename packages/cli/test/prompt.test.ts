@@ -1,7 +1,18 @@
-import { createInterface } from "node:readline/promises";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
-import { clearIdleInput, matchChoice, PromptAborted, promptLine } from "../src/prompt.js";
+import { describe, expect, it, vi } from "vitest";
+
+// Spied, not replaced: every interface is real. makePrompter's tests below hand it one on in-memory
+// streams, since the real one reads process.stdin.
+vi.mock("node:readline/promises", { spy: true });
+
+import { createInterface } from "node:readline/promises";
+import {
+  clearIdleInput,
+  makePrompter,
+  matchChoice,
+  PromptAborted,
+  promptLine,
+} from "../src/prompt.js";
 
 const ESC = String.fromCharCode(0x1b); // explicit code point, never a raw literal
 const CR = String.fromCharCode(13);
@@ -98,19 +109,27 @@ describe("PromptAborted", () => {
   });
 });
 
-// What an open readline does with keys typed while no question is pending (the sign-in's device
-// flow, a POST). A whole line it drops by itself. An unfinished one stays until clearIdleInput
-// (what discardTypeahead runs after a wait) removes it; left, it would join the next answer and
-// erase the card. prompter.test.ts mocks readline away; THIS is where those behaviors are pinned
-// against the real interface, each reset case with the uncleared half showing what it prevents.
-describe("readline contract behind the idle prompter", () => {
-  const tick = () => new Promise<void>((r) => setImmediate(r));
-  const CURSOR_UP = new RegExp(`${ESC}\\[\\d+A`);
+const tick = () => new Promise<void>((r) => setImmediate(r));
+const CURSOR_UP = new RegExp(`${ESC}\\[\\d+A`);
 
+/** In-memory streams readline drives as a terminal. Input written before an interface reads it
+ *  waits in the stream, as keys wait in a terminal nothing reads. */
+function terminalStreams(columns = 80) {
+  const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => {} });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns, rows: 24 });
+  return { input, output };
+}
+
+// What an open readline does with keys typed while no question is pending (the command's start, the
+// sign-in's device flow, a POST). A whole line it drops by itself. An unfinished one stays until
+// clearIdleInput (what discardTypeahead runs after a wait) removes it; left, it would join the next
+// answer and erase the card. prompter.test.ts mocks readline away; THIS is where those behaviors
+// are pinned against the real interface, each reset case with the uncleared half showing what it
+// prevents.
+describe("readline contract behind the idle prompter", () => {
   /** A readline on in-memory streams that readline drives as a terminal, plus what it wrote. */
   function fakeTerminal(columns = 80) {
-    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode: () => {} });
-    const output = Object.assign(new PassThrough(), { isTTY: true, columns, rows: 24 });
+    const { input, output } = terminalStreams(columns);
     let written = "";
     output.on("data", (c: Buffer) => {
       written += String(c);
@@ -183,6 +202,215 @@ describe("readline contract behind the idle prompter", () => {
       t.input.write(CR);
       await pending;
       t.rl.close();
+    }
+  });
+});
+
+// Keys typed before the first question: the command's own wait (detection, the profile read) runs
+// with the input open (index.ts), and the first question clears what that wait left.
+describe("makePrompter: keys typed before the first question", () => {
+  /** The prompter's next interface reads these in-memory streams instead of process.stdin. */
+  function nextInterface() {
+    const streams = terminalStreams();
+    vi.mocked(createInterface).mockImplementationOnce((opts) =>
+      createInterface({ ...opts, ...streams, terminal: true }),
+    );
+    return streams;
+  }
+
+  it("open: a line typed while nothing is asked is dropped, so a double Enter leaves the Publish confirm up", async () => {
+    const { input } = nextInterface();
+    const prompter = makePrompter();
+    prompter.open();
+    input.write(`${CR}${CR}`); // a double Enter during detection
+    await tick();
+    const pending = prompter.confirm("Publish to ymmv.fyi/me?", true);
+    await tick();
+    input.write(`n${CR}`);
+    expect(await pending).toBe(false);
+    prompter.close();
+  });
+
+  it("the first question waits a turn, so held keys that reach readline in it are dropped", async () => {
+    // An open interface reads the terminal only from the next tick. A first question asked in the
+    // same tick would open before a held Enter reaches readline, and the Enter would answer it.
+    // The in-memory stream delivers on that next tick; a real terminal can take longer (Windows
+    // reads it on a helper thread), which this cannot model.
+    const { input } = nextInterface();
+    input.write(`${CR}${CR}`); // typed at launch, held while nothing reads
+    const prompter = makePrompter();
+    prompter.open();
+    const pending = prompter.confirm("Sign in with GitHub to claim ymmv.fyi/me?", true);
+    await tick();
+    await tick();
+    input.write(`n${CR}`);
+    expect(await pending).toBe(false);
+    prompter.close();
+  });
+
+  it("^C or ^D held until the first question's turn aborts that question, never exits from under it", async () => {
+    // Read inside the turn, with the question already counted as pending: the question aborts
+    // (the command's own "nothing happened" path) instead of the idle exit.
+    for (const key of [3, 4]) {
+      const { input } = nextInterface();
+      input.write(String.fromCharCode(key));
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+      const prompter = makePrompter();
+      try {
+        prompter.open();
+        await expect(prompter.confirm("Publish to ymmv.fyi/me?", true)).rejects.toBeInstanceOf(
+          PromptAborted,
+        );
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        prompter.close();
+        exit.mockRestore();
+      }
+    }
+  });
+
+  it("the first question clears an unfinished line typed before it", async () => {
+    const { input } = nextInterface();
+    const prompter = makePrompter();
+    prompter.open();
+    input.write("abc");
+    await tick();
+    const pending = prompter.ask("Font");
+    await tick();
+    input.write(CR);
+    // Left, "abc" would be the answer, with the cursor before it for whatever came next.
+    expect(await pending).toBe("");
+    prompter.close();
+  });
+
+  it("text that wrapped before the first question leaves the card printed since on screen", async () => {
+    // A long line typed during detection wraps, and readline counts those rows. The first
+    // question must forget them too, or it moves the cursor up over them and erases the profile
+    // card publish printed in between. The raw interface is the uncleared half.
+    for (const viaPrompter of [false, true]) {
+      const { input, output } = viaPrompter ? nextInterface() : terminalStreams();
+      let written = "";
+      output.on("data", (c: Buffer) => {
+        written += String(c);
+      });
+      let ask: () => Promise<boolean | string>;
+      let close: () => void;
+      if (viaPrompter) {
+        const prompter = makePrompter();
+        prompter.open();
+        ask = () => prompter.confirm("Publish to ymmv.fyi/me?", true);
+        close = () => prompter.close();
+      } else {
+        const rl = createInterface({ input, output, terminal: true, prompt: "" });
+        ask = () => rl.question("Publish to ymmv.fyi/me? ");
+        close = () => rl.close();
+      }
+      input.write("x".repeat(240)); // three wrapped rows at 80 columns
+      await tick();
+      written = ""; // the echo of the typing, then the card
+      const pending = ask();
+      await tick();
+      expect(written).toStrictEqual(
+        viaPrompter ? expect.not.stringMatching(CURSOR_UP) : expect.stringMatching(CURSOR_UP),
+      );
+      input.write(CR);
+      await pending;
+      close();
+    }
+  });
+
+  it("only the first question clears: a paste still answers two in a row", async () => {
+    const { input } = nextInterface();
+    const prompter = makePrompter();
+    prompter.open();
+    input.write("zz");
+    await tick();
+    const first = prompter.ask("Font");
+    await tick();
+    input.write(`Lilex${CR}Catppuccin`);
+    expect(await first).toBe("Lilex");
+    const second = prompter.ask("Theme");
+    await tick();
+    input.write(CR);
+    // Cleared again here, the second half of the paste would be lost and Enter would answer "".
+    expect(await second).toBe("Catppuccin");
+    prompter.close();
+  });
+
+  it("each interface clears once: after close(), the next one's first question clears again", async () => {
+    const prompter = makePrompter();
+    const { input: before } = nextInterface();
+    prompter.open();
+    const pending = prompter.ask("Font");
+    await tick();
+    before.write(`Lilex${CR}`);
+    await pending;
+    prompter.close();
+    const { input } = nextInterface();
+    prompter.open();
+    input.write("y");
+    await tick();
+    const again = prompter.ask("Theme");
+    await tick();
+    input.write(CR);
+    expect(await again).toBe("");
+    prompter.close();
+  });
+
+  it("an offer as the first read clears too: the sign-in's browser offer opens on a clean line", async () => {
+    // An offer counts as the interface's first read and clears the same way (pollWithOffer also
+    // discards right before its offer). Left, "abc" would be redrawn after the offer's text.
+    const { input, output } = nextInterface();
+    let written = "";
+    output.on("data", (c: Buffer) => {
+      written += String(c);
+    });
+    const prompter = makePrompter();
+    prompter.open();
+    input.write("abc");
+    await tick();
+    written = ""; // the echo of the typing itself
+    const LINE = "Press Enter to open github.com in your browser.";
+    const offered = prompter.offer(LINE, new AbortController().signal);
+    await tick();
+    expect(written).toContain(LINE);
+    expect(written).not.toContain("abc");
+    input.write(CR);
+    expect(await offered).toBe(true);
+    prompter.close();
+  });
+
+  it("^D typed before the first question: that question is the abort, never a raw readline error", async () => {
+    // EOF on an empty line closes the interface with nothing pending. The first question then
+    // clears a closed interface and finds it closed: PromptAborted, the "nothing happened" path.
+    const { input } = nextInterface();
+    const prompter = makePrompter();
+    prompter.open();
+    input.write(String.fromCharCode(4));
+    await tick();
+    await expect(prompter.confirm("Publish to ymmv.fyi/me?", true)).rejects.toBeInstanceOf(
+      PromptAborted,
+    );
+    prompter.close(); // the interface is already closed: a no-op, never a throw
+  });
+
+  it("^C typed before the first question exits 130 at once, as in any wait", async () => {
+    // Open, the terminal is raw and ^C is a key readline reads, not a signal: without the
+    // prompter's SIGINT handler, readline would only pause and detection would run on.
+    const { input } = nextInterface();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const prompter = makePrompter();
+    try {
+      prompter.open();
+      input.write(String.fromCharCode(3));
+      await tick();
+      expect(write).toHaveBeenCalledWith("\n");
+      expect(exit).toHaveBeenCalledWith(130);
+    } finally {
+      prompter.close();
+      exit.mockRestore();
+      write.mockRestore();
     }
   });
 });
