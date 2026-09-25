@@ -68,6 +68,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   characters in an environment value such as `$TERM_PROGRAM` or `$EDITOR` are removed before the
   value is offered, where `ymmv -y` and a republish used to store them unseen. A value with
   nothing left is not offered. Values you saved yourself are not touched.
+- **With stdout redirected, the sign-in code shows on the terminal.** `ymmv -y > log.txt` used
+  to write the GitHub code into the file and then wait on a blank screen until the code expired.
+  The sign-in's lines now show on the terminal, from the code to `Logged in as <you>.`, and the
+  output still goes to the file. The same goes for `ymmv login`, `ymmv set`, `ymmv unset` and
+  `ymmv delete -y`. `ymmv delete` with its output redirected, no login and no `-y` now stops at
+  once and says to run `ymmv login` first, where it used to run the whole sign-in and then refuse.
 
 ## [0.12.0] - 2026-09-19
 
