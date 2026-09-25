@@ -4369,6 +4369,92 @@ describe("delete", () => {
       "\n  Refusing to delete ymmv.fyi/me without confirmation. " +
         "Re-run with -y to confirm: ymmv delete -y",
     );
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  describe("with no stored login", () => {
+    let signedIn = false;
+    let origIn: boolean;
+    beforeEach(() => {
+      // A terminal on stdin: `ymmv delete > out.txt` typed at a prompt.
+      origIn = process.stdin.isTTY;
+      process.stdin.isTTY = true;
+      signedIn = false;
+      vi.mocked(loadToken)
+        .mockReset()
+        .mockImplementation(async () => (signedIn ? stored() : null));
+      vi.mocked(login)
+        .mockReset()
+        .mockImplementation(async () => {
+          signedIn = true;
+        });
+    });
+    afterEach(() => {
+      process.stdin.isTTY = origIn as true;
+      vi.mocked(loadToken).mockReset();
+      vi.mocked(login).mockReset();
+    });
+
+    // `ymmv delete > out.txt`: a whole device flow that can only end in the refusal is wasted. It
+    // points at `ymmv login`, never at -y: `ymmv delete -y > out.txt` would delete whatever account
+    // the browser signs in as, naming it only in the file.
+    it("non-interactive WITHOUT -y: stops before any sign-in and points at ymmv login", async () => {
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await runDelete({ interactive: false, yes: false });
+      expect(login).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(errs).toEqual(["\n  Not logged in. Run `ymmv login` first, then `ymmv delete`."]);
+      expect(logs).toEqual([]);
+    });
+
+    it("a terminal but no prompter WITHOUT -y: stops before any sign-in too", async () => {
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await runDelete({ interactive: true, yes: false });
+      expect(login).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(errs).toEqual(["\n  Not logged in. Run `ymmv login` first, then `ymmv delete`."]);
+    });
+
+    // `ymmv delete` on a fresh machine: a person who can answer is signed in, then asked.
+    it("a terminal and a prompter WITHOUT -y: signs in, then confirms naming the page", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
+      const confirm = vi.fn().mockResolvedValue(true);
+      await runDelete({ interactive: true, yes: false, prompter: stubPrompter({ confirm }) });
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith("Delete ymmv.fyi/me? This is permanent", false);
+      expect(errs.join("\n")).not.toContain("Refusing to delete");
+      expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    // CI or `< /dev/null`: -y would not help, so the sign-in's own refusal speaks, not "Re-run with -y".
+    it("stdin not a terminal: no early refusal, login() says the device flow can't run", async () => {
+      process.stdin.isTTY = undefined as unknown as true;
+      vi.mocked(login).mockRejectedValueOnce(
+        new Error("Device login needs an interactive terminal."),
+      );
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await expect(runDelete({ interactive: false, yes: false })).rejects.toThrow(
+        "Device login needs an interactive terminal.",
+      );
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(errs.join("\n")).not.toContain("Re-run with -y");
+    });
+
+    it("non-interactive WITH -y: signs in, then deletes", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
+      await runDelete({ interactive: false, yes: true });
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(deleteTokenIf).toHaveBeenCalledWith("t");
+      expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
+      expect(process.exitCode).toBeUndefined();
+    });
   });
 
   it("non-interactive WITH -y: deletes server-side, then drops the now-dead local token", async () => {
