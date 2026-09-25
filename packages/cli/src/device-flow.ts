@@ -331,8 +331,9 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
   const { prompter } = deps;
   // Before anything waits, offer or not: from here on keys reach readline, which drops a whole
   // line typed with no question pending and holds a partial one for the discards below. Left to
-  // the terminal they would queue for the first question to come: an offer nobody has seen yet,
-  // or `ymmv delete`'s confirm. The idle prompt is empty, so the output stays the same.
+  // the terminal, keys would queue for the first question to come: an offer nobody has seen yet.
+  // A caller may have opened it already (index.ts); a second open does nothing. The idle prompt
+  // is empty, so the output stays the same.
   prompter?.open();
   // Looked up while GitHub is asked for the code: a PATH walk can be slow (WSL's /mnt/c entries),
   // and only the offer needs its answer. findLauncher never rejects.
@@ -391,8 +392,8 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
     }
   }
   console.log(message(minted.handle ? `Logged in as ${minted.handle}.` : NO_HANDLE_BOUND));
-  // Everything since the input opened was a wait. A key typed there (an unfinished `y`) would
-  // otherwise sit in readline's line and pre-fill the caller's next question: for `ymmv delete`,
-  // a default-No confirm that Enter would then answer yes.
+  // Everything since the caller's last question was a wait. A key typed there (an unfinished `y`)
+  // would otherwise sit in readline's line and pre-fill the caller's next question: for
+  // `ymmv delete`, a default-No confirm that Enter would then answer yes.
   prompter?.discardTypeahead();
 }

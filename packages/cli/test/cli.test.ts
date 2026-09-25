@@ -15,9 +15,9 @@ vi.mock("../src/device-flow.js", async (importOriginal) => ({
   login: vi.fn(),
 }));
 // Partial: only publish is mocked, so the dispatch's io can be inspected without a run that would
-// touch the REAL dismissals file in the user's config dir. runSet, runUnset and runDelete are
-// wrapped, not replaced: they run for real unless a test scripts them, and their arguments can be
-// read. Every other command stays real.
+// touch the REAL dismissals file in the user's config dir. runSet, runUnset, runDelete and runLogin
+// are wrapped, not replaced: they run for real unless a test scripts them, and their arguments can
+// be read. Every other command stays real.
 vi.mock("../src/commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/commands.js")>();
   return {
@@ -26,7 +26,13 @@ vi.mock("../src/commands.js", async (importOriginal) => {
     runSet: vi.fn(actual.runSet),
     runUnset: vi.fn(actual.runUnset),
     runDelete: vi.fn(actual.runDelete),
+    runLogin: vi.fn(actual.runLogin),
   };
+});
+// Wrapped the same way: the real prompter unless a test hands main() its own.
+vi.mock("../src/prompt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/prompt.js")>();
+  return { ...actual, makePrompter: vi.fn(actual.makePrompter) };
 });
 
 import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
@@ -38,13 +44,13 @@ import {
   publishProfile,
 } from "../src/api.js";
 import { MintRejected, revokeYmmvToken } from "../src/auth-http.js";
-import { publish, runDelete, runSet, runUnset } from "../src/commands.js";
+import { publish, runDelete, runLogin, runSet, runUnset } from "../src/commands.js";
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { dismissalsPath } from "../src/dismissals.js";
 import { NetworkError } from "../src/http.js";
 import { main } from "../src/index.js";
-import type { Prompter } from "../src/prompt.js";
+import { makePrompter, type Prompter } from "../src/prompt.js";
 import {
   type Credential,
   deleteTokenIf,
@@ -488,6 +494,91 @@ describe("ymmv delete dispatch", () => {
     } finally {
       vi.mocked(runDelete).mockReset();
     }
+  });
+});
+
+// A key typed during a command's first wait (detection, the profile read) must reach an open
+// input, which drops a whole line, instead of waiting in the terminal to answer the first
+// question: for a returning user, the default-Y Publish confirm. prompt.test.ts pins what the open
+// input does with those keys; this is the seam that opens it.
+describe("publish, delete and login open the input before they run", () => {
+  const commands = [
+    [[], publish],
+    [["delete"], runDelete],
+    [["login"], runLogin],
+  ] as const;
+
+  function stubPrompter(): Prompter {
+    return {
+      ask: vi.fn(),
+      confirm: vi.fn(),
+      choice: vi.fn(),
+      offer: vi.fn(),
+      open: vi.fn(),
+      discardTypeahead: vi.fn(),
+      close: vi.fn(),
+    };
+  }
+
+  it.each(commands)("ymmv %j", async (argv, command) => {
+    const prompter = stubPrompter();
+    vi.mocked(makePrompter).mockReturnValueOnce(prompter);
+    vi.mocked(command).mockResolvedValueOnce(undefined);
+    await withTTY(true, true, () => main([...argv]));
+    expect(prompter.open).toHaveBeenCalledTimes(1);
+    expect(command).toHaveBeenCalledTimes(1);
+    const [opened] = vi.mocked(prompter.open).mock.invocationCallOrder;
+    const [ran] = vi.mocked(command).mock.invocationCallOrder;
+    expect(opened).toBeLessThan(ran ?? 0);
+    expect(prompter.close).toHaveBeenCalledTimes(1);
+  });
+
+  // open() sits inside the try: a failure there still reaches close(), and the command never
+  // runs against an input that did not open.
+  it("an open() that throws still closes the prompter, and the command does not run", async () => {
+    const boom = new Error("open failed");
+    const prompter: Prompter = {
+      ...stubPrompter(),
+      open: vi.fn(() => {
+        throw boom;
+      }),
+    };
+    vi.mocked(makePrompter).mockReturnValueOnce(prompter);
+    await expect(withTTY(true, true, () => main(["delete"]))).rejects.toBe(boom);
+    expect(runDelete).not.toHaveBeenCalled();
+    expect(prompter.close).toHaveBeenCalledTimes(1);
+  });
+
+  // The input is open, so the terminal is in raw mode: a command that fails after the open must
+  // still close it, or the shell it returns to keeps raw mode.
+  it("a command that fails after the early open still closes the input", async () => {
+    const boom = new Error("profile read failed");
+    const prompter = stubPrompter();
+    vi.mocked(makePrompter).mockReturnValueOnce(prompter);
+    vi.mocked(runDelete).mockRejectedValueOnce(boom);
+    await expect(withTTY(true, true, () => main(["delete"]))).rejects.toBe(boom);
+    expect(prompter.open).toHaveBeenCalledTimes(1);
+    expect(prompter.close).toHaveBeenCalledTimes(1);
+  });
+
+  // An open input puts the terminal in raw mode: a background run would stop on SIGTTOU, and keys
+  // typed for the shell would be eaten. So these leave it closed: -y asks nothing, unset asks only
+  // through a sign-in, and set's one question is an optional link offer. Each still gets the
+  // prompter, so a sign-in it needs opens the input in login().
+  it.each([
+    [["-y"], publish],
+    [["delete", "-y"], runDelete],
+    [["login", "-y"], runLogin],
+    [["set", "dotfiles", "me/dots"], runSet],
+    [["unset", "dotfiles"], runUnset],
+  ] as const)("ymmv %j leaves the input closed", async (argv, command) => {
+    const prompter = stubPrompter();
+    vi.mocked(makePrompter).mockReturnValueOnce(prompter);
+    vi.mocked(command).mockResolvedValueOnce(undefined);
+    await withTTY(true, true, () => main([...argv]));
+    expect(prompter.open).not.toHaveBeenCalled();
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(prompter.close).toHaveBeenCalledTimes(1);
   });
 });
 
