@@ -527,6 +527,105 @@ describe("login() orchestration", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  // `ymmv -y > log.txt`: the code must reach the terminal, not the file. The two flow lines go to
+  // stderr only when stdout is redirected and stderr is still a terminal; the result stays on stdout.
+  describe("which stream the code prints on", () => {
+    const OPEN = "\n  Open https://github.com/login/device and enter code: WXYZ-1234\n";
+    const LOGGED_IN = "\n  Logged in as carol.";
+    let logs: string[];
+    let errs: string[];
+    let logSpy: MockInstance;
+    let errSpy: MockInstance;
+    let origOut: boolean;
+    let origErr: boolean;
+    beforeEach(() => {
+      origOut = process.stdout.isTTY;
+      origErr = process.stderr.isTTY;
+      vi.stubEnv("NO_COLOR", "1"); // a TTY stdout turns color on: plain bytes to compare
+      vi.mocked(peekCredential).mockReset();
+      vi.mocked(saveToken).mockReset();
+      vi.mocked(mintYmmvToken).mockReset();
+      vi.mocked(mintYmmvToken).mockResolvedValue({
+        token: "ymmv_abc",
+        handle: "carol",
+        github_id: 4242,
+      });
+      logs = [];
+      errs = [];
+      logSpy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+        logs.push(a.join(" "));
+      });
+      errSpy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        errs.push(a.join(" "));
+      });
+    });
+    afterEach(() => {
+      process.stdout.isTTY = origOut as true;
+      process.stderr.isTTY = origErr as true;
+      vi.unstubAllEnvs();
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    });
+    async function run(stdout: boolean | undefined, stderr: boolean | undefined) {
+      process.stdout.isTTY = stdout as true;
+      process.stderr.isTTY = stderr as true;
+      await withTTY(true, async () => {
+        await login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 });
+      });
+    }
+
+    it("a terminal: stdout, as always", async () => {
+      await run(true, true);
+      expect(logs[0]).toContain(OPEN);
+      expect(logs[0]).toContain("waiting for GitHub approval");
+      expect(errs).toEqual([]);
+      expect(logs.at(-1)).toBe(LOGGED_IN);
+    });
+
+    it("stdout redirected, stderr a terminal: stderr, and the file gets only the result", async () => {
+      await run(undefined, true);
+      expect(errs[0]).toContain(OPEN);
+      expect(errs[0]).toContain("waiting for GitHub approval");
+      // The terminal also sees the result, so the waiting line is answered and the account named.
+      expect(errs.slice(1)).toEqual([LOGGED_IN]);
+      expect(logs).toEqual([LOGGED_IN]);
+    });
+
+    it("stdout redirected, stderr a terminal: the code keeps its bold and its link there", async () => {
+      vi.unstubAllEnvs(); // color by the stream it prints on, as a real run would
+      const esc = String.fromCharCode(0x1b);
+      await run(undefined, true);
+      expect(errs[0]).toContain(`${esc}[1mWXYZ-1234${esc}[0m`);
+      expect(errs[0]).toContain(`${esc}]8;;https://github.com/login/device`);
+      expect(logs).toEqual([LOGGED_IN]); // the file gets no codes
+    });
+
+    it("neither a terminal: no color codes anywhere", async () => {
+      vi.unstubAllEnvs();
+      const esc = String.fromCharCode(0x1b);
+      await run(undefined, undefined);
+      expect(logs.join("\n")).not.toContain(esc);
+      expect(errs).toEqual([]);
+    });
+
+    // `ymmv -y 2> err.txt`: stdout is still the terminal, so the code stays there, not in the file.
+    it("stderr redirected, stdout a terminal: stdout, as always", async () => {
+      await run(true, undefined);
+      expect(logs[0]).toContain(OPEN);
+      expect(logs[0]).toContain("waiting for GitHub approval");
+      expect(errs).toEqual([]);
+      expect(logs.at(-1)).toBe(LOGGED_IN);
+    });
+
+    it("neither a terminal: stdout, as always", async () => {
+      await run(undefined, undefined);
+      expect(logs[0]).toContain(OPEN);
+      expect(logs[0]).toContain("waiting for GitHub approval");
+      expect(errs).toEqual([]);
+      expect(logs.at(-1)).toBe(LOGGED_IN);
+    });
+  });
+
   // Re-login and the token it replaces. auth-http is mocked, so these assert the ORCHESTRATION
   // contract (which token goes to the server as `revoke`, what the client-side leftover revoke
   // targets, in what order, blocking what) against the mocked mint/revoke — the transport (the

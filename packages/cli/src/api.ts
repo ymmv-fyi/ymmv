@@ -20,7 +20,7 @@ import {
   withRetryHint,
 } from "./http.js";
 import type { Prompter } from "./prompt.js";
-import { message, sanitizeValue } from "./render.js";
+import { message, sanitizeValue, signInOut } from "./render.js";
 import { type Credential, deleteTokenIf, loadCredential } from "./token-store.js";
 
 /** A publish the CLI refuses deterministically — identity drifted mid-command or auth failed after
@@ -159,7 +159,8 @@ export async function ensureLogin(
 /** What a successful publish resolved to — the CALLER composes any user-facing message
  *  (IO stays at the command edges; this network layer never prints, with ONE sanctioned
  *  exception: the self-heal context line below, which must immediately precede the interactive
- *  device-flow prompt it explains — login() prints that prompt from this same call site). */
+ *  device-flow prompt it explains — login() prints that prompt from this same call site, and
+ *  both go through signInOut so a redirected stdout never splits the line from the code). */
 export interface PublishResult {
   handle: string;
   url: string;
@@ -204,7 +205,7 @@ export async function publishProfile(
     // transiently): the device flow about to start needs one line of context, or an unexplained
     // GitHub auth challenge mid-publish reads as a phishing surprise. Same sanctioned print as
     // the heal below.
-    console.log(message("Not logged in. Logging in to publish."));
+    signInOut()(message("Not logged in. Logging in to publish."));
     cred = await loginOrRefuse(opts.prompter);
   }
   // The credential actually SENT, not just the one the caller merged under: a re-read that came
@@ -253,7 +254,7 @@ export async function publishProfile(
     // it either way, so this in-memory snapshot is the only pre-reauth reference the retry can be
     // checked against.
     const before = cred;
-    console.log(
+    signInOut()(
       message(
         was401
           ? "Session expired. Logging in again to retry the publish."

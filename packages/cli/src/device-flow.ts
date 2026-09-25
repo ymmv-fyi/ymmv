@@ -4,7 +4,16 @@ import { findLauncher, type Launcher } from "./browser.js";
 import { BASE } from "./config.js";
 import { causeText, isTimeoutError, REQUEST_TIMEOUT_MS, safeFetch, wireText } from "./http.js";
 import type { Prompter } from "./prompt.js";
-import { type Codes, colorEnabled, link, message, palette, sanitizeValue } from "./render.js";
+import {
+  type Codes,
+  link,
+  message,
+  palette,
+  sanitizeValue,
+  signInColor,
+  signInOnStderr,
+  signInOut,
+} from "./render.js";
 import { peekCredential, saveToken } from "./token-store.js";
 
 // GitHub device flow. The CLI talks to github.com directly; the resulting access token is handed to
@@ -313,7 +322,10 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
     );
   }
   const prior = await peekCredential();
-  const color = colorEnabled();
+  // By the stream the code prints on (see signInColor). The stderr warnings below share it, which
+  // matches their stream only when the code goes to stderr: with stdout a terminal it is stdout's
+  // decision, as it always was. The result lines use no codes.
+  const color = signInColor();
   const c = palette(color);
   if (prior && prior.base !== BASE) {
     // Warn-only (revoking against a foreign base is out of scope): the user can Ctrl+C here,
@@ -346,7 +358,9 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
     ? link(dc.verification_uri, color)
     : sanitizeValue(dc.verification_uri);
   const code = sanitizeValue(dc.user_code);
-  console.log(
+  // The code must reach the person (see signInOut). Everything else here keeps its stream: the
+  // result lines stay on stdout, the warnings on stderr.
+  signInOut()(
     message(
       `Open ${verifyUri} and enter code: ${c.bold}${code}${c.reset}\n` +
         `${c.faint}waiting for GitHub approval… (Ctrl+C to cancel)${c.reset}`,
@@ -391,7 +405,12 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
       console.error(message(`${c.faint}(couldn't revoke the previous session's token)${c.reset}`));
     }
   }
-  console.log(message(minted.handle ? `Logged in as ${minted.handle}.` : NO_HANDLE_BOUND));
+  const done = message(minted.handle ? `Logged in as ${minted.handle}.` : NO_HANDLE_BOUND);
+  console.log(done);
+  // The result stays on stdout. When the code went to the terminal on stderr, the person reading
+  // it sees the result there too: the waiting line is answered, and the account is named before
+  // whatever the command does next (`ymmv delete -y > out.txt` deletes right after).
+  if (signInOnStderr()) console.error(done);
   // Everything since the caller's last question was a wait. A key typed there (an unfinished `y`)
   // would otherwise sit in readline's line and pre-fill the caller's next question: for
   // `ymmv delete`, a default-No confirm that Enter would then answer yes.

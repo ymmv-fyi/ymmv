@@ -15,3 +15,8 @@ process.env.TERM = "xterm-256color";
 // ecosystem-standard opt-out honored alongside YMMV_NO_UPDATE_CHECK; clear any ambient value.
 process.env.YMMV_NO_UPDATE_CHECK = "1";
 delete process.env.NO_UPDATE_NOTIFIER;
+// The output streams read as redirected, as they are in a piped worker: colorEnabled() and
+// signInOut() read these live, and a runner whose worker keeps a terminal on stderr but not on
+// stdout would move the sign-in lines off stdout. Tests that need a terminal set and restore them.
+process.stdout.isTTY = undefined as unknown as true;
+process.stderr.isTTY = undefined as unknown as true;

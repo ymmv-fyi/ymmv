@@ -122,6 +122,25 @@ export function useColor(env: Env, isTTY: boolean): boolean {
   return isTTY;
 }
 
+/** Where a sign-in's lines print (login()'s code and waiting line, and the line that explains a
+ *  sign-in mid-command): stdout as always, but stderr when only stderr is a terminal, or
+ *  `ymmv -y > log.txt` buries the code in the file and waits on a blank screen. Picked per call:
+ *  tests swap the console methods and the TTY flags after import. */
+export function signInOut(): typeof console.log {
+  return signInOnStderr() ? console.error : console.log;
+}
+
+/** Color for a sign-in's lines, by the stream signInOut() picks: the redirected case prints on a
+ *  terminal too, so its code keeps its bold and its link. */
+export function signInColor(): boolean {
+  return signInOnStderr() ? useColor(process.env, true) : colorEnabled();
+}
+
+/** Whether a sign-in's lines go to stderr: stdout redirected, stderr still a terminal. */
+export function signInOnStderr(): boolean {
+  return !process.stdout.isTTY && Boolean(process.stderr.isTTY);
+}
+
 /** Color for the current process: NO_COLOR/FORCE_COLOR, else stdout TTY state. */
 export function colorEnabled(): boolean {
   return useColor(process.env, Boolean(process.stdout.isTTY));

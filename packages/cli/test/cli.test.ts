@@ -648,6 +648,56 @@ describe("publish auto-reauth", () => {
     expect(context).toBeLessThan(logs.indexOf("<device-flow-prompt>"));
   });
 
+  // `ymmv -y > log.txt`: login() prints the code on stderr, so the line explaining it must follow
+  // it there, or the terminal shows a bare GitHub code and the file holds its explanation.
+  describe("stdout redirected, stderr a terminal: the context line goes with the code", () => {
+    let origOut: boolean;
+    let origErr: boolean;
+    beforeEach(() => {
+      origOut = process.stdout.isTTY;
+      origErr = process.stderr.isTTY;
+      process.stdout.isTTY = undefined as unknown as true;
+      process.stderr.isTTY = true;
+      vi.mocked(login)
+        .mockReset()
+        .mockImplementation(async () => {
+          errs.push("<device-flow-prompt>");
+        });
+    });
+    afterEach(() => {
+      process.stdout.isTTY = origOut as true;
+      process.stderr.isTTY = origErr as true;
+      vi.mocked(login).mockReset();
+    });
+
+    it("the heal after a 401", async () => {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(status(401, { error: "unauthorized" }))
+          .mockResolvedValueOnce(ok({ handle: "carol" })),
+      );
+      await publishProfile(PROFILE, MINE);
+      expect(errs).toEqual([
+        "\n  Session expired. Logging in again to retry the publish.",
+        "<device-flow-prompt>",
+      ]);
+      expect(logs).toEqual([]);
+    });
+
+    it("the sign-in when the login vanished before the first send", async () => {
+      vi.mocked(loadToken)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(stored({ token: "t2" }));
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ handle: "carol" })));
+      await publishProfile(PROFILE, MINE);
+      expect(errs).toEqual(["\n  Not logged in. Logging in to publish.", "<device-flow-prompt>"]);
+      expect(logs).toEqual([]);
+    });
+  });
+
   it("on 409 (stale handle): explains, re-logs-in WITHOUT deleting, then REFUSES the rebound retry", async () => {
     vi.mocked(loadToken)
       .mockResolvedValueOnce(stored({ handle: "old" }))
