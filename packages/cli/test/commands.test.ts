@@ -35,7 +35,7 @@ import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
 import { sanitizeValue } from "../src/render.js";
-import { deleteToken, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
+import { deleteTokenIf, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
   handle: string,
@@ -4362,7 +4362,7 @@ describe("delete", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runDelete({ interactive: false, yes: false });
     expect(fetchFn).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
     expect(errs).toContain(
       "\n  Refusing to delete ymmv.fyi/me without confirmation. " +
@@ -4374,7 +4374,7 @@ describe("delete", () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
     await runDelete({ interactive: false, yes: true });
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
     expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
   });
 
@@ -4385,7 +4385,7 @@ describe("delete", () => {
     const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(logs).toContain("\n  Cancelled. Nothing deleted.");
   });
 
@@ -4398,7 +4398,24 @@ describe("delete", () => {
     const out = logs.join("\n");
     expect(out).toContain("Deleted your profile.");
     expect(out).not.toContain("YMMV_TOKEN");
-    expect(deleteToken).toHaveBeenCalledTimes(1); // a FILE credential still drops the dead token
+    expect(deleteTokenIf).toHaveBeenCalledWith("t"); // a FILE credential still drops the dead token
+  });
+
+  it("a token file that can't be removed after the delete is a note, never a failed delete", async () => {
+    // The profile is already gone: a raw fs error (and no "Deleted" line) would invite a retry.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
+    vi.mocked(deleteTokenIf).mockRejectedValueOnce(
+      Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }),
+    );
+    await runDelete({ interactive: false, yes: true });
+    expect(deleteTokenIf).toHaveBeenCalledTimes(1);
+    expect(logs.join("\n")).toContain("Deleted ymmv.fyi/me.");
+    expect(errs).toEqual([
+      "\n  (couldn't remove the local token file; that login no longer works)",
+    ]);
+    expect(errs.join("\n")).not.toContain("EPERM");
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("Ctrl+C at the delete confirm: Cancelled line, exit 130, nothing touched", async () => {
@@ -4408,7 +4425,7 @@ describe("delete", () => {
     const prompter = stubPrompter({ confirm: vi.fn().mockRejectedValue(new PromptAborted()) });
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(logs).toContain("\n\n  Cancelled. Nothing deleted.");
     expect(process.exitCode).toBe(130);
   });
@@ -4545,7 +4562,7 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true }));
     vi.stubGlobal("fetch", fetchFn);
     await runDelete({ interactive: false, yes: true });
-    expect(deleteToken).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
+    expect(deleteTokenIf).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
     expect(logs.join("\n")).toContain("Deleted ymmv.fyi/carol.");
     expect(initOf(fetchFn, 1).method).toBe("DELETE");
     expect((initOf(fetchFn, 1).headers as Record<string, string>).authorization).toBe(
@@ -4584,7 +4601,7 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
       'YMMV_TOKEN belongs to "alice"',
     );
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
   });
 
   it("delete with a mismatched YMMV_HANDLE never reaches the confirm prompt (interactive)", async () => {

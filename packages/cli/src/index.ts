@@ -1,5 +1,13 @@
 import { revokeYmmvToken } from "./auth-http.js";
-import { type InteractiveIO, publish, runDelete, runSet, runUnset, view } from "./commands.js";
+import {
+  type InteractiveIO,
+  localTokenKept,
+  publish,
+  runDelete,
+  runSet,
+  runUnset,
+  view,
+} from "./commands.js";
 import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
 import { login, retirable } from "./device-flow.js";
 import { dismissalsPath } from "./dismissals.js";
@@ -7,7 +15,7 @@ import { isTimeoutError, NetworkError } from "./http.js";
 import { makePrompter } from "./prompt.js";
 import { type Codes, colorEnabled, message, palette, sanitizeValue, useColor } from "./render.js";
 import { type Command, resolveArg } from "./resolve.js";
-import { deleteToken, loadToken, peekBase, peekCredential } from "./token-store.js";
+import { deleteTokenIf, loadToken, peekBase, peekCredential } from "./token-store.js";
 import { runUpdate } from "./update.js";
 import {
   isNewer,
@@ -43,7 +51,8 @@ ${c.faint}Usage:${c.reset}
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
               font, theme, multiplexer, version-manager, dotfiles, ai-tool`;
 
-// `ymmv logout` — revoke server-side, THEN delete the local file. If the revoke fails, KEEP the
+// `ymmv logout` — revoke server-side, THEN delete the local file while it still holds that token
+// (a login that wrote a fresh one during the revoke keeps it). If the revoke fails, KEEP the
 // local token (deleting it would orphan a still-active token; revoke-all is post-v1) and tell the
 // user to retry — but tell the TRUTH about why: a connectivity failure (NetworkError / a body-read
 // timeout) gets "couldn't reach", while a server-reached failure (revokeYmmvToken's own
@@ -81,8 +90,17 @@ async function logout(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  await deleteToken();
+  // Only while the file still holds the revoked token: a login that wrote a fresh one during the
+  // revoke keeps it, instead of leaving it live with nothing local to revoke it by. Best effort:
+  // the revoke already happened, so a file that can't be removed is a note, not a failed logout.
+  let kept = false;
+  try {
+    await deleteTokenIf(token);
+  } catch {
+    kept = true;
+  }
   console.log(message(revoked ? "Logged out." : "Logged out (no active session on this server)."));
+  if (kept) console.error(localTokenKept());
 }
 
 function printVersion(): void {

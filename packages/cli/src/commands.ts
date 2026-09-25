@@ -61,7 +61,7 @@ import {
   takeLine,
 } from "./render.js";
 import type { SetTarget, UnsetTarget } from "./resolve.js";
-import { type Credential, deleteToken, loadCredential } from "./token-store.js";
+import { type Credential, deleteTokenIf, loadCredential } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
 // token store. Each command keeps its IO at the edges so the branching logic stays testable.
@@ -1126,6 +1126,15 @@ export async function runUnset(target: UnsetTarget, prompter?: Prompter): Promis
   console.log(message(`${line}${pagePointer(res.handle)}`));
 }
 
+/** The note when token.json can't be removed after the server already revoked the login it holds
+ *  (a file held open on Windows): the command's own outcome stands. Shared with `ymmv logout`. */
+export function localTokenKept(): string {
+  const c = palette(colorEnabled());
+  return message(
+    `${c.faint}(couldn't remove the local token file; that login no longer works)${c.reset}`,
+  );
+}
+
 /** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */
 export async function runDelete(io: InteractiveIO): Promise<void> {
   const cred = await ensureLogin(undefined, io.prompter);
@@ -1174,9 +1183,19 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
   }
   // The credential the user just confirmed — deleteProfile must never re-read the store.
   await deleteProfile(cred);
-  // The server revoked every token for the deleted account; drop the dead local one. An env
+  // The server revoked every token for the deleted account; drop the dead local one, but only
+  // while the file still holds it: a login that wrote a fresh one since keeps it. An env
   // credential leaves the file ALONE: it may hold a different account's still-live token, and the
-  // env var itself is not the CLI's to delete.
-  if (cred.source === "file") await deleteToken();
+  // env var itself is not the CLI's to delete. Best effort: the delete already happened, so a file
+  // that can't be removed (held open on Windows) is a note, not an error that invites a retry.
+  let kept = false;
+  if (cred.source === "file") {
+    try {
+      await deleteTokenIf(cred.token);
+    } catch {
+      kept = true;
+    }
+  }
   console.log(message(`Deleted ${target}. Run \`ymmv\` to publish again.`));
+  if (kept) console.error(localTokenKept());
 }

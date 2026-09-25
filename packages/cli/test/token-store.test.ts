@@ -14,7 +14,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path";
 import { BASE } from "../src/config.js";
 import {
-  deleteToken,
+  deleteTokenIf,
   loadCredential,
   loadToken,
   peekBase,
@@ -255,12 +255,7 @@ describe("loadCredential", () => {
   });
 });
 
-describe("deleteToken / peekBase", () => {
-  it("force-removes the token file", async () => {
-    await deleteToken();
-    expect(rm).toHaveBeenCalledWith(PATH, { force: true });
-  });
-
+describe("peekBase", () => {
   it("peekBase returns the stored base regardless of the current base", async () => {
     vi.mocked(readFile).mockResolvedValue(
       JSON.stringify({ base: "https://other.example", token: "x", handle: null }),
@@ -271,5 +266,47 @@ describe("deleteToken / peekBase", () => {
   it("peekBase returns null when there's no file", async () => {
     vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
     expect(await peekBase()).toBeNull();
+  });
+});
+
+describe("deleteTokenIf", () => {
+  it("removes the file while it holds the refused token", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_dead", handle: "carol" }),
+    );
+    await deleteTokenIf("ymmv_dead");
+    expect(rm).toHaveBeenCalledWith(PATH, { force: true });
+  });
+
+  it("removes a file loadToken refuses (corrupt handle, bad id): logout's leftover path relies on it", async () => {
+    for (const bad of [{ handle: 42 }, { handle: "carol", github_id: "x" }]) {
+      vi.mocked(rm).mockClear();
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({ base: BASE, token: "t-corrupt", ...bad }),
+      );
+      expect(await loadToken()).toBeNull();
+      await deleteTokenIf("t-corrupt");
+      expect(rm).toHaveBeenCalledWith(PATH, { force: true });
+    }
+  });
+
+  it("rejects when the file can't be removed: callers print their note on that rejection", async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: BASE, token: "ymmv_dead", handle: "carol" }),
+    );
+    vi.mocked(rm).mockRejectedValueOnce(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    await expect(deleteTokenIf("ymmv_dead")).rejects.toMatchObject({ code: "EPERM" });
+  });
+
+  it("keeps a token a login wrote since (a different token), and a missing or corrupt file is a no-op", async () => {
+    vi.mocked(readFile).mockResolvedValueOnce(
+      JSON.stringify({ base: BASE, token: "ymmv_fresh", handle: "carol" }),
+    );
+    await deleteTokenIf("ymmv_dead");
+    vi.mocked(readFile).mockRejectedValueOnce(new Error("ENOENT"));
+    await deleteTokenIf("ymmv_dead");
+    vi.mocked(readFile).mockResolvedValueOnce("{not json");
+    await deleteTokenIf("ymmv_dead");
+    expect(rm).not.toHaveBeenCalled();
   });
 });
