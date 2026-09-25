@@ -55,6 +55,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   command that makes it a link.
 
 ### Fixed
+- **An Enter pressed before a question appears no longer answers it.** Keys typed while `ymmv`
+  detected your stack or read your profile used to answer its first question as soon as it
+  appeared, so a double Enter on the command line could publish through the
+  `Publish to ymmv.fyi/<you>?` confirm unseen. Keys typed during those waits are now ignored, and
+  the question waits for what you type after it appears. The same holds for `ymmv delete` and
+  `ymmv login`.
 - **After `Session expired`, the next command signs you in.** The refused login used to stay on
   disk, so running `ymmv` again said `Session expired` again. It is now removed, and the next
   `ymmv` or `ymmv login` starts the sign-in.
