@@ -1,7 +1,12 @@
 import { ProfileParseError, SCHEMA_VERSION } from "@ymmv/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// A 401 on the own-profile read drops the dead file token: mocked, so no test here ever reads or
+// deletes the developer's real token.json.
+vi.mock("../src/token-store.js");
+
 import { fetchOwnProfile, fetchProfileJson } from "../src/api.js";
-import type { Credential } from "../src/token-store.js";
+import { type Credential, deleteTokenIf } from "../src/token-store.js";
 
 // Stub the global fetch to drive fetchProfileJson's response handling (real parseProfile — the shared
 // unit suite covers its branches; here we prove the CLI fetch boundary WIRES it, converting a
@@ -28,6 +33,7 @@ function stubResponse(res: Response): ReturnType<typeof vi.fn> {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
 });
 
 describe("fetchProfileJson", () => {
@@ -122,16 +128,69 @@ describe("fetchOwnProfile", () => {
     await expect(fetchOwnProfile(CRED)).rejects.toThrow(/Unexpected response from/);
   });
 
+  /** The Worker's own 401: the only one that proves the stored token dead. */
+  const unauthorized = () =>
+    new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+
   it("401 on a file credential is the login instruction (no auto-reauth inside a read)", async () => {
-    stubResponse(new Response("{}", { status: 401 }));
+    stubResponse(unauthorized());
     await expect(fetchOwnProfile(CRED)).rejects.toThrow(
       "Session expired. Run `ymmv login`, then re-run the command.",
     );
+    // The dead token goes (only while the file still holds it), so that `ymmv login` signs in
+    // instead of asking about a login the server just refused.
+    expect(deleteTokenIf).toHaveBeenCalledWith("secret-token-xyz");
   });
 
-  it("401 on an env credential is the mint-again copy", async () => {
-    stubResponse(new Response("{}", { status: 401 }));
+  it("401 still says session expired when the dead token file can't be removed", async () => {
+    // rm's force only covers ENOENT: a file held open (antivirus on Windows) rejects with EPERM.
+    stubResponse(unauthorized());
+    vi.mocked(deleteTokenIf).mockRejectedValueOnce(
+      Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }),
+    );
+    await expect(fetchOwnProfile(CRED)).rejects.toThrow(
+      "Session expired. Run `ymmv login`, then re-run the command.",
+    );
+    // The rejection really happened and was swallowed.
+    expect(deleteTokenIf).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 401 whose body times out keeps the token file and still gives the login instruction", async () => {
+    // wireBody rethrows a body-read timeout: unread, the 401 proves nothing, and it must not
+    // replace the copy the user needs.
+    const res = new Response(null, { status: 401 });
+    Object.defineProperty(res, "text", {
+      value: () =>
+        Promise.reject(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+    });
+    stubResponse(res);
+    await expect(fetchOwnProfile(CRED)).rejects.toThrow(
+      "Session expired. Run `ymmv login`, then re-run the command.",
+    );
+    expect(deleteTokenIf).not.toHaveBeenCalled();
+  });
+
+  it("a 401 that is not the Worker's own (a proxy page) keeps the token file, same copy", async () => {
+    // Deleting a token that may still be live would strand it: the next login could no longer
+    // retire it through the mint's revoke, and tokens never expire.
+    stubResponse(
+      new Response("<html>Authentication required</html>", {
+        status: 401,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    await expect(fetchOwnProfile(CRED)).rejects.toThrow(
+      "Session expired. Run `ymmv login`, then re-run the command.",
+    );
+    expect(deleteTokenIf).not.toHaveBeenCalled();
+  });
+
+  it("401 on an env credential is the mint-again copy, and the token file is left alone", async () => {
+    stubResponse(unauthorized());
     await expect(fetchOwnProfile({ ...CRED, source: "env" })).rejects.toThrow(/YMMV_TOKEN/);
+    expect(deleteTokenIf).not.toHaveBeenCalled();
   });
 
   it("refuses an unverified env credential before any request reaches the wire", async () => {

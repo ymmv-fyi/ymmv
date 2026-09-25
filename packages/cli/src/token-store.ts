@@ -155,8 +155,14 @@ export async function loadCredential(): Promise<Credential | null> {
   return stored ? { ...stored, source: "file" } : null;
 }
 
-export async function deleteToken(): Promise<void> {
-  await rm(tokenFilePath(), { force: true });
+/** Delete token.json only while it still holds `token`, one the server refused or revoked: a login
+ *  that wrote a fresh one since must keep it. Lenient like peekCredential (any field but the token
+ *  may be corrupt), so a file only logout's leftover path could read is still removed.
+ *  Read-compare-remove is not atomic: a login landing between the two steps is still removed. */
+export async function deleteTokenIf(token: string): Promise<void> {
+  // The only way token.json is removed: no unconditional delete is exported, so a new caller
+  // can't skip the compare.
+  if ((await readTokenFile())?.token === token) await rm(tokenFilePath(), { force: true });
 }
 
 /** The base a stored token was minted for, regardless of the current base — for logout messaging.

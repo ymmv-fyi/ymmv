@@ -47,7 +47,7 @@ import { main } from "../src/index.js";
 import type { Prompter } from "../src/prompt.js";
 import {
   type Credential,
-  deleteToken,
+  deleteTokenIf,
   loadCredential,
   loadToken,
   peekBase,
@@ -166,7 +166,23 @@ describe("ymmv logout", () => {
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
+  });
+
+  it("a token file that can't be removed after the revoke is a note, never a failed logout", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+    vi.mocked(deleteTokenIf).mockRejectedValueOnce(
+      Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }),
+    );
+    await main(["logout"]);
+    expect(deleteTokenIf).toHaveBeenCalledTimes(1);
+    expect(logs).toContain("\n  Logged out.");
+    expect(errs).toContain(
+      "\n  (couldn't remove the local token file; that login no longer works)",
+    );
+    expect(errs.join("\n")).not.toContain("EPERM");
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("clears a token file loadToken refuses (corrupt handle): revokes the live token inside, deletes the file", async () => {
@@ -178,7 +194,7 @@ describe("ymmv logout", () => {
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t-corrupt");
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t-corrupt");
     expect(logs.join("\n")).toContain("Logged out.");
   });
 
@@ -194,7 +210,7 @@ describe("ymmv logout", () => {
       vi.mocked(peekBase).mockResolvedValue(cred.base);
       await main(["logout"]);
       expect(revokeYmmvToken).not.toHaveBeenCalled();
-      expect(deleteToken).not.toHaveBeenCalled();
+      expect(deleteTokenIf).not.toHaveBeenCalled();
       expect(logs.join("\n")).toMatch(/Not logged in/);
     }
   });
@@ -205,7 +221,7 @@ describe("ymmv logout", () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockRejectedValue(new NetworkError("Can't reach B (offline)"));
     await main(["logout"]);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
@@ -217,7 +233,7 @@ describe("ymmv logout", () => {
       new DOMException("The operation was aborted due to timeout", "TimeoutError"),
     );
     await main(["logout"]);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
     expect(errs.join("\n")).toMatch(/Couldn't reach the server to revoke/);
   });
@@ -232,7 +248,7 @@ describe("ymmv logout", () => {
       vi.mocked(loadToken).mockResolvedValue(stored());
       vi.mocked(revokeYmmvToken).mockRejectedValue(new Error(failure));
       await main(["logout"]);
-      expect(deleteToken).not.toHaveBeenCalled();
+      expect(deleteTokenIf).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       expect(errs).toContain(
         "\n  The server didn't confirm the revoke. Your token is still active. " +
@@ -248,7 +264,7 @@ describe("ymmv logout", () => {
     vi.mocked(peekBase).mockResolvedValue(null);
     await main(["logout"]);
     expect(revokeYmmvToken).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(logs).toContain("\n  Not logged in.");
   });
 
@@ -260,7 +276,7 @@ describe("ymmv logout", () => {
       "\n  Not logged in to https://ymmv.fyi (a token for https://staging.example exists; " +
         "set YMMV_API to that to log out of it).",
     );
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
   });
 
   it("sanitizes the other base before echoing it (token.json is untrusted print input)", async () => {
@@ -277,7 +293,7 @@ describe("ymmv logout", () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(revokeYmmvToken).mockResolvedValue(false);
     await main(["logout"]);
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
     expect(logs).toContain("\n  Logged out (no active session on this server).");
   });
 
@@ -471,7 +487,7 @@ describe("If-Match precondition (publish)", () => {
 });
 
 describe("publish auto-reauth", () => {
-  it("on 401: explains the re-login, deletes the token, re-logs-in, retries once", async () => {
+  it("on 401: explains the re-login, drops the refused token, re-logs-in, retries once", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     // The context line must land BEFORE login()'s device prompt — an unexplained GitHub auth
     // challenge mid-publish reads as phishing. login is mocked to drop a marker so order is real.
@@ -480,11 +496,13 @@ describe("publish auto-reauth", () => {
     });
     const fetchFn = vi
       .fn()
-      .mockResolvedValueOnce(status(401))
+      .mockResolvedValueOnce(status(401, { error: "unauthorized" }))
       .mockResolvedValueOnce(ok({ handle: "carol" }));
     vi.stubGlobal("fetch", fetchFn);
     await publishProfile(PROFILE, MINE);
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    // Only while the file still holds it: a token a concurrent login wrote since is kept, and
+    // login() retires it through the mint's revoke instead of leaving it live.
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(2);
     const context = logs.indexOf("\n  Session expired. Logging in again to retry the publish.");
@@ -506,7 +524,7 @@ describe("publish auto-reauth", () => {
     await expect(publishProfile({ ...PROFILE, handle: "old" }, MINE_OLD)).rejects.toThrow(
       /now binds "new".*Re-run the command/,
     );
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(login).toHaveBeenCalledTimes(1);
     expect(fetchFn).toHaveBeenCalledTimes(1); // the stale-merge retry POST never went out
     expect(logs).toContain(
@@ -667,10 +685,56 @@ describe("publish auto-reauth", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1); // the retry POST never went out
   });
 
-  it("throws after a second auth failure (no infinite loop)", async () => {
+  it("a 401 that is not the Worker's own still re-logs-in, but keeps the file for login() to retire", async () => {
+    // A proxy or edge page carrying the status proves nothing about the token: deleting it would
+    // strand a live session, while left in place login() sends it as `revoke`.
     vi.mocked(loadToken).mockResolvedValue(stored());
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>Unauthorized</html>", { status: 401 }))
+      .mockResolvedValueOnce(ok({ handle: "carol" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publishProfile(PROFILE, MINE);
+    expect(deleteTokenIf).not.toHaveBeenCalled();
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after a second auth failure (no infinite loop), dropping the refused new token", async () => {
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(stored()) // the token the first POST carries
+      .mockResolvedValue(stored({ token: "t2" })); // the re-login's
+    // A fresh Response per call: a body can be read only once.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => status(401, { error: "unauthorized" })),
+    );
     await expect(publishProfile(PROFILE, MINE)).rejects.toThrow(/authentication failed/i);
+    // The heal drops the refused token, then the retry drops the new one: the `ymmv login` the
+    // error asks for must sign in, not ask about a login the server refused.
+    expect(deleteTokenIf).toHaveBeenCalledTimes(2);
+    expect(deleteTokenIf).toHaveBeenNthCalledWith(1, "t");
+    expect(deleteTokenIf).toHaveBeenNthCalledWith(2, "t2");
+  });
+
+  it("a 409 heal whose retried POST gets 401 drops only the fresh token it sent", async () => {
+    // The 409 heal leaves the file to login(), which overwrites it; the retry's 401 then proves the
+    // NEW token dead, and only that one is dropped (conditionally, never an unconditional delete).
+    vi.mocked(loadToken)
+      .mockResolvedValueOnce(stored()) // pre-send login
+      .mockResolvedValue(stored({ token: "t2" })); // after the 409 re-login
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(status(409))
+        .mockResolvedValueOnce(status(401, { error: "unauthorized" })),
+    );
+    const err = await publishProfile(PROFILE, MINE).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect((err as Error).message).toMatch(/authentication failed/i);
+    expect(deleteTokenIf).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t2");
   });
 
   it("second 409 handle_not_bound gets HONEST post-heal copy, never the server's 'run login and retry'", async () => {
@@ -852,7 +916,7 @@ describe("publish auto-reauth", () => {
       const msg = await refusal();
       expect(msg).toMatch(/now belongs to a different GitHub account/);
       expect(msg).not.toMatch(/now binds/);
-      expect(deleteToken).not.toHaveBeenCalled();
+      expect(deleteTokenIf).not.toHaveBeenCalled(); // a 409 never drops the file token
       expect(fetchFn).toHaveBeenCalledTimes(1);
     });
 
@@ -1046,10 +1110,11 @@ describe("deleteProfile", () => {
   });
 
   it("does NOT auto-reauth on 401 — throws so the user re-confirms (never deletes a switched account)", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401)));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(401, { error: "unauthorized" })));
     await expect(deleteProfile(FILE_CRED)).rejects.toThrow(/session expired|ymmv login/i);
     expect(login).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    // The dead token goes (only while the file still holds it), so the advised login signs in.
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
   });
 
   it("throws on a non-ok status", async () => {
@@ -1107,7 +1172,7 @@ describe("write rate limit (429)", () => {
 });
 
 // An env credential is read-only config: it must never enter the file-token heal paths
-// (deleteToken / device-flow re-login), and its error copy names the VARIABLE — never the value.
+// (forgetRejected / device-flow re-login), and its error copy names the VARIABLE — never the value.
 describe("env credential (YMMV_TOKEN) API paths", () => {
   // As verifyEnvCredential returns it: the handle and id came from whoami.
   const envCred = {
@@ -1131,7 +1196,7 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     await expect(deleteProfile(raw)).rejects.toThrow("was not verified");
     expect(fetchFn).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
   });
 
   it("a FILE `expected` whose store re-read comes back RAW env is refused before the POST", async () => {
@@ -1145,13 +1210,14 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     expect(err).toBeInstanceOf(PublishRefusal);
     expect(String(err)).toContain("was not verified");
     expect(fetchFn).not.toHaveBeenCalled();
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
   });
 
   it("publish 401 refuses naming YMMV_TOKEN: one POST, file token kept, no re-login", async () => {
     vi.mocked(loadCredential).mockResolvedValue(envCred);
-    const fetchFn = vi.fn().mockResolvedValueOnce(status(401));
+    // The Worker's own 401, the one that WOULD drop a file token: the env guard is what keeps it.
+    const fetchFn = vi.fn().mockResolvedValueOnce(status(401, { error: "unauthorized" }));
     vi.stubGlobal("fetch", fetchFn);
     const err: unknown = await publishProfile(PROFILE, envCred).catch((e: unknown) => e);
     // PublishRefusal, not Error: deterministic for this process (no edit changes the env), so the
@@ -1160,7 +1226,7 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     expect(String(err)).toContain("YMMV_TOKEN");
     expect(String(err)).not.toContain("ymmv_env"); // the secret never echoes
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
   });
 
@@ -1175,19 +1241,19 @@ describe("env credential (YMMV_TOKEN) API paths", () => {
     // YMMV_HANDLE is no longer an input here; blaming it would send the user to the wrong fix.
     expect(String(err)).not.toContain("YMMV_HANDLE");
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
   });
 
   it("delete 401 names YMMV_TOKEN, not the `ymmv login` advice a file session gets", async () => {
-    const fetchFn = vi.fn().mockResolvedValue(status(401));
+    const fetchFn = vi.fn().mockResolvedValue(status(401, { error: "unauthorized" }));
     vi.stubGlobal("fetch", fetchFn);
     const err = await deleteProfile(envCred).catch((e: Error) => e);
     expect((err as Error).message).toContain("YMMV_TOKEN");
     expect((err as Error).message).not.toContain("ymmv login");
     // Same read-only contract as publish: one DELETE, no heal, file token untouched.
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(deleteToken).not.toHaveBeenCalled();
+    expect(deleteTokenIf).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();
   });
 });
@@ -1222,7 +1288,7 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
     await main(["logout"]);
     expect(process.exitCode).toBeUndefined();
     expect(revokeYmmvToken).toHaveBeenCalledWith("t"); // the FILE token, never the env one
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
     expect(logs.join("\n")).toContain("Logged out.");
   });
 
@@ -1232,7 +1298,7 @@ describe("YMMV_TOKEN startup validation + logout note", () => {
     vi.mocked(revokeYmmvToken).mockResolvedValue(true);
     await main(["logout"]);
     expect(revokeYmmvToken).toHaveBeenCalledWith("t");
-    expect(deleteToken).toHaveBeenCalledTimes(1);
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
     // The note is diagnostic (stderr): "logged out" must not read as "unauthenticated".
     expect(errs.join("\n")).toContain("YMMV_TOKEN is set and still authenticates");
   });

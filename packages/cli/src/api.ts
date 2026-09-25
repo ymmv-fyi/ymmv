@@ -21,7 +21,7 @@ import {
 } from "./http.js";
 import type { Prompter } from "./prompt.js";
 import { message, sanitizeValue } from "./render.js";
-import { type Credential, deleteToken, loadCredential } from "./token-store.js";
+import { type Credential, deleteTokenIf, loadCredential } from "./token-store.js";
 
 /** A publish the CLI refuses deterministically — identity drifted mid-command or auth failed after
  *  its one retry. Re-running the SAME attempt can never succeed (a fresh run must rebuild the merge
@@ -62,6 +62,27 @@ function assertVerified(cred: Credential): void {
         "please report it at https://github.com/ymmv-fyi/ymmv/issues.",
     );
   }
+}
+
+/** Drop a FILE token the Worker refused, so the `ymmv login` the error asks for signs in rather
+ *  than asking about a login the server no longer accepts. Only the Worker's own 401 proves the
+ *  token dead, and it always carries `{"error":"unauthorized"}`: a proxy or edge page with the same
+ *  status (the distrust fetchOwnProfile's 404 check applies) keeps the file, whose next login
+ *  retires the token through the mint's `revoke`. Deleting a live one would strand it: tokens never
+ *  expire, and nothing local could revoke it. Only while the file still holds it, too: a login that
+ *  wrote a fresh one since keeps it. An env credential is read-only config the CLI never deletes.
+ *  Reads `res`'s body, so a caller must not need it afterwards. */
+async function forgetRejected(cred: Credential, res: Response): Promise<void> {
+  if (cred.source !== "file") return;
+  // A body that can't be read (or times out) proves nothing: keep the file.
+  const { slug } = wireErrorBody(await wireBody(res).catch(() => ""));
+  if (slug !== "unauthorized") return;
+  // Best effort: a file that can't be removed (held open by another process on Windows) must not
+  // replace the login instruction the caller throws next. It then reads as logged in until the
+  // next login, which retires it.
+  try {
+    await deleteTokenIf(cred.token);
+  } catch {}
 }
 
 /** Friendly message for a 429 (write rate limit). The Worker sets `retry-after` + a JSON `{message}`;
@@ -208,10 +229,10 @@ export async function publishProfile(
   }
   let res = await send(cred);
   if (res.status === 401 || res.status === 409) {
-    // An env credential must NEVER enter the heal below: deleteToken() would destroy an unrelated
-    // file login, and a device flow can't fix an env var. Deterministic for this process (no edit
-    // changes the environment), so PublishRefusal — the interactive loop exits instead of
-    // re-offering a retry that fails identically.
+    // An env credential must NEVER enter the heal below: its re-login would overwrite (and the
+    // mint revoke) an unrelated file login, and a device flow can't fix an env var. Deterministic
+    // for this process (no edit changes the environment), so PublishRefusal — the interactive
+    // loop exits instead of re-offering a retry that fails identically.
     if (cred.source === "env") {
       throw new PublishRefusal(
         res.status === 401
@@ -228,8 +249,9 @@ export async function publishProfile(
     // unexplained GitHub auth challenge is indistinguishable from a phishing surprise.
     const was401 = res.status === 401;
     // The credential whose token just got the 401/409 — the identity the merge was built under.
-    // Captured before deleteToken() below: on 401 the file is gone, so this in-memory snapshot is
-    // the only pre-reauth reference the retry can be checked against.
+    // Captured before the re-login below: on 401 the file may be gone, and the re-login replaces
+    // it either way, so this in-memory snapshot is the only pre-reauth reference the retry can be
+    // checked against.
     const before = cred;
     console.log(
       message(
@@ -238,7 +260,9 @@ export async function publishProfile(
           : "The server no longer recognizes your handle. Logging in again to retry the publish.",
       ),
     );
-    if (was401) await deleteToken();
+    // A file forgetRejected keeps (a non-Worker 401, or a token a concurrent login wrote since) is
+    // what login() sends as `revoke`, so the mint retires it instead of leaving it live.
+    if (was401) await forgetRejected(cred, res);
     // never ensureLogin(): no second, unexplained device flow
     cred = await loginOrRefuse(opts.prompter);
     // NEVER retry a pre-reauth merge under a different identity. The merge was built from a read
@@ -301,7 +325,10 @@ export async function publishProfile(
       throw new PublishRefusal(was401 ? otherAccount : rebound);
     }
     res = await send(cred);
-    if (res.status === 401) throw new PublishRefusal("Authentication failed. Run `ymmv login`.");
+    if (res.status === 401) {
+      await forgetRejected(cred, res);
+      throw new PublishRefusal("Authentication failed. Run `ymmv login`.");
+    }
     if (res.status === 409) {
       // The dominant body here since the bound-handle guard is handle_not_bound — but the CLI has
       // ALREADY re-logged-in and retried, so surfacing the server's "Run `ymmv login` and retry."
@@ -391,11 +418,11 @@ export interface OwnProfile {
  *  read-modify-write command builds its merge on. Returns null only for the Worker's own
  *  `{error:"not_found"}` 404 (no profile yet); a 404 of any other shape is a Worker deployed before
  *  this route existed and THROWS — reading it as "no profile" would publish from scratch over
- *  whatever is live. Deliberately NO auto-reauth: a 401 here is answered with the login
- *  instruction. A device flow inside the read would have to hand its new credential back to the
- *  command (and the loop's reloads), and the merge the command builds afterwards would be judged
- *  against the old one; publishProfile keeps its own heal for a token revoked between read and
- *  write. Throws plain Errors with finished copy otherwise. */
+ *  whatever is live. Deliberately NO auto-reauth: a 401 here drops the dead file token and is
+ *  answered with the login instruction. A device flow inside the read would have to hand its new
+ *  credential back to the command (and the loop's reloads), and the merge the command builds
+ *  afterwards would be judged against the old one; publishProfile keeps its own heal for a token
+ *  revoked between read and write. Throws plain Errors with finished copy otherwise. */
 export async function fetchOwnProfile(cred: Credential): Promise<OwnProfile | null> {
   assertVerified(cred);
   const res = await safeFetch(
@@ -409,6 +436,7 @@ export async function fetchOwnProfile(cred: Credential): Promise<OwnProfile | nu
     BASE,
   );
   if (res.status === 401) {
+    await forgetRejected(cred, res);
     throw new Error(
       cred.source === "env"
         ? ENV_TOKEN_REJECTED_MINT_AGAIN
@@ -445,7 +473,8 @@ export async function fetchOwnProfile(cred: Credential): Promise<OwnProfile | nu
  * lands on an identity the user never confirmed (publish's drift guard, applied to delete).
  * Deliberately NO auto-reauth: a 401 here means the token is already dead, and silently
  * re-logging-in could delete a DIFFERENT account than the one the user just confirmed (a device-flow
- * account switch). Make the user re-login + re-run `delete`, which re-confirms the current handle.
+ * account switch). Make the user re-login + re-run `delete`, which re-confirms the current handle
+ * (the dead file token is dropped first, so that login does not ask about it).
  * `redirect: "manual"` so a proxy redirect to a 200 can't masquerade as a successful delete.
  */
 export async function deleteProfile(cred: Credential): Promise<void> {
@@ -460,6 +489,7 @@ export async function deleteProfile(cred: Credential): Promise<void> {
     BASE,
   );
   if (res.status === 401) {
+    await forgetRejected(cred, res);
     // Same env split as publish: a dead env token is not healable by `ymmv login` HERE (the env
     // var keeps winning), so the copy must name the variable instead.
     throw new Error(

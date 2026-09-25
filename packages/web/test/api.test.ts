@@ -95,16 +95,26 @@ beforeEach(async () => {
   await bindHandle(GID1, "alice"); // most tests publish as gid1/"alice"; gid2 stays unbound
 });
 
+// The CLI drops a stored token only on this exact 401 body (anything else, such as a proxy page,
+// keeps the file): pinned on every authed route the CLI reads it from.
+const UNAUTHORIZED = { error: "unauthorized" };
+
 describe("POST auth", () => {
   it("401 on a missing bearer", async () => {
-    expect((await POST(postCtx(null, profile("alice")))).status).toBe(401);
+    const res = await POST(postCtx(null, profile("alice")));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(UNAUTHORIZED);
   });
   it("401 on an unknown token", async () => {
-    expect((await publish("not-a-real-token", profile("alice"))).status).toBe(401);
+    const res = await publish("not-a-real-token", profile("alice"));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(UNAUTHORIZED);
   });
   it("401 on a revoked token", async () => {
     await seedToken("revoked-tok", 7777, { revoked: true });
-    expect((await publish("revoked-tok", profile("alice"))).status).toBe(401);
+    const res = await publish("revoked-tok", profile("alice"));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(UNAUTHORIZED);
   });
   it("200 on a valid token", async () => {
     expect(
@@ -731,7 +741,9 @@ const del = (token: string) => DELETE(deleteCtx(token));
 
 describe("DELETE — hard delete + reclaim protection", () => {
   it("401 without a token", async () => {
-    expect((await DELETE(deleteCtx(null))).status).toBe(401);
+    const res = await DELETE(deleteCtx(null));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual(UNAUTHORIZED);
   });
 
   it("removes the profile (404), drops the entries, and revokes the token", async () => {
