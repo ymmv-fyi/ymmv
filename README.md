@@ -5,9 +5,9 @@
 [![npm](https://img.shields.io/npm/v/ymmv-cli)](https://www.npmjs.com/package/ymmv-cli)
 [![CI](https://github.com/ymmv-fyi/ymmv/actions/workflows/ci.yml/badge.svg)](https://github.com/ymmv-fyi/ymmv/actions/workflows/ci.yml)
 
-Editor, OS, shell, terminal, theme and more, published to a page at
-`ymmv.fyi/<handle>` in about 10 seconds. See a live one:
-[ymmv.fyi/bardisty](https://ymmv.fyi/bardisty).
+One command puts your editor, OS, shell, terminal, theme and the rest of your
+setup on a page at `ymmv.fyi/<handle>`. It takes about 10 seconds. Here's a
+live one: [ymmv.fyi/bardisty](https://ymmv.fyi/bardisty).
 
 ![Running npx ymmv-cli to detect, confirm, and publish a dev stack to a live ymmv.fyi page](docs/demo.gif)
 
@@ -18,73 +18,106 @@ npx ymmv-cli@latest           # detect your stack, confirm, go live at ymmv.fyi/
 npx ymmv-cli@latest bardisty  # view someone's stack in the terminal
 ```
 
-The first run shows what it detected before you sign in with GitHub, then
-asks for the fields it could not detect (font, theme and dotfiles always).
-Every run after that goes straight to detect, confirm, publish: the preview
-marks any value your environment now detects differently, and `d` takes the
-ones you want, so updating your page is the same command again. The preview
-also marks what publishing will change on your live page: `~` changed,
-`+` new, `-` cleared. If nothing would change, Enter publishes nothing.
-Works on macOS, Linux, Windows, and WSL.
+Works on macOS, Linux, Windows, and WSL, with Node 22 or newer. If you'd
+rather type `ymmv`, install it once with `npm i -g ymmv-cli`. The rest of this
+page uses the short form.
 
-## What you get
+The first run goes like this:
 
-- **Auto-detection.** It reads your OS, shell, prompt, terminal, editor, multiplexer,
-  version manager, window manager, browser, and AI tool from the environment and
-  shows them on the preview. You confirm or edit.
-- **Nothing publishes until you confirm.** Detection only pre-fills, and `ymmv delete`
-  removes everything.
-- **Diffs.** View someone's profile while you're logged in and you'll see how your
-  stack compares:
+1. It shows what it detected on your machine.
+2. You sign in with GitHub. Your GitHub username becomes your handle.
+3. It asks for the fields it could not detect (font, theme and dotfiles always).
+4. You confirm, and the page goes live.
 
-  ```
-    how bardisty differs from you
+## Diff your stack against anyone's
 
-            BARDISTY  YOU
-  ~ Editor  Zed       VS Code
-  = Shell   bash      bash
-  ~ Theme   Gruvbox   Catppuccin
-  ~ Font    Lilex     JetBrains Mono
+Sign in, then view someone's profile. The CLI lines their stack up against
+yours:
 
-    3 differ   1 shared
-  ```
+```
+  how bardisty differs from you
 
-  On the web, type a handle into the `diff vs` box on any profile page, or go
-  straight to `ymmv.fyi/<them>/vs/<you>`.
+          BARDISTY  YOU
+~ Editor  Zed       VS Code
+= Shell   bash      bash
+~ Theme   Gruvbox   Catppuccin
+~ Font    Lilex     JetBrains Mono
 
-- **Open data.** Every profile is JSON too: `GET https://ymmv.fyi/api/v1/u/<handle>`.
-  Full contract (shape, statuses, caching, CORS): [docs/api.md](docs/api.md).
+  3 differ   1 shared
+```
+
+On the web, type a handle into the `diff vs` box on any profile page, or go
+straight to `ymmv.fyi/<them>/vs/<you>`.
+
+## Updating your page
+
+Run `ymmv` again. The preview marks what publishing would change on your live
+page: `~` changed, `+` new, `-` cleared. If nothing would change, it says so,
+and Enter leaves the page alone.
+
+At the `Publish to ymmv.fyi/<you>?` prompt:
+
+- `y` publishes.
+- `n` stops without publishing.
+- `e` edits one field by name. Press Enter at the field question to go through
+  all 13.
+- `d` shows up when your machine now detects a different tool than the one
+  you saved. Say you switched to Neovim. The Editor row then reads
+  `(detected: Neovim)`, and `d` asks about each marked row. `y` takes the
+  detected value. `n` keeps yours, and the CLI stops marking that row on this
+  machine until either value changes. `ymmv --reset-marks` brings the marks
+  back.
 
 ## Commands
 
-Run with `npx ymmv-cli@latest`, or install once with `npm i -g ymmv-cli` for
-the short `ymmv` used below:
+| Command                            | What it does                                                         |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `ymmv`                             | Detect, confirm, publish. `ymmv publish` is the same command.        |
+| `ymmv <handle>`                    | View a profile, or diff it against yours when you're signed in.      |
+| `ymmv set editor Neovim`           | Change one value.                                                    |
+| `ymmv set --extra "Keyboard=HHKB"` | Add a free-form line of your own. `-e` works too.                    |
+| `ymmv unset editor`                | Remove one value. `ymmv set editor -` does the same.                 |
+| `ymmv unset --extra "Keyboard"`    | Remove an extra.                                                     |
+| `ymmv delete`                      | Delete your profile. `-y` skips the confirm, for scripts.            |
+| `ymmv login`                       | Sign in with GitHub.                                                 |
+| `ymmv logout`                      | Sign out.                                                            |
+| `ymmv update`                      | Update the CLI to the latest release, for a global install.          |
+| `ymmv version`                     | Print the CLI version.                                               |
 
-- `ymmv` detects, confirms, and publishes. `ymmv publish` is the same command. At the confirm,
-  `e` edits one field by name, or all of them.
-- `ymmv <handle>` views a profile, or diffs it against yours when you're logged in.
-- `ymmv set editor Neovim` changes one value.
-- `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form, since only a
-  full URL links on your page. The publish prompts offer the same.
-- `ymmv set --extra "Keyboard=HHKB"` adds a free-form line of your own. `-e` works too.
-- `ymmv unset editor` removes one value, as does `ymmv set editor -`.
-- `ymmv unset --extra "Keyboard"` removes an extra.
-- `ymmv delete` removes your profile. `ymmv delete -y` skips the confirm, for scripts.
-- `ymmv login` signs in with GitHub. If you're already logged in, it names the account and
-  asks before signing in again. `ymmv login -y` skips the question, and is required when the
-  output is piped or redirected.
-- `ymmv logout` signs out.
-- `ymmv update` updates the CLI to the latest release. Use it to keep a global install current.
-- `ymmv version` prints the CLI version.
+A few commands ask before acting:
+
+- `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form,
+  since only a full URL turns into a link on your page. The publish prompts
+  offer the same.
+- If you're already signed in, `ymmv login` names the account and asks
+  before signing in again. `ymmv login -y` skips the question. You need `-y`
+  when the output is piped or redirected.
+
+Environment variables and publishing from CI are covered in the
+[CLI README](packages/cli/README.md).
+
+## What leaves your machine
+
+- **Auto-detection.** The CLI reads your OS, shell, prompt, terminal, editor,
+  multiplexer, version manager, window manager, browser, and AI tool from the
+  environment. Those values only fill in the preview.
+- **Nothing publishes until you confirm.** Once it's up, `ymmv delete` removes it.
+- **Your page is public, and so is its JSON.** `GET https://ymmv.fyi/api/v1/u/<handle>`
+  returns the same stack. The shape, statuses, caching and CORS rules are in
+  [docs/api.md](docs/api.md).
 
 ## Developing
 
-Node 22+ and pnpm. Three packages: `shared` (types, tool catalog, diff engine),
-`cli` (the `ymmv-cli` npm package), and `web` (Astro on Cloudflare Workers + D1).
+You need Node 22+ and pnpm. The repo has three packages:
+
+- `packages/shared` holds the types, the tool catalog and the diff engine. The
+  other two build on it.
+- `packages/cli` is the `ymmv-cli` npm package.
+- `packages/web` is the site and API, built with Astro on Cloudflare Workers + D1.
 
 ```sh
 pnpm install
-pnpm build     # all packages; @ymmv/shared first, cli and web depend on it
+pnpm build     # all packages, @ymmv/shared first
 pnpm dev       # hot-reloading site at localhost:4321
 ```
 
@@ -96,13 +129,17 @@ pnpm --filter @ymmv/web exec playwright install chromium   # once
 pnpm --filter @ymmv/web test:e2e                           # for web changes
 ```
 
-To try your local CLI, run `node packages/cli/dist/cli.js` after a build, with
-`YMMV_API` pointed at a local Worker so writes stay off production. To browse
-the site with real data, `pnpm --filter @ymmv/web e2e:serve` starts a seeded
-local Worker (real D1 and bindings) at `localhost:8788`.
+To try your local CLI without touching production, start a seeded local
+Worker (real D1 and bindings), then point the CLI at it from a second terminal.
+The same Worker serves the site at `localhost:8788`.
 
-Versions are tag-driven: every `package.json` stays at `0.0.0` and CI stamps the
-real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
+```sh
+pnpm --filter @ymmv/web e2e:serve
+YMMV_API=http://localhost:8788 node packages/cli/dist/cli.js bardisty
+```
+
+Versions come from tags. Every `package.json` stays at `0.0.0`, and CI stamps
+the real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
 
 ## License
 
