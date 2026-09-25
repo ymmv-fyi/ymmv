@@ -1136,9 +1136,22 @@ export function localTokenKept(): string {
   );
 }
 
-/** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. */
+/** `ymmv delete` — confirm, then hard-delete server-side + drop the now-revoked local token. With
+ *  nothing stored and no way to confirm (no -y, no prompter) it stops before any sign-in: a whole
+ *  device flow that can only end in the refusal below is wasted. It points at `ymmv login`, not at
+ *  -y: `ymmv delete -y > out.txt` would sign in as whatever account the browser has open and delete
+ *  it with the name only in the file, while a login names the account first. A stored login or a
+ *  YMMV_TOKEN reaches the refusal below, which names the target; -y with nothing stored signs in
+ *  first. A stdin that is not a terminal skips the early stop: login() then says the device flow
+ *  can't run at all. */
 export async function runDelete(io: InteractiveIO): Promise<void> {
-  const cred = await ensureLogin(undefined, io.prompter);
+  const known = await loadCredential();
+  if (known === null && !io.yes && (!io.interactive || !io.prompter) && process.stdin.isTTY) {
+    console.error(message("Not logged in. Run `ymmv login` first, then `ymmv delete`."));
+    process.exitCode = 1;
+    return;
+  }
+  const cred = await ensureLogin(known, io.prompter);
   // BASE-derived like every other printed page reference — consent for a permanent delete must
   // name the host actually being hit (YMMV_API can point this at a dev/staging Worker). Delete acts
   // on the TOKEN's account (the request carries no handle), so the handle named here must be one
