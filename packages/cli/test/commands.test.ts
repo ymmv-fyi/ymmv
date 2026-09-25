@@ -25,6 +25,7 @@ import {
   publish,
   resolveField,
   runDelete,
+  runLogin,
   runSet,
   runUnset,
   view,
@@ -34,7 +35,7 @@ import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
-import { sanitizeValue } from "../src/render.js";
+import { link, sanitizeValue } from "../src/render.js";
 import { deleteTokenIf, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
@@ -4912,5 +4913,203 @@ describe("a re-login mid-write (the POST answered 401) gets the command's prompt
     await runUnset({ kind: "curated", key: "shell" }, prompter);
     expect(fetchFn).toHaveBeenCalledTimes(3);
     expect(login).toHaveBeenCalledWith({ prompter });
+  });
+});
+
+// `ymmv login` with a stored login names the account and asks before a device flow (#79): running
+// login is the only way to see the binding, and a finished flow retires the stored token.
+describe("runLogin", () => {
+  const STATE = "\n  Logged in as me (https://ymmv.fyi/me).";
+  const HINT = "\n  next: run ymmv to publish your stack";
+  beforeEach(() => {
+    vi.mocked(login).mockReset();
+    vi.mocked(login).mockResolvedValue(undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("nothing stored: straight to the device flow, no question", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    const prompter = stubPrompter();
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(login).toHaveBeenCalledWith({ prompter });
+    expect(logs).toContain(HINT);
+  });
+
+  it("stored: names the account, and n (the default) exits 0 without a device flow", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(prompter.confirm).toHaveBeenCalledWith("Log in again?", false);
+    expect(login).not.toHaveBeenCalled();
+    expect(logs).toEqual([STATE]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("stored + y: the device flow runs, with the same prompter for its browser offer", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(true) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(login).toHaveBeenCalledWith({ prompter });
+    expect(logs).toEqual([STATE, HINT]);
+  });
+
+  /** Force stdin's isTTY for a body (vitest pipes it, so it is normally falsy). */
+  async function withStdinTTY(value: boolean, body: () => Promise<void>): Promise<void> {
+    const saved = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
+    try {
+      await body();
+    } finally {
+      if (saved) Object.defineProperty(process.stdin, "isTTY", saved);
+      else Reflect.deleteProperty(process.stdin, "isTTY");
+    }
+  }
+
+  it("-y skips the question, and a stdin with no terminal goes on to login() (which refuses)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter();
+    await runLogin({ interactive: true, yes: true, prompter });
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(login).toHaveBeenLastCalledWith({ prompter });
+    // -y would not help without a terminal on stdin: login()'s own refusal says why.
+    await withStdinTTY(false, () => runLogin({ interactive: false, yes: false }));
+    expect(login).toHaveBeenLastCalledWith({ prompter: undefined });
+    expect(logs).not.toContain(STATE);
+    expect(logs.filter((l) => l === HINT)).toHaveLength(2); // a login that ran says what's next
+  });
+
+  it("output piped or redirected: a stored login needs -y, like `ymmv` and `ymmv delete`", async () => {
+    // The question would be invisible, and a flow finished through `| tee` would retire the
+    // stored login unasked.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    await withStdinTTY(true, () => runLogin({ interactive: false, yes: false }));
+    expect(login).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errs).toEqual([
+      "\n  Logged in as me (https://ymmv.fyi/me). Re-run with -y to log in again: ymmv login -y",
+    ]);
+    expect(logs).toEqual([]);
+    process.exitCode = undefined;
+    await withStdinTTY(true, () => runLogin({ interactive: false, yes: true }));
+    expect(login).toHaveBeenCalledWith({ prompter: undefined });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a stored login with no handle says so in the mint's words", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(logs).toEqual([
+      "\n  Logged in. No handle bound (your GitHub username is a reserved word).",
+    ]);
+  });
+
+  it("sanitizes the stored handle before echoing it (token.json is untrusted print input)", async () => {
+    const esc = String.fromCharCode(0x1b);
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: `me${esc}[31m` }));
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(logs).toEqual([STATE]);
+  });
+
+  it("Ctrl+C at the question: exit 130, no device flow", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockRejectedValue(new PromptAborted()) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(login).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(130);
+    expect(logs).toEqual([STATE, ""]);
+  });
+
+  it("YMMV_TOKEN set: warns on stderr before naming the stored login and before the flow", async () => {
+    // Every command reads the env token first, so the stored account is not the one they act as;
+    // the warn is also the Ctrl+C window ahead of the device-code request.
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(true) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(errs).toEqual([
+      "\n  YMMV_TOKEN is set and takes precedence over the stored login. A login here is " +
+        "saved but not used until you unset it.",
+    ]);
+    const warned = vi.mocked(console.error).mock.invocationCallOrder[0] as number;
+    expect(warned).toBeLessThan(vi.mocked(console.log).mock.invocationCallOrder[0] as number);
+    expect(warned).toBeLessThan(vi.mocked(login).mock.invocationCallOrder[0] as number);
+  });
+
+  it("YMMV_TOKEN set: the warn also leads -y, nothing stored, and no terminal", async () => {
+    // Those paths go straight to the device flow: the warn is the only Ctrl+C window before a
+    // login that the env token will shadow is saved.
+    vi.stubEnv("YMMV_TOKEN", "ymmv_env");
+    const cases: Array<[StoredToken | null, Parameters<typeof runLogin>[0]]> = [
+      [stored(), { interactive: true, yes: true, prompter: stubPrompter() }],
+      [null, { interactive: true, yes: false, prompter: stubPrompter() }],
+      [stored(), { interactive: false, yes: false }],
+    ];
+    for (const [tok, io] of cases) {
+      errs.length = 0;
+      vi.mocked(console.error).mockClear();
+      vi.mocked(login).mockClear();
+      vi.mocked(loadToken).mockResolvedValue(tok);
+      await runLogin(io);
+      expect(errs.join("\n")).toContain("YMMV_TOKEN is set and takes precedence");
+      expect(vi.mocked(console.error).mock.invocationCallOrder[0] as number).toBeLessThan(
+        vi.mocked(login).mock.invocationCallOrder[0] as number,
+      );
+    }
+  });
+
+  it("a stored handle that strips to nothing reads as no handle", async () => {
+    const esc = String.fromCharCode(0x1b);
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: `${esc}[31m` }));
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(logs).toEqual([
+      "\n  Logged in. No handle bound (your GitHub username is a reserved word).",
+    ]);
+  });
+
+  it("an empty YMMV_TOKEN is unset: no warn", async () => {
+    vi.stubEnv("YMMV_TOKEN", "");
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    expect(errs).toEqual([]);
+  });
+
+  it("with color on, the page is a link that shows ymmv.fyi/<handle>", async () => {
+    vi.stubEnv("FORCE_COLOR", "1");
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(false) });
+    await runLogin({ interactive: true, yes: false, prompter });
+    const esc = String.fromCharCode(0x1b);
+    expect(logs).toEqual([`\n  Logged in as me (${link("https://ymmv.fyi/me", true)}).`]);
+    expect(logs[0]).toContain(`${esc}]8;;https://ymmv.fyi/me${esc}`); // the OSC-8 target
+    expect(logs[0]).not.toContain("(https://"); // the label is the short form
+  });
+
+  it("a prompt failure other than ^C propagates, with no device flow and no exit 130", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const boom = new Error("stdin went away");
+    const prompter = stubPrompter({ confirm: vi.fn().mockRejectedValue(boom) });
+    await expect(runLogin({ interactive: true, yes: false, prompter })).rejects.toBe(boom);
+    expect(login).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    expect(logs).toEqual([STATE]);
+  });
+
+  it("a device flow that fails prints no next-step hint (after a yes too)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.mocked(login).mockRejectedValue(new Error("Device login needs an interactive terminal."));
+    await expect(runLogin({ interactive: false, yes: false })).rejects.toThrow(
+      /interactive terminal/,
+    );
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const prompter = stubPrompter({ confirm: vi.fn().mockResolvedValue(true) });
+    await expect(runLogin({ interactive: true, yes: false, prompter })).rejects.toThrow(
+      /interactive terminal/,
+    );
+    expect(logs).not.toContain(HINT);
   });
 });

@@ -350,6 +350,25 @@ describe("resolveArg", () => {
     expect(resolveArg(["logout", "--all"]).kind).toBe("error");
   });
 
+  it("`login -y` skips the already-logged-in question; one consent token, nothing else", () => {
+    expect(resolveArg(["login"])).toEqual({ kind: "login", yes: false });
+    expect(resolveArg(["login", "-y"])).toEqual({ kind: "login", yes: true });
+    expect(resolveArg(["login", "--yes"])).toEqual({ kind: "login", yes: true });
+    for (const argv of [
+      ["login", "x"],
+      ["login", "-y", "-y"],
+    ]) {
+      expect(resolveArg(argv)).toEqual({ kind: "error", message: "usage: ymmv login [-y]" });
+    }
+    expect(resolveArg(["logout", "-y"]).kind).toBe("error");
+  });
+
+  it("`-y login` points at `ymmv login -y`", () => {
+    const cmd = resolveArg(["-y", "login"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toMatch(/ymmv login -y/);
+  });
+
   it("`view <handle> <extra>` → usage error (second handle never silently dropped)", () => {
     expect(resolveArg(["view", "a", "b"]).kind).toBe("error");
   });
