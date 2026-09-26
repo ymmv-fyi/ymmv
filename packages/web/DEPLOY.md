@@ -27,6 +27,27 @@ release (`ymmv <handle>` still renders, without a diff). Every write command (`y
 the Worker back to a build older than the published CLI expects, and when a manual deploy
 precedes a CLI tag, deploy first, tag second.
 
+## Canonical origin + HSTS
+
+The Worker (`src/middleware.ts`) redirects `http://` and `www.` to `https://ymmv.fyi`, same path
+and query: 301 for GET/HEAD, 308 for other methods. Page and API responses on `ymmv.fyi` and
+`www.ymmv.fyi` over https carry `strict-transport-security: max-age=31536000; includeSubDomains`.
+No zone setting is involved ("Always Use HTTPS" stays off).
+
+- **Static assets get neither.** Workers Static Assets serves `/_astro/*` and `public/*` before
+  the Worker runs, so `http://ymmv.fyi/og.png` still answers 200, with no HSTS header. A few
+  Astro replies skip the middleware too (listed in `src/middleware.ts`). Pages link assets
+  root-relative and every page is Worker-rendered, so browsers get HSTS on their first page view,
+  and one pinned response covers the host.
+- **HSTS can't be taken back early.** A browser that saw it refuses plain http on `ymmv.fyi`
+  and every subdomain for a year, so every `*.ymmv.fyi` DNS record, existing or new, must serve
+  HTTPS. Cloudflare's Universal SSL covers the apex and first-level names only: a deeper name
+  (`a.b.ymmv.fyi`) needs a Worker custom domain or an advanced certificate, and a DNS-only
+  record needs HTTPS at its origin.
+- **A new custom domain** in `wrangler.jsonc` must also be added to `canonicalHosts()` in
+  `src/lib/canonical-origin.ts`, or it serves every page as a second origin
+  (`test/wrangler-config.test.ts` fails until both match).
+
 ## Two gotchas (do not skip)
 
 - **Never bare-deploy.** Without `CLOUDFLARE_ENV=production` at build time, the config bakes the
@@ -99,3 +120,22 @@ pnpm exec wrangler deploy -c dist/server/wrangler.json
 ```
 
 Confirm the output names Worker `ymmv-production` and the `ymmv.fyi` / `www.ymmv.fyi` custom domains.
+
+### 6. Smoke the live site
+
+```powershell
+curl.exe -s -o NUL -w "%{http_code}\n" https://ymmv.fyi/api/v1/u/bardisty   # 200
+foreach ($u in 'https://ymmv.fyi/', 'https://www.ymmv.fyi/bardisty') {
+  curl.exe -sI $u | Select-String '^HTTP/|^location:|^strict-transport'
+}
+foreach ($u in 'http://ymmv.fyi/bardisty?x=1', 'http://www.ymmv.fyi/') {
+  curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" $u
+}
+curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" -X POST http://ymmv.fyi/api/v1/profile
+```
+
+Expect, in order: `200`; the apex 200 and the www 301 to `https://ymmv.fyi/bardisty`, each
+with `strict-transport-security: max-age=31536000; includeSubDomains`;
+`301 https://ymmv.fyi/bardisty?x=1`, `301 https://ymmv.fyi/`; `308 https://ymmv.fyi/api/v1/profile`.
+An http row answering 200 means the Worker never saw an `http:` scheme in `request.url`, so the
+redirect didn't fire: stop and investigate.
