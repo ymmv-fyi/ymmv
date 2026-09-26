@@ -30,12 +30,16 @@ precedes a CLI tag, deploy first, tag second.
 ## Canonical origin + HSTS
 
 The Worker (`src/middleware.ts`) redirects `http://` and `www.` to `https://ymmv.fyi`, same path
-and query: 301 for GET/HEAD, 308 for other methods. Page and API responses on `ymmv.fyi` and
+and query: 301 for GET/HEAD, 308 for other methods. A plain `http://` request with an
+`authorization` header or a method other than GET/HEAD/OPTIONS gets `403 https_required`
+instead, with no `Location`, so a client that follows redirects can't resend its credential in
+cleartext on every call. Page and API responses on `ymmv.fyi` and
 `www.ymmv.fyi` over https carry `strict-transport-security: max-age=31536000; includeSubDomains`.
 No zone setting is involved ("Always Use HTTPS" stays off).
 
-- **Static assets get neither.** Workers Static Assets serves `/_astro/*` and `public/*` before
-  the Worker runs, so `http://ymmv.fyi/og.png` still answers 200, with no HSTS header. A few
+- **Static assets get none of this.** Workers Static Assets serves `/_astro/*` and `public/*`
+  before the Worker runs, so `http://ymmv.fyi/og.png` still answers 200, with no HSTS header, and
+  so does that request carrying an `authorization` header (no 403). A few
   Astro replies skip the middleware too (listed in `src/middleware.ts`). Pages link assets
   root-relative and every page is Worker-rendered, so browsers get HSTS on their first page view,
   and one pinned response covers the host.
@@ -136,6 +140,8 @@ curl.exe -s -o NUL -w "%{http_code} %{redirect_url}\n" -X POST http://ymmv.fyi/a
 
 Expect, in order: `200`; the apex 200 and the www 301 to `https://ymmv.fyi/bardisty`, each
 with `strict-transport-security: max-age=31536000; includeSubDomains`;
-`301 https://ymmv.fyi/bardisty?x=1`, `301 https://ymmv.fyi/`; `308 https://ymmv.fyi/api/v1/profile`.
-An http row answering 200 means the Worker never saw an `http:` scheme in `request.url`, so the
-redirect didn't fire: stop and investigate.
+`301 https://ymmv.fyi/bardisty?x=1`, `301 https://ymmv.fyi/`; `403` with an empty redirect URL
+(the http POST is refused, not redirected).
+An http GET row answering 200, or the POST answering anything but 403 (the route's own 401, say),
+means the Worker never saw an `http:` scheme in `request.url`, so the redirect or refusal didn't
+fire: stop and investigate.
