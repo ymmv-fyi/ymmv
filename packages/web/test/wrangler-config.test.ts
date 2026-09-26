@@ -1,5 +1,8 @@
 import { type ParseError, parse } from "jsonc-parser";
 import { describe, expect, it } from "vitest";
+// ?raw like wrangler.jsonc below: a real import would pull the adapter into workerd.
+import astroConfigRaw from "../astro.config.mjs?raw";
+import { canonicalHosts } from "../src/lib/canonical-origin.ts";
 import { RETRY_AFTER } from "../src/lib/rate-limit.ts";
 // Vite's ?raw import ships the config as a plain string into workerd (no fs there). jsonc-parser
 // is the grammar wrangler itself reads the file with, so comment style can never fail this suite —
@@ -11,9 +14,12 @@ interface RatelimitBinding {
   namespace_id?: string;
   simple?: { limit?: number; period?: number };
 }
+interface Route {
+  pattern?: string;
+}
 interface WranglerConfig {
   ratelimits?: RatelimitBinding[];
-  env?: Record<string, { ratelimits?: RatelimitBinding[] }>;
+  env?: Record<string, { ratelimits?: RatelimitBinding[]; routes?: Route[] }>;
 }
 
 const errors: ParseError[] = [];
@@ -77,5 +83,19 @@ describe("wrangler.jsonc rate-limit invariants", () => {
       return id;
     });
     expect(new Set(ids).size).toBe(MATRIX.length);
+  });
+});
+
+describe("wrangler.jsonc custom domains", () => {
+  it("production routes exactly the hosts the middleware canonicalizes to an https site", () => {
+    // src/middleware.ts redirects canonicalHosts(context.site) to astro.config `site`. A custom
+    // domain added here but not there, or a `site` moved to www, would serve pages on a second
+    // origin again; an http `site` would 301 every https visitor down to plain http.
+    const site = /^\s*site:\s*"([^"]+)"/m.exec(astroConfigRaw)?.[1];
+    expect(site, "no `site:` string found in astro.config.mjs").toBeDefined();
+    const siteUrl = new URL(site ?? "");
+    expect(siteUrl.protocol).toBe("https:");
+    const patterns = (config.env?.production?.routes ?? []).map((r) => r.pattern).sort();
+    expect(patterns).toEqual(canonicalHosts(siteUrl).sort());
   });
 });

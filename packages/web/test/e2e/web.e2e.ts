@@ -254,6 +254,43 @@ test.describe("routing", () => {
     expect(json.headers()["access-control-allow-origin"]).toBe("*");
   });
 
+  test("www and http redirect to https://ymmv.fyi in the built Worker; localhost is left alone", async ({
+    request,
+  }) => {
+    // The unit suite calls onRequest directly; only this proves Astro loads src/middleware.ts.
+    const www = await request.get("/antfu?x=1", {
+      headers: { host: "www.ymmv.fyi" },
+      maxRedirects: 0,
+    });
+    expect(www.status()).toBe(301);
+    expect(www.headers().location).toBe("https://ymmv.fyi/antfu?x=1");
+
+    // An unmatched path renders through Astro's error route; the redirect must still win.
+    const unmatched = await request.get("/a/b", {
+      headers: { host: "www.ymmv.fyi" },
+      maxRedirects: 0,
+    });
+    expect(unmatched.status()).toBe(301);
+    expect(unmatched.headers().location).toBe("https://ymmv.fyi/a/b");
+
+    // Apex where only the scheme differs: wrangler dev always hands the Worker an http: URL, so
+    // a 301 proves nothing between the Worker entry and the middleware rewrites the scheme.
+    // Whether production's request.url carries a visitor's http: is checked only by the
+    // DEPLOY.md smoke. wrangler dev also rewrites response headers naming the request host back
+    // to its own http origin, so the Location's scheme isn't checkable here.
+    const apex = await request.get("/antfu?x=1", {
+      headers: { host: "ymmv.fyi" },
+      maxRedirects: 0,
+    });
+    expect(apex.status()).toBe(301);
+    expect(apex.headers().location).toMatch(/:\/\/ymmv\.fyi\/antfu\?x=1$/);
+
+    // Local http must stay reachable and must never be pinned to HTTPS.
+    const local = await request.get("/", { maxRedirects: 0 });
+    expect(local.status()).toBe(200);
+    expect(local.headers()["strict-transport-security"]).toBeUndefined();
+  });
+
   test("the JSON read is cross-origin readable and preflightable (the open-data contract)", async ({
     request,
   }) => {
