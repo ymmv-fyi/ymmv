@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { baseProblem, credentialEnvProblem, normalizeBase } from "../src/config.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  baseProblem,
+  credentialEnvProblem,
+  isCleartextBase,
+  isSameServer,
+  normalizeBase,
+  serverOrigin,
+} from "../src/config.js";
 
 // baseProblem is deliberately a pure function over the raw env value (BASE itself bakes at module
 // load, so env-stubbing after import can't exercise it) — and it validates the NORMALIZED value,
@@ -25,6 +32,54 @@ describe("baseProblem", () => {
     expect(baseProblem("https://ymmv.fyi")).toBeNull();
     expect(baseProblem("https://x.dev/")).toBeNull();
     expect(baseProblem("http://localhost:4321")).toBeNull();
+    expect(baseProblem("https://ymmv-staging.acct.workers.dev")).toBeNull();
+  });
+
+  it("accepts plain http on loopback only (localhost, 127.0.0.0/8, [::1])", () => {
+    for (const raw of ["http://127.0.0.1:8788", "http://127.1.2.3:8788", "http://[::1]:8788"]) {
+      expect(baseProblem(raw), raw).toBeNull();
+    }
+  });
+
+  it("refuses plain http anywhere else: the token would cross a network in cleartext", () => {
+    for (const raw of [
+      "http://x.dev",
+      "http://192.168.1.5:8788",
+      "http://host.docker.internal:8788",
+      "http://localhost.evil.com",
+    ]) {
+      const p = baseProblem(raw);
+      expect(p, raw).toContain("plain http");
+      expect(p, raw).toContain("Use https");
+    }
+  });
+
+  it("a host that only starts like a loopback address is not loopback (DNS can send it anywhere)", () => {
+    for (const raw of ["http://127.0.0.1.evil.com", "http://127.0.0.1.nip.io:8788"]) {
+      expect(baseProblem(raw), raw).toContain("plain http");
+    }
+  });
+
+  it("refuses every ymmv.fyi address but https://ymmv.fyi (the Worker redirects them)", () => {
+    // The Worker never serves these: an https alias redirects (the CLI never follows a redirect
+    // with a credential) and an http one refuses a credential with a 403, so login would fail
+    // only after the whole device flow.
+    for (const raw of [
+      "http://ymmv.fyi",
+      "https://www.ymmv.fyi",
+      "http://www.ymmv.fyi",
+      "https://ymmv.fyi.",
+      "https://www.ymmv.fyi.",
+      "https://ymmv.fyi:8443",
+      "http://ymmv.fyi:8080",
+    ]) {
+      const p = baseProblem(raw);
+      expect(p, raw).toContain("redirects to https://ymmv.fyi");
+      expect(p, raw).toContain("Use https://ymmv.fyi, or unset YMMV_API.");
+    }
+    // Hosts that merely contain the name are someone else's, and judged like any other origin.
+    expect(baseProblem("https://ymmv.fyi.evil.com")).toBeNull();
+    expect(baseProblem("https://notymmv.fyi")).toBeNull();
   });
 
   it("a scheme-less value names YMMV_API and the missing scheme, not the network", () => {
@@ -82,11 +137,101 @@ describe("baseProblem", () => {
   });
 
   it("every message is copy-rule clean: names YMMV_API, no em dashes", () => {
-    const bads = ["localhost:4321", "https://x.dev/api", " https://x.dev", "ftp://x.dev"];
+    const bads = [
+      "localhost:4321",
+      "https://x.dev/api",
+      " https://x.dev",
+      "ftp://x.dev",
+      "https://www.ymmv.fyi",
+      "http://x.dev",
+    ];
     for (const raw of bads) {
       const p = baseProblem(raw) as string;
       expect(p).toContain("YMMV_API");
       expect(p).not.toContain("—");
+    }
+  });
+});
+
+describe("isCleartextBase", () => {
+  it("is true for plain http to a host off this machine, false for https and loopback", () => {
+    for (const base of ["http://ymmv.fyi", "http://www.ymmv.fyi", "http://192.168.1.5:8788"]) {
+      expect(isCleartextBase(base), base).toBe(true);
+    }
+    for (const base of [
+      "https://ymmv.fyi",
+      "https://www.ymmv.fyi",
+      "http://localhost:8788",
+      "http://127.0.0.1:8788",
+      "http://[::1]:8788",
+    ]) {
+      expect(isCleartextBase(base), base).toBe(false);
+    }
+  });
+
+  it("never throws on token.json content that is not a URL", () => {
+    expect(isCleartextBase("B")).toBe(false);
+    expect(isCleartextBase("")).toBe(false);
+  });
+});
+
+// BASE is the default here (setup-env), so isSameServer compares against https://ymmv.fyi.
+describe("serverOrigin / isSameServer", () => {
+  it("maps every ymmv.fyi address to https://ymmv.fyi and leaves other bases alone", () => {
+    for (const alias of ["http://ymmv.fyi", "https://www.ymmv.fyi", "https://ymmv.fyi."]) {
+      expect(serverOrigin(alias), alias).toBe("https://ymmv.fyi");
+    }
+    expect(serverOrigin("https://ymmv.fyi")).toBe("https://ymmv.fyi");
+    expect(serverOrigin("http://localhost:8788")).toBe("http://localhost:8788");
+    expect(serverOrigin("https://ymmv.fyi.evil.com")).toBe("https://ymmv.fyi.evil.com");
+  });
+
+  it("never throws: an ungated logout BASE and every token.json base can be anything", () => {
+    expect(serverOrigin("localhost:4321")).toBe("localhost:4321");
+    expect(serverOrigin("not a url")).toBe("not a url");
+  });
+
+  it("a token stored under an alias belongs to the default server; other servers don't", () => {
+    expect(isSameServer("https://ymmv.fyi")).toBe(true);
+    expect(isSameServer("https://www.ymmv.fyi")).toBe(true);
+    expect(isSameServer("http://ymmv.fyi")).toBe(true);
+    expect(isSameServer("https://staging.example")).toBe(false);
+    expect(isSameServer("B")).toBe(false);
+  });
+
+  /** config.ts re-imported with BASE baked from `base`: BASE is fixed at import. */
+  async function configUnder(base: string): Promise<typeof import("../src/config.js")> {
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", base);
+    return import("../src/config.js");
+  }
+
+  it("under an alias BASE (logout skips the gate), a token stored under ymmv.fyi is the same server", async () => {
+    // `YMMV_API=https://www.ymmv.fyi ymmv logout` over a login minted at https://ymmv.fyi: the
+    // revoke goes to https://ymmv.fyi either way, so that token must count as retirable here.
+    try {
+      const fresh = await configUnder("https://www.ymmv.fyi");
+      expect(fresh.BASE).toBe("https://www.ymmv.fyi");
+      expect(fresh.serverOrigin()).toBe("https://ymmv.fyi");
+      expect(fresh.isSameServer("https://ymmv.fyi")).toBe(true);
+      expect(fresh.isSameServer("http://ymmv.fyi")).toBe(true);
+      expect(fresh.isSameServer("https://staging.example")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("under any other BASE, only that exact base is the same server (a ymmv.fyi token is not)", async () => {
+    try {
+      const fresh = await configUnder("https://staging.example");
+      expect(fresh.serverOrigin()).toBe("https://staging.example");
+      expect(fresh.isSameServer("https://staging.example")).toBe(true);
+      expect(fresh.isSameServer("https://ymmv.fyi")).toBe(false);
+      expect(fresh.isSameServer("https://www.ymmv.fyi")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
     }
   });
 });

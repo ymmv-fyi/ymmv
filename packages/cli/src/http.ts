@@ -165,6 +165,32 @@ export class NetworkError extends Error {
   }
 }
 
+/** A redirect answered to a `redirect: "manual"` request (every call that carries a credential).
+ *  Node's fetch hands back the real 3xx, not an opaqueredirect. Deterministic for the base, so it
+ *  must never read as "try again"; logout branches on the type for its own copy. */
+export class RedirectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RedirectError";
+  }
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+/** The RedirectError for `res`, or null when it isn't a redirect. Reads the status only: the
+ *  Location is wire input, and naming it would read as advice on where to send the login. The
+ *  YMMV_API hint follows serverBehindHint's split: only an override is the user's to fix. The body
+ *  is cancelled, best effort: the caller throws without reading it, and an unread body a server
+ *  keeps open would hold the socket, and the process, until the request timeout. */
+export function redirectError(res: Response, base: string): RedirectError | null {
+  if (!REDIRECT_STATUSES.has(res.status)) return null;
+  res.body?.cancel().catch(() => {});
+  return new RedirectError(
+    `${sanitizeValue(base)} answered with a redirect (${res.status}), which the CLI doesn't ` +
+      `follow with your login.${process.env.YMMV_API ? " Check YMMV_API." : ""}`,
+  );
+}
+
 /**
  * fetch, but ANY thrown failure (undici TypeError, TLS, proxy, bad URL — deliberately not just
  * TypeError) becomes an actionable "can't reach" error carrying the underlying cause. HTTP

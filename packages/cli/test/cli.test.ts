@@ -48,7 +48,7 @@ import { publish, runDelete, runLogin, runSet, runUnset } from "../src/commands.
 import { BASE } from "../src/config.js";
 import { login } from "../src/device-flow.js";
 import { dismissalsPath } from "../src/dismissals.js";
-import { NetworkError } from "../src/http.js";
+import { NetworkError, RedirectError } from "../src/http.js";
 import { main } from "../src/index.js";
 import { makePrompter, type Prompter } from "../src/prompt.js";
 import {
@@ -146,6 +146,41 @@ describe("YMMV_API startup validation", () => {
     expect(logs.join("\n")).not.toContain("Usage:");
   });
 
+  it("a redirecting ymmv.fyi address fails fast, names https://ymmv.fyi, and sends nothing", async () => {
+    vi.stubEnv("YMMV_API", "https://www.ymmv.fyi");
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await main(["login"]);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("Use https://ymmv.fyi, or unset YMMV_API.");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("plain http to a non-loopback host fails fast, before a write sends its token in cleartext", async () => {
+    vi.stubEnv("YMMV_API", "http://192.168.1.5:8788");
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await main(["set", "editor", "vim"]);
+    expect(process.exitCode).toBe(1);
+    expect(errs.join("\n")).toContain("uses plain http");
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(runSet).not.toHaveBeenCalled();
+  });
+
+  it("logout still runs under a ymmv.fyi alias YMMV_API, so the gate's advice never strands a token", async () => {
+    // The gate tells every other command to unset the alias; logout must revoke first.
+    vi.stubEnv("YMMV_API", "https://www.ymmv.fyi");
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+    await main(["logout"]);
+    expect(process.exitCode).toBeUndefined();
+    expect(errs.join("\n")).not.toContain("redirects to");
+    expect(revokeYmmvToken).toHaveBeenCalledWith("t");
+    expect(deleteTokenIf).toHaveBeenCalledWith("t");
+    expect(logs).toContain("\n  Logged out carol.");
+  });
+
   it("a valid override (trailing slash included) dispatches normally", async () => {
     vi.stubEnv("YMMV_API", "https://x.dev/");
     await main(["help"]);
@@ -222,9 +257,114 @@ describe("ymmv logout", () => {
     expect(logs.join("\n")).toContain("Logged out.");
   });
 
+  it("revokes a token stored under a ymmv.fyi alias: the same server, so no YMMV_API detour", async () => {
+    // An older CLI accepted https://www.ymmv.fyi; the gate now tells the user to unset it. A
+    // well-formed file under that base loads (token-store.test); one loadToken refuses (a corrupt
+    // handle) still logs out from the default base through the lenient read, not by pointing back
+    // at the address the gate refused.
+    // A file under http://ymmv.fyi takes this same lenient path by design: loadToken refuses it
+    // (its token crossed in cleartext), and logout must still revoke it.
+    for (const base of ["https://www.ymmv.fyi", "http://ymmv.fyi"]) {
+      vi.clearAllMocks();
+      logs.length = 0;
+      vi.mocked(loadToken).mockResolvedValue(null);
+      vi.mocked(peekCredential).mockResolvedValue({ base, token: "t-alias" });
+      vi.mocked(revokeYmmvToken).mockResolvedValue(true);
+      await main(["logout"]);
+      expect(revokeYmmvToken, base).toHaveBeenCalledWith("t-alias");
+      expect(deleteTokenIf, base).toHaveBeenCalledWith("t-alias");
+      expect(logs, base).toContain("\n  Logged out.");
+    }
+  });
+
+  it("a redirected revoke keeps the token and gives no YMMV_API advice (it would loop)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(revokeYmmvToken).mockRejectedValue(new RedirectError("redirected"));
+    await main(["logout"]);
+    expect(deleteTokenIf).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errs).toContain(
+      "\n  https://ymmv.fyi answered the revoke with a redirect. Your token is still active.",
+    );
+    expect(errs.join("\n")).not.toContain("YMMV_API");
+  });
+
+  it("under an alias YMMV_API, acts on the ymmv.fyi login and names https://ymmv.fyi, the server it hit", async () => {
+    // BASE bakes at import: re-import the graph under the alias (the vi.mock factories apply
+    // again). Only logout gets here under an alias; the revoke went to https://ymmv.fyi, so its
+    // copy must name that, never www.
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", "https://www.ymmv.fyi");
+    try {
+      const ts = await import("../src/token-store.js");
+      const ah = await import("../src/auth-http.js");
+      const http = await import("../src/http.js");
+      const fresh = await import("../src/index.js");
+      vi.mocked(ts.loadToken).mockResolvedValue(stored({ base: "https://ymmv.fyi" }));
+      vi.mocked(ah.revokeYmmvToken).mockRejectedValue(new http.RedirectError("redirected"));
+      await fresh.main(["logout"]);
+      expect(ah.revokeYmmvToken).toHaveBeenCalledWith("t");
+      expect(ts.deleteTokenIf).not.toHaveBeenCalled();
+      expect(errs).toContain(
+        "\n  https://ymmv.fyi answered the revoke with a redirect. Your token is still active.",
+      );
+      expect(errs.join("\n")).not.toContain("www.");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("under an alias YMMV_API, the other-server note names https://ymmv.fyi, never www", async () => {
+    // Logout is ungated, so BASE can be the alias the YMMV_API check refuses everywhere else.
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", "https://www.ymmv.fyi");
+    try {
+      const ts = await import("../src/token-store.js");
+      const fresh = await import("../src/index.js");
+      vi.mocked(ts.loadToken).mockResolvedValue(null);
+      vi.mocked(ts.peekCredential).mockResolvedValue(null);
+      vi.mocked(ts.peekBase).mockResolvedValue("https://staging.example");
+      await fresh.main(["logout"]);
+      expect(logs).toContain(
+        "\n  Not logged in to https://ymmv.fyi (a token for https://staging.example exists; " +
+          "set YMMV_API to that to log out of it).",
+      );
+      expect(logs.join("\n")).not.toContain("www.");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("under another server's YMMV_API, a token stored under an alias is named https://ymmv.fyi", async () => {
+    // The one case serverOrigin(otherBase) changes: advice to set YMMV_API to www would point at
+    // the address the YMMV_API check refuses.
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", "https://staging.example");
+    try {
+      const ts = await import("../src/token-store.js");
+      const fresh = await import("../src/index.js");
+      vi.mocked(ts.loadToken).mockResolvedValue(null);
+      vi.mocked(ts.peekCredential).mockResolvedValue(null);
+      vi.mocked(ts.peekBase).mockResolvedValue("https://www.ymmv.fyi");
+      await fresh.main(["logout"]);
+      expect(logs).toContain(
+        "\n  Not logged in to https://staging.example (a token for https://ymmv.fyi exists; " +
+          "set YMMV_API to that to log out of it).",
+      );
+      expect(logs.join("\n")).not.toContain("www.");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
   it("a blank or other-base token in a refused file is still 'Not logged in' (nothing to revoke)", async () => {
     for (const cred of [
       { base: BASE, token: "   " },
+      // A blank token under an alias is the same server's nothing, never "a token for www exists".
+      { base: "https://www.ymmv.fyi", token: "   " },
       { base: "https://other.example", token: "t-other" },
     ]) {
       vi.clearAllMocks();
@@ -236,6 +376,7 @@ describe("ymmv logout", () => {
       expect(revokeYmmvToken).not.toHaveBeenCalled();
       expect(deleteTokenIf).not.toHaveBeenCalled();
       expect(logs.join("\n")).toMatch(/Not logged in/);
+      expect(logs.join("\n")).not.toContain("www.");
     }
   });
 
@@ -605,6 +746,22 @@ describe("If-Match precondition (publish)", () => {
     await expect(publishProfile(PROFILE, MINE, { ifMatch: '"x"' })).rejects.toThrow(
       "Your profile changed since this command read it. Re-run the command.",
     );
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("a redirect is a PublishRefusal naming it, one POST, no login (a retry draws the same)", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(null, { status: 308, headers: { location: "https://elsewhere.example/" } }),
+      );
+    vi.stubGlobal("fetch", fetchFn);
+    const err = await publishProfile(PROFILE, MINE, { ifMatch: '"x"' }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(PublishRefusal);
+    expect((err as Error).message).toMatch(/answered with a redirect \(308\)/);
+    expect((err as Error).message).not.toContain("elsewhere.example");
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(login).not.toHaveBeenCalled();
   });
@@ -1308,6 +1465,16 @@ describe("deleteProfile", () => {
   it("throws on a non-ok status", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(status(500)));
     await expect(deleteProfile(FILE_CRED)).rejects.toThrow(/delete failed/);
+  });
+
+  it("a redirect throws a RedirectError, never 'delete failed' with a status to retry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 301, headers: { location: "/x" } })),
+    );
+    const err = await deleteProfile(FILE_CRED).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(RedirectError);
+    expect((err as Error).message).not.toMatch(/delete failed/);
   });
 
   it("surfaces a {message} body instead of the raw dump (same rule as publish)", async () => {

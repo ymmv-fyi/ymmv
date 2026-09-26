@@ -9,10 +9,10 @@ import {
   runUnset,
   view,
 } from "./commands.js";
-import { BASE, baseProblem, credentialEnvProblem } from "./config.js";
+import { baseProblem, credentialEnvProblem, isSameServer, serverOrigin } from "./config.js";
 import { retirable } from "./device-flow.js";
 import { dismissalsPath } from "./dismissals.js";
-import { isTimeoutError, NetworkError } from "./http.js";
+import { isTimeoutError, NetworkError, RedirectError } from "./http.js";
 import { makePrompter } from "./prompt.js";
 import { type Codes, colorEnabled, message, palette, sanitizeValue, useColor } from "./render.js";
 import { type Command, resolveArg } from "./resolve.js";
@@ -59,7 +59,8 @@ ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, 
 // user to retry — but tell the TRUTH about why: a connectivity failure (NetworkError / a body-read
 // timeout) gets "couldn't reach", while a server-reached failure (revokeYmmvToken's own
 // `logout failed: <status>` / bad-200-body throws) must not blame the user's connection.
-// A token for a different base is left untouched (base-scoping).
+// A token for a different server is left untouched (base-scoping; a ymmv.fyi alias base is the
+// same server, see isSameServer).
 async function logout(): Promise<void> {
   const stored = await loadToken();
   // A file loadToken refuses (a corrupt handle, a pre-#57 id) can still hold a LIVE token, and it
@@ -68,11 +69,14 @@ async function logout(): Promise<void> {
   const leftover = stored ? null : await peekCredential();
   const token = stored?.token ?? (retirable(leftover) ? leftover.token : null);
   if (token === null) {
+    // Same-server test as retirable(), and both servers named like login()'s warning: a ymmv.fyi
+    // alias reads as https://ymmv.fyi, never as an address the YMMV_API check refuses. BASE is
+    // ungated here, so it is sanitized like the file's base.
     const otherBase = await peekBase();
     console.log(
       message(
-        otherBase && otherBase !== BASE
-          ? `Not logged in to ${BASE} (a token for ${sanitizeValue(otherBase)} exists; set YMMV_API to that to log out of it).`
+        otherBase && !isSameServer(otherBase)
+          ? `Not logged in to ${sanitizeValue(serverOrigin())} (a token for ${sanitizeValue(serverOrigin(otherBase))} exists; set YMMV_API to that to log out of it).`
           : "Not logged in.",
       ),
     );
@@ -82,11 +86,15 @@ async function logout(): Promise<void> {
   try {
     revoked = await revokeYmmvToken(token);
   } catch (e) {
+    // A redirect gets no YMMV_API advice: the token is stored under this base, so pointing logout
+    // at the redirect target would only answer "Not logged in" and send the user back here.
     console.error(
       message(
         e instanceof NetworkError || isTimeoutError(e)
           ? "Couldn't reach the server to revoke. Your token is still active. Run `ymmv logout` again when connected."
-          : "The server didn't confirm the revoke. Your token is still active. Run `ymmv logout` again shortly.",
+          : e instanceof RedirectError
+            ? `${sanitizeValue(serverOrigin())} answered the revoke with a redirect. Your token is still active.`
+            : "The server didn't confirm the revoke. Your token is still active. Run `ymmv logout` again shortly.",
       ),
     );
     process.exitCode = 1;
@@ -182,10 +190,12 @@ export async function main(argv: string[]): Promise<void> {
   // fail with its real diagnosis at the first opportunity, not lie dormant until a network verb
   // wraps the failure in "Check your connection". EXCEPT logout: it only needs BASE to hit the
   // revoke URL that worked when the token was minted, gating it would permanently strand tokens
-  // stored under bases the gate now rejects (older CLIs accepted them) — and logout is env-blind
-  // (file token only), so a malformed env credential must not strand it either. And EXCEPT
-  // update: it never touches the ymmv API (npm registry cache + a package manager spawn only),
-  // and a broken env must not block the one command that might ship better env diagnostics.
+  // stored under bases the gate now rejects (older CLIs accepted them; a ymmv.fyi alias among
+  // them now redirects, so its revoke goes to https://ymmv.fyi, see serverOrigin) — and logout
+  // is env-blind (file token only), so a malformed env credential must not strand it either.
+  // And EXCEPT update: it never touches the ymmv API (npm registry cache + a package manager
+  // spawn only), and a broken env must not block the one command that might ship better env
+  // diagnostics.
   if (cmd.kind !== "logout" && cmd.kind !== "update") {
     const problem = baseProblem() ?? credentialEnvProblem();
     if (problem) {

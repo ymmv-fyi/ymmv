@@ -2,6 +2,24 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **`www.ymmv.fyi` and `http://ymmv.fyi` are refused as `YMMV_API`.** The CLI names
+  `https://ymmv.fyi` and stops before sending anything. It used to fail after the request, with
+  `login failed: 308` or advice to try again. `ymmv logout` still runs with either address and
+  revokes at `https://ymmv.fyi`. A login stored through `www.ymmv.fyi` keeps working once
+  `YMMV_API` is unset. One stored through `http://ymmv.fyi` reads as signed out, because its
+  token crossed the network unencrypted, and the next sign-in revokes it.
+- **A redirect is reported as one.** When a server answers with a redirect, the CLI says so
+  instead of printing the status and suggesting a retry.
+
+### Removed
+- **`YMMV_API` no longer accepts a plain `http://` server other than localhost.** `127.x` and
+  `[::1]` count as localhost. A server on your LAN or in Docker needs https, because the CLI
+  sends your token to it. `ymmv logout` still runs with such an address, so a login stored
+  under it can be revoked.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

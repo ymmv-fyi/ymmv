@@ -4,6 +4,8 @@ import {
   displayError,
   NetworkError,
   REQUEST_TIMEOUT_MS,
+  RedirectError,
+  redirectError,
   safeFetch,
   serverMessage,
   wireBody,
@@ -271,6 +273,75 @@ describe("withRetryHint", () => {
   it("drops the hint for an HTTP-date retry-after (would garble) and for a missing header", () => {
     expect(withRetryHint("slow down", res("Thu, 03 Jul 2026 04:00:00 GMT"))).toBe("slow down");
     expect(withRetryHint("slow down", res())).toBe("slow down");
+  });
+});
+
+describe("redirectError", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("catches every redirect status and nothing else (304 is not a redirect)", () => {
+    for (const status of [301, 302, 303, 307, 308]) {
+      expect(
+        redirectError(new Response(null, { status }), "https://x.dev"),
+        String(status),
+      ).toBeInstanceOf(RedirectError);
+    }
+    for (const status of [200, 304, 400, 404, 500]) {
+      expect(
+        redirectError(new Response(null, { status }), "https://x.dev"),
+        String(status),
+      ).toBeNull();
+    }
+  });
+
+  it("reads the status only: a mock with no body methods is enough, and Location is never named", () => {
+    const bare = { status: 308, headers: new Headers({ location: "https://evil.example/" }) };
+    const err = redirectError(bare as unknown as Response, "https://x.dev");
+    expect(err?.message).toBe(
+      "https://x.dev answered with a redirect (308), which the CLI doesn't follow with your login.",
+    );
+    expect(err?.message).not.toContain("evil.example");
+  });
+
+  it("cancels the unread body, so a server holding it open can't keep the process alive", async () => {
+    // The callers throw without reading a redirect's body; left open, it pins the socket until the
+    // 30s request timeout after the error has already printed.
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        // never enqueues or closes: a body the server keeps open
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = new Response(body, { status: 302, headers: { location: "/" } });
+    expect(redirectError(res, "https://x.dev")).toBeInstanceOf(RedirectError);
+    await Promise.resolve(); // cancel() settles on a microtask
+    expect(cancelled).toBe(true);
+    // Not a redirect: the body is the caller's to read.
+    const ok = new Response("{}", { status: 500 });
+    expect(redirectError(ok, "https://x.dev")).toBeNull();
+    expect(ok.bodyUsed).toBe(false);
+    expect(await ok.text()).toBe("{}");
+  });
+
+  it("points at YMMV_API only when it is set (the default base is not the user's to fix)", () => {
+    const res = new Response(null, { status: 301 });
+    expect(redirectError(res, "https://x.dev")?.message).not.toContain("YMMV_API");
+    vi.stubEnv("YMMV_API", "https://x.dev");
+    expect(redirectError(res, "https://x.dev")?.message).toMatch(/ Check YMMV_API\.$/);
+  });
+
+  it("sanitizes the base (under logout it is the raw, ungated env value) and stays copy-rule clean", () => {
+    const esc = String.fromCharCode(0x1b);
+    const msg = redirectError(
+      new Response(null, { status: 302 }),
+      `https://x.dev${esc}[31m`,
+    )?.message;
+    expect(msg).toContain("https://x.dev");
+    expect(msg).not.toContain(esc);
+    expect(msg).not.toContain("—");
   });
 });
 

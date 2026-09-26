@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/token-store.js");
 
 import { fetchOwnProfile, fetchProfileJson } from "../src/api.js";
+import { RedirectError } from "../src/http.js";
 import { type Credential, deleteTokenIf } from "../src/token-store.js";
 
 // Stub the global fetch to drive fetchProfileJson's response handling (real parseProfile — the shared
@@ -245,7 +246,13 @@ describe("fetchOwnProfile", () => {
     stubResponse(
       new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
     );
-    await expect(fetchOwnProfile(CRED)).rejects.toThrow(/fetch failed: 302/);
+    const err = await fetchOwnProfile(CRED).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(RedirectError);
+    expect((err as Error).message).toBe(
+      "https://ymmv.fyi answered with a redirect (302), which the CLI doesn't follow with your login.",
+    );
+    // The wire-supplied target is never named: it would read as where to send the login.
+    expect((err as Error).message).not.toContain("evil.example");
   });
 
   it("throws a typed ProfileParseError on a malformed body", async () => {
