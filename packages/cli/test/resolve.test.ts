@@ -69,6 +69,86 @@ describe("resolveArg", () => {
     if (cmd.kind === "error") expect(cmd.message).toMatch(/curated key/);
   });
 
+  it("`set <normalized-key>` accepts uppercase, underscores, spaces, and KEY_LABELS forms", () => {
+    expect(resolveArg(["set", "Editor", "Zed"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value: "Zed" },
+    });
+    expect(resolveArg(["set", "window_manager", "yabai"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "window-manager", value: "yabai" },
+    });
+    expect(resolveArg(["set", "window manager", "yabai"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "window-manager", value: "yabai" },
+    });
+    expect(resolveArg(["set", "Window Manager", "yabai"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "window-manager", value: "yabai" },
+    });
+    expect(resolveArg(["set", "AI Tool", "Claude"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "ai-tool", value: "Claude" },
+    });
+    expect(resolveArg(["set", "ai_tool", "Claude"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "ai-tool", value: "Claude" },
+    });
+  });
+
+  it("`set <key> -` with a normalized key unsets the curated key", () => {
+    expect(resolveArg(["set", "Editor", "-"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "editor" },
+    });
+    expect(resolveArg(["set", "Window Manager", "-"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "window-manager" },
+    });
+  });
+
+  it("`set <non-curated-key>` suggests close typos or prefixes with 'Did you mean'", () => {
+    const aitool = resolveArg(["set", "aitool", "Claude"]);
+    expect(aitool.kind).toBe("error");
+    if (aitool.kind === "error") {
+      expect(aitool.message).toContain('Did you mean "ai-tool"?');
+      expect(aitool.message).toContain('"aitool" is not a curated key.');
+    }
+
+    const wmLong = resolveArg(["set", "windowmanager", "yabai"]);
+    expect(wmLong.kind).toBe("error");
+    if (wmLong.kind === "error") {
+      expect(wmLong.message).toContain('Did you mean "window-manager"?');
+    }
+
+    const edit = resolveArg(["set", "edit", "vim"]);
+    expect(edit.kind).toBe("error");
+    if (edit.kind === "error") {
+      expect(edit.message).toContain('Did you mean "editor"?');
+    }
+
+    const term = resolveArg(["set", "teminal", "ghostty"]);
+    expect(term.kind).toBe("error");
+    if (term.kind === "error") {
+      expect(term.message).toContain('Did you mean "terminal"?');
+    }
+  });
+
+  it("`set <non-curated-key>` keeps short or unrelated inputs as a plain miss (no suggestion)", () => {
+    const wm = resolveArg(["set", "wm", "yabai"]);
+    expect(wm.kind).toBe("error");
+    if (wm.kind === "error") {
+      expect(wm.message).toContain('"wm" is not a curated key.');
+      expect(wm.message).not.toContain("Did you mean");
+    }
+
+    const hair = resolveArg(["set", "hairstyle", "mohawk"]);
+    expect(hair.kind).toBe("error");
+    if (hair.kind === "error") {
+      expect(hair.message).not.toContain("Did you mean");
+    }
+  });
+
   it('`set --extra "Label=Value"` → extra target', () => {
     expect(resolveArg(["set", "--extra", "Launcher=Raycast"])).toEqual({
       kind: "set",
@@ -243,6 +323,36 @@ describe("resolveArg", () => {
     const cmd = resolveArg(["unset", "hairstyle"]);
     expect(cmd.kind).toBe("error");
     if (cmd.kind === "error") expect(cmd.message).toMatch(/curated key/);
+  });
+
+  it("`unset <normalized-key>` accepts uppercase, underscores, and spaces", () => {
+    expect(resolveArg(["unset", "Editor"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "editor" },
+    });
+    expect(resolveArg(["unset", "window_manager"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "window-manager" },
+    });
+    expect(resolveArg(["unset", "Window Manager"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "window-manager" },
+    });
+  });
+
+  it("`unset <non-curated-key>` suggests close matches with 'Did you mean'", () => {
+    const cmd = resolveArg(["unset", "aitool"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") {
+      expect(cmd.message).toContain('Did you mean "ai-tool"?');
+      expect(cmd.message).toContain('"aitool" is not a curated key.');
+    }
+  });
+
+  it("`unset <normalized-key> <value>` uses normalized key in usage error", () => {
+    const cmd = resolveArg(["unset", "Window Manager", "yabai"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") expect(cmd.message).toBe("usage: ymmv unset window-manager");
   });
 
   it("`unset <key> <value>` (trailing args) → usage error, never a silent unset", () => {
