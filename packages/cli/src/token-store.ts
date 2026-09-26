@@ -3,12 +3,14 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path";
 import { isGithubId, type MintResult } from "@ymmv/shared";
 import envPaths from "env-paths";
-import { BASE } from "./config.js";
+import { BASE, isCleartextBase, isSameServer } from "./config.js";
 
-// Local credential store. Scoped to the API base so a prod token and a `wrangler dev` token can't be
-// confused — logging out against the wrong base would otherwise hit the server's idempotent path,
-// delete the local file, and orphan a still-active token. 0600 on POSIX; on Windows `mode` is a
-// no-op so we rely on the per-user %APPDATA% ACL.
+// Local credential store. Scoped to the API server so a prod token and a `wrangler dev` token can't
+// be confused — logging out against the wrong server would otherwise hit the server's idempotent
+// path, delete the local file, and orphan a still-active token. The server is the base itself,
+// except that every ymmv.fyi address counts as https://ymmv.fyi (isSameServer): an older CLI could
+// store a login under www or http, and that token is ymmv.fyi's. 0600 on POSIX; on Windows `mode` is
+// a no-op so we rely on the per-user %APPDATA% ACL.
 
 export interface StoredToken {
   base: string;
@@ -70,7 +72,13 @@ async function readTokenFile(): Promise<Partial<StoredToken> | null> {
   }
 }
 
-/** Load the stored token IFF it was minted for the current base; otherwise null (forces re-login). */
+/** Load the stored token IFF it was minted for the current server; otherwise null (forces re-login).
+ *  Judged by the same isSameServer() rule login and logout retire by: were reading stricter than
+ *  retiring, a login stored under a ymmv.fyi alias would read as logged out, and the next sign-in
+ *  would revoke it without `ymmv login`'s "Log in again?" consent. The one deliberate exception is
+ *  a base on plain http to a remote host (isCleartextBase): that token crossed a network in
+ *  cleartext, and tokens never expire, so it reads as logged out and the next sign-in retires it
+ *  through the mint's `revoke` (retirable still accepts it; logout still revokes it). */
 export async function loadToken(): Promise<StoredToken | null> {
   const parsed = await readTokenFile();
   // `handle` must be string-or-null — a missing handle would make requireHandle print the wrong
@@ -85,7 +93,9 @@ export async function loadToken(): Promise<StoredToken | null> {
   const idOk = rawId === undefined || rawId === null || isGithubId(rawId);
   if (
     !parsed ||
-    parsed.base !== BASE ||
+    typeof parsed.base !== "string" ||
+    !isSameServer(parsed.base) ||
+    isCleartextBase(parsed.base) ||
     typeof parsed.token !== "string" ||
     parsed.token === "" ||
     (parsed.handle !== null && typeof parsed.handle !== "string") ||
@@ -110,7 +120,7 @@ export async function loadToken(): Promise<StoredToken | null> {
  * loadCredential below and must stay env-blind (revoke targets the FILE token). loadToken's
  * strictness is what makes a corrupt file read as logged-out — but the token inside may still be
  * live server-side, and re-login is about to overwrite the only copy of it. This reader lets
- * login() revoke (same base) or warn (other base) before the overwrite orphans it.
+ * login() revoke (same server) or warn (other server) before the overwrite orphans it.
  */
 export async function peekCredential(): Promise<{ base: string; token: string } | null> {
   const parsed = await readTokenFile();

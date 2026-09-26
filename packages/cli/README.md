@@ -128,7 +128,10 @@ The shape, statuses, caching and CORS rules are in the
 
 - `NO_COLOR` turns color off. So does `FORCE_COLOR=0` or `FORCE_COLOR=false`.
 - `YMMV_API` points the CLI at a different Worker, for development or
-  staging. Give it a bare origin, like `http://localhost:8788`. That Worker
+  staging. Give it a bare origin, like `http://localhost:8788`. It must use
+  `https://` unless the host is localhost, and ymmv.fyi itself is only
+  `https://ymmv.fyi` (unset `YMMV_API` for that). `ymmv logout` still runs
+  with any value, so a login stored under an old one can be revoked. That Worker
   must be at least as new as this CLI release, or these break:
   - `ymmv login` requires every field the login response carries: the
     account id, and on a re-login, the server's answer to retiring the

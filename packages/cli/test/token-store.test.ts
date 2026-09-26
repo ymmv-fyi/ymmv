@@ -110,6 +110,32 @@ describe("loadToken", () => {
       JSON.stringify({ base: `${BASE}-other`, token: "ymmv_x", handle: "c" }),
     );
     expect(await loadToken()).toBeNull();
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ base: 5, token: "ymmv_x", handle: "c" }),
+    );
+    expect(await loadToken()).toBeNull();
+  });
+
+  it("reads a login stored under a ymmv.fyi alias as ymmv.fyi's, the rule login retires by", async () => {
+    // An older CLI stored these under www or http. Read any stricter than retirable(), the login
+    // would read as logged out and the next sign-in would revoke it without `ymmv login`'s consent.
+    expect(BASE).toBe("https://ymmv.fyi");
+    for (const base of ["https://www.ymmv.fyi", "https://ymmv.fyi.", "https://www.ymmv.fyi:443"]) {
+      const stored = { base, token: "ymmv_x", handle: "carol", github_id: 4242 };
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(stored));
+      expect(await loadToken(), base).toEqual(stored);
+    }
+  });
+
+  it("reads a login stored through plain http to ymmv.fyi as logged out, so the next sign-in retires it", async () => {
+    // That token crossed the network in cleartext and never expires. retirable() still accepts
+    // it (device-flow and cli logout tests), so login's mint revokes it and logout still can.
+    for (const base of ["http://ymmv.fyi", "http://www.ymmv.fyi", "http://ymmv.fyi:8080"]) {
+      vi.mocked(readFile).mockResolvedValue(
+        JSON.stringify({ base, token: "ymmv_x", handle: "carol", github_id: 4242 }),
+      );
+      expect(await loadToken(), base).toBeNull();
+    }
   });
 
   it("returns null on a missing file", async () => {

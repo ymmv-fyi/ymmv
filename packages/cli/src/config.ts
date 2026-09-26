@@ -13,16 +13,66 @@ export function normalizeBase(raw: string): string {
   return raw.replace(/\/+$/, "");
 }
 
+const DEFAULT_BASE = "https://ymmv.fyi";
+
 // `||`, not `??`: `YMMV_API= ymmv` (the shell way of "clearing" a variable) sets the EMPTY string,
 // and empty means unset here — falling back to the default base matches the user's evident intent.
-export const BASE = normalizeBase(process.env.YMMV_API || "https://ymmv.fyi");
+export const BASE = normalizeBase(process.env.YMMV_API || DEFAULT_BASE);
+
+/** A host the production Worker answers on: the apex or www (web's canonicalHosts()). Any scheme
+ *  or port; one trailing dot is the same host. Every such origin but DEFAULT_BASE redirects. */
+function isYmmvHost(url: URL): boolean {
+  const apex = new URL(DEFAULT_BASE).hostname;
+  const host = url.hostname.replace(/\.$/, "");
+  return host === apex || host === `www.${apex}`;
+}
+
+/** Where plain http may go: nowhere a token can cross a network in cleartext. */
+function isLoopback(url: URL): boolean {
+  return (
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(url.hostname)
+  );
+}
+
+/** The server requests for `base` actually reach: https://ymmv.fyi for any ymmv.fyi address (an
+ *  alias only redirects to the same Worker and D1), else `base` itself. Only logout runs under an
+ *  alias (it skips the gate), and a token an older CLI stored under one would otherwise be
+ *  unrevocable, or revocable only over plain http. Never throws: under logout BASE is ungated,
+ *  and every command passes the stored token.json base, untrusted file content (loadToken,
+ *  retirable, peekBase). */
+export function serverOrigin(base: string = BASE): string {
+  try {
+    return isYmmvHost(new URL(base)) ? DEFAULT_BASE : base;
+  } catch {
+    return base;
+  }
+}
+
+/** Whether a token stored under `base` belongs to the server BASE reaches, so login and logout
+ *  can retire it here: a token stored under a ymmv.fyi alias counts as ymmv.fyi's. */
+export function isSameServer(base: string): boolean {
+  return serverOrigin(base) === serverOrigin();
+}
+
+/** Whether `base` is plain http to a host off this machine: a token used there has crossed a
+ *  network in cleartext. Never throws, like serverOrigin (token.json content reaches it). */
+export function isCleartextBase(base: string): boolean {
+  try {
+    const url = new URL(base);
+    return url.protocol === "http:" && !isLoopback(url);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Why the configured YMMV_API can't be used (a full user-facing message), or null when it's fine
- * (unset, or a valid bare http/https origin). Called at the top of main() so a config mistake
- * fails fast with its real diagnosis — an unparseable base otherwise surfaces as fetch throwing,
- * which safeFetch mislabels as "Can't reach ... Check your connection". Pure over `raw` for tests;
- * production passes nothing and reads the env at call time.
+ * (unset, a bare https origin, or plain http on loopback). Called at the top of main() so a config
+ * mistake fails fast with its real diagnosis — an unparseable base otherwise surfaces as fetch
+ * throwing, which safeFetch mislabels as "Can't reach ... Check your connection". Pure over `raw`
+ * for tests; production passes nothing and reads the env at call time.
  */
 export function baseProblem(raw: string | undefined = process.env.YMMV_API): string | null {
   // Empty means unset (BASE falls back to the default above) — never an error.
@@ -54,6 +104,17 @@ export function baseProblem(raw: string | undefined = process.env.YMMV_API): str
   // token.json under a junk base, and smuggle shell metacharacters into recovery copy.
   if (base !== url.origin) {
     return `${shown} which is not in canonical form. Use exactly the scheme and host, like https://ymmv.fyi.`;
+  }
+  // The Worker serves no other ymmv.fyi origin: it redirects them (which the CLI never follows
+  // with a credential) or, on http, refuses a credential with a 403. Each would fail every login
+  // and write.
+  if (isYmmvHost(url) && base !== DEFAULT_BASE) {
+    return `${shown} which redirects to ${DEFAULT_BASE}. Use ${DEFAULT_BASE}, or unset YMMV_API.`;
+  }
+  // The same predicate loadToken refuses a stored base by: a base this gate accepts must never
+  // store a token that loadToken then reads as logged out.
+  if (isCleartextBase(base)) {
+    return `${shown} which uses plain http, so a login token sent there would cross the network unencrypted. Use https (plain http works only for localhost).`;
   }
   return null;
 }

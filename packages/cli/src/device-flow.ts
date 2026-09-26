@@ -1,7 +1,7 @@
 import { GITHUB_CLIENT_ID } from "@ymmv/shared";
 import { mintYmmvToken, revokeYmmvToken } from "./auth-http.js";
 import { findLauncher, type Launcher } from "./browser.js";
-import { BASE } from "./config.js";
+import { isSameServer, serverOrigin } from "./config.js";
 import { causeText, isTimeoutError, REQUEST_TIMEOUT_MS, safeFetch, wireText } from "./http.js";
 import type { Prompter } from "./prompt.js";
 import {
@@ -256,14 +256,15 @@ async function pollWithOffer(
   }
 }
 
-/** A stored credential login and logout can retire on THIS server: same base, and a token that is
- *  more than whitespace (a hand-edited file). Sent as `revoke`, a blank token would draw a 400
- *  from the Worker and wedge every login; sent to logout, it parses as no bearer at all. Shared
- *  with `ymmv logout` so the two commands agree on what counts as a stored login. */
+/** A stored credential login and logout can retire on THIS server: the same server (a ymmv.fyi
+ *  alias base counts as ymmv.fyi, see isSameServer), and a token that is more than whitespace (a
+ *  hand-edited file). Sent as `revoke`, a blank token would draw a 400 from the Worker and wedge
+ *  every login; sent to logout, it parses as no bearer at all. Shared with `ymmv logout` so the
+ *  two commands agree on what counts as a stored login. */
 export function retirable(
   cred: { base: string; token: string } | null | undefined,
 ): cred is { base: string; token: string } {
-  return cred != null && cred.base === BASE && cred.token.trim() !== "";
+  return cred != null && isSameServer(cred.base) && cred.token.trim() !== "";
 }
 
 /** What login says for an account bound to no handle, and what `ymmv login` says of a stored
@@ -294,11 +295,11 @@ export interface LoginDeps extends PollDeps {
  * A previously stored token is handled around the overwrite (server mint is multi-token, so an
  * unrevoked predecessor stays live with no local reference left to revoke it by):
  *
- *   peek ── other base? ─► warn (stderr): the file will be replaced, log out there first
+ *   peek ── other server? ─► warn (stderr): the file will be replaced, log out there first
  *   device flow ─► peek R (the flow took minutes; a concurrent login may have written a fresh
  *   token) ─► mint, revoke: R (the Worker retires R in the SAME D1 batch that inserts the new
  *   token N: no window where both are live) ─► RE-peek R2 ─► saveToken
- *     ├─ ok ───► R2 is a same-base token other than R or N (a login raced us between the two
+ *     ├─ ok ───► R2 is a same-server token other than R or N (a login raced us between the two
  *     │          peeks)? revoke R2 client-side, best effort (fail: faint note)
  *     └─ fail ─► revoke NEW; the file is left as it was (R is already retired, so its next 401
  *                heals it; a racer's R2 stays live on purpose)
@@ -327,15 +328,18 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
   // decision, as it always was. The result lines use no codes.
   const color = signInColor();
   const c = palette(color);
-  if (prior && prior.base !== BASE) {
-    // Warn-only (revoking against a foreign base is out of scope): the user can Ctrl+C here,
-    // log out of the other base, and come back. The stored base is untrusted file content —
+  // A ymmv.fyi alias base is no other server: the mint below retires its token, so no warning.
+  if (prior && !isSameServer(prior.base)) {
+    // Warn-only (revoking against a foreign server is out of scope): the user can Ctrl+C here,
+    // log out of the other server, and come back. The stored base is untrusted file content —
     // sanitize like every other echo. Diagnostic, so stderr: stdout keeps only the flow itself.
     // Prose, never a runnable command: an inline `YMMV_API=... ymmv logout` is POSIX-only syntax
     // (dead on PowerShell/cmd) and would paste untrusted file content into the user's shell.
+    // Named by serverOrigin: a ymmv.fyi alias reads as https://ymmv.fyi, never as an address the
+    // YMMV_API check refuses.
     console.error(
       message(
-        `You're logged in to ${sanitizeValue(prior.base)}. Logging in here replaces that ` +
+        `You're logged in to ${sanitizeValue(serverOrigin(prior.base))}. Logging in here replaces that ` +
           "stored token. To revoke it first, set YMMV_API to that server and run `ymmv logout`.",
       ),
     );
@@ -373,7 +377,7 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
       : await pollForToken(dc, deps);
   // The device flow takes minutes: a concurrent login may have replaced the stored token since
   // the pre-flow peek. Re-read right before the mint so the server retires what the file ACTUALLY
-  // holds (the pre-flow `prior` still owns the cross-base warn; `retirable` owns what counts).
+  // holds (the pre-flow `prior` still owns the other-server warn; `retirable` owns what counts).
   const before = await peekCredential();
   const revoke = retirable(before) ? before.token : undefined;
   const minted = await mintYmmvToken(accessToken, revoke);

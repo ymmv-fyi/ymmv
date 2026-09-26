@@ -5,10 +5,11 @@ import {
   type MintResult,
   type WhoamiResult,
 } from "@ymmv/shared";
-import { BASE } from "./config.js";
+import { BASE, serverOrigin } from "./config.js";
 import {
   isTimeoutError,
   REVOKE_CAP_MS,
+  redirectError,
   safeFetch,
   serverMessage,
   wireText,
@@ -72,10 +73,10 @@ function serverBehindHint(): string {
     : "The server is behind this CLI release; try again later.";
 }
 
-/** A 200 the CLI refuses to store: the mint reply lacked a usable token, handle, or account id.
- *  Deterministic for this binary against this Worker (an older Worker never grows the field), so
- *  api.ts turns it into a PublishRefusal: the interactive loop must exit, not re-run the device
- *  flow, because every extra pass would mint (and orphan) another token. */
+/** A mint reply the CLI refuses: a 200 lacking a usable token, handle, or account id, or a
+ *  redirect. Deterministic for this binary against this Worker (an older Worker never grows the
+ *  field), so api.ts turns it into a PublishRefusal: the interactive loop must exit, not re-run
+ *  the device flow, because every extra pass would mint (and orphan) another token. */
 export class MintRejected extends Error {
   constructor(msg: string) {
     super(msg);
@@ -100,14 +101,18 @@ export async function mintYmmvToken(
       headers: { "content-type": "application/json" },
       // JSON.stringify drops an undefined `revoke`: no key on the wire when there is nothing to retire.
       body: JSON.stringify({ access_token: accessToken, revoke } satisfies MintRequest),
-      // Never follow a redirect: a 30x must fail (the existing `!res.ok` guard rejects the resulting
-      // opaqueredirect), not re-POST the GitHub access_token to the redirect target or read a
-      // redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
+      // Never follow a redirect: a 30x must fail (Node hands back the 3xx itself, which the
+      // `!res.ok` guard rejects), not re-POST the GitHub access_token to the redirect target or
+      // read a redirected 200 as a successful mint. Mirrors publish/delete in api.ts.
       redirect: "manual",
     },
     BASE,
   );
   if (!res.ok) {
+    // MintRejected, not Error: a redirect answers every retry the same way, so the interactive
+    // loop must not run the device flow again.
+    const moved = redirectError(res, BASE);
+    if (moved) throw new MintRejected(moved.message);
     // Wire-derived copy goes through serverMessage/wireText — sanitized + capped like every other
     // error surface. The status branches are exclusive, so each reads the body at most once.
     if (res.status === 503) {
@@ -215,15 +220,17 @@ export async function fetchWhoami(token: string): Promise<WhoamiResult> {
     BASE,
   );
   if (!res.ok) {
+    const moved = redirectError(res, BASE);
+    if (moved) throw moved;
     if (res.status === 401) throw new Error(ENV_TOKEN_REJECTED_MINT_AGAIN);
     if (res.status === 404) {
       // No fallback to the unverified YMMV_HANDLE: a forced 404 must not downgrade the identity
       // check, so this fails with the real diagnosis.
       throw missingRouteError("identity lookup for YMMV_TOKEN");
     }
-    // 429 and everything else (5xx, an edge error page, a 30x under redirect:manual): the server's
-    // own {message} when it sent one, plus the retry-after hint. Every env-token command depends
-    // on this call, so a transient outage must read as one, not as a bare status number.
+    // 429 and everything else (5xx, an edge error page): the server's own {message} when it sent
+    // one, plus the retry-after hint. Every env-token command depends on this call, so a
+    // transient outage must read as one, not as a bare status number.
     throw new Error(
       withRetryHint(
         (await serverMessage(res)) ??
@@ -242,12 +249,16 @@ export async function fetchWhoami(token: string): Promise<WhoamiResult> {
 }
 
 /** Revoke a ymmv token server-side. Returns whether a live token was actually revoked.
- *  Two callers: logout() (default timeout via safeFetch; it owns the user-facing copy for ANY
- *  throw, so a hung revoke fails into its retry message instead of hanging logout forever) and
- *  the mint refusal above (passes its own short `signal` and folds a failure into its copy). */
+ *  Callers: logout() (default timeout via safeFetch; it owns the user-facing copy for ANY
+ *  throw, so a hung revoke fails into its retry message instead of hanging logout forever), the
+ *  mint refusal above (passes its own short `signal` and folds a failure into its copy), and
+ *  login()'s failed-save and racing-leftover revokes (device-flow.ts, best effort).
+ *  Sent to serverOrigin(), so a token stored under a ymmv.fyi alias is revoked over https at
+ *  ymmv.fyi itself; every caller but logout runs past the gate, where that is BASE. */
 export async function revokeYmmvToken(token: string, signal?: AbortSignal): Promise<boolean> {
+  const origin = serverOrigin();
   const res = await safeFetch(
-    `${BASE}/api/v1/auth/logout`,
+    `${origin}/api/v1/auth/logout`,
     {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
@@ -256,9 +267,9 @@ export async function revokeYmmvToken(token: string, signal?: AbortSignal): Prom
       // the local file while the server token stays live). Same guard as mint + publish/delete.
       redirect: "manual",
     },
-    BASE,
+    origin,
   );
-  if (!res.ok) throw new Error(`logout failed: ${res.status}`);
+  if (!res.ok) throw redirectError(res, origin) ?? new Error(`logout failed: ${res.status}`);
   // A 200 whose body can't be read or lacks the {revoked} shape is NOT a confirmed revoke: a
   // middlebox-minted 200 (or a body-read timeout) must never read as success — logout() would
   // delete the local file while the server token stays live, stranding the only credential that

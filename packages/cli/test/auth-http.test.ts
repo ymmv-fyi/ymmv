@@ -6,7 +6,7 @@ import {
   parseIdentity,
   revokeYmmvToken,
 } from "../src/auth-http.js";
-import { REVOKE_CAP_MS } from "../src/http.js";
+import { REVOKE_CAP_MS, RedirectError } from "../src/http.js";
 
 // Real mintYmmvToken (NOT mocked here — other CLI suites mock auth-http.js; Vitest isolates files, so
 // no bleed). Stub the global fetch to drive each Worker response the mint handler can return.
@@ -318,6 +318,24 @@ describe("mintYmmvToken", () => {
     );
   });
 
+  it("a 3xx is MintRejected naming the redirect, not `login failed: 308` (a retry draws the same)", async () => {
+    // MintRejected is what makes the interactive loop exit instead of running the device flow again.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 308,
+          headers: { location: "https://ymmv.fyi/api/v1/auth/token" },
+        }),
+      ),
+    );
+    const err = await mintYmmvToken("gho_x").catch((e: Error) => e);
+    expect(err).toBeInstanceOf(MintRejected);
+    expect((err as Error).message).toMatch(/answered with a redirect \(308\)/);
+    expect((err as Error).message).not.toContain("login failed");
+    expect(fetch).toHaveBeenCalledTimes(1); // nothing minted, so nothing to revoke
+  });
+
   it("a thrown fetch reads as can't-reach, never a raw TypeError (post-approval moment)", async () => {
     const err = new TypeError("fetch failed");
     (err as Error & { cause: Error }).cause = new Error("getaddrinfo ENOTFOUND ymmv.fyi");
@@ -375,6 +393,69 @@ describe("revokeYmmvToken", () => {
       expect.stringContaining("/api/v1/auth/logout"),
       expect.objectContaining({ redirect: "manual" }),
     );
+  });
+
+  it("a 3xx throws a RedirectError (logout words its own copy from the type)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 308, headers: { location: "/" } })),
+    );
+    await expect(revokeYmmvToken("ymmv_x")).rejects.toBeInstanceOf(RedirectError);
+  });
+
+  it("a non-redirect failure stays `logout failed: <status>`, never a RedirectError", async () => {
+    // logout words a RedirectError as final; a D1 hiccup must keep its "run it again" copy.
+    stubFetch({ error: "internal_error" }, 500);
+    const err = await revokeYmmvToken("ymmv_x").catch((e: Error) => e);
+    expect(err).not.toBeInstanceOf(RedirectError);
+    expect((err as Error).message).toBe("logout failed: 500");
+  });
+
+  it("under an alias base, a redirect and a can't-reach name https://ymmv.fyi, the origin actually hit", async () => {
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", "https://www.ymmv.fyi");
+    try {
+      const fresh = await import("../src/auth-http.js");
+      const http = await import("../src/http.js");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(null, {
+            status: 308,
+            headers: { location: "https://ymmv.fyi/api/v1/auth/logout" },
+          }),
+        ),
+      );
+      const err = await fresh.revokeYmmvToken("ymmv_x").catch((e: Error) => e);
+      expect(err).toBeInstanceOf(http.RedirectError);
+      expect((err as Error).message).toMatch(
+        /^https:\/\/ymmv\.fyi answered with a redirect \(308\)/,
+      );
+      expect((err as Error).message).not.toContain("www.");
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+      await expect(fresh.revokeYmmvToken("ymmv_x")).rejects.toThrow(
+        /^Can't reach https:\/\/ymmv\.fyi\. /,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+
+  it("under a ymmv.fyi alias base, revokes over https at ymmv.fyi itself (never plain http)", async () => {
+    // BASE bakes at import, so this re-imports the module graph under the alias. Only logout can
+    // run there (it skips the gate); a token an older CLI stored under the alias stays revocable.
+    vi.resetModules();
+    vi.stubEnv("YMMV_API", "http://ymmv.fyi");
+    try {
+      const fresh = await import("../src/auth-http.js");
+      stubFetch({ revoked: true }, 200);
+      expect(await fresh.revokeYmmvToken("ymmv_x")).toBe(true);
+      expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("https://ymmv.fyi/api/v1/auth/logout");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it("rides safeFetch now: a thrown fetch reads as can't-reach and carries the timeout signal", async () => {
@@ -557,12 +638,18 @@ describe("fetchWhoami", () => {
   });
 
   it("a redirect is a FAILURE: redirect:manual yields a non-ok response, never a followed 200", async () => {
-    // What undici hands back for a 30x under redirect:"manual".
+    // What undici hands back for a 30x under redirect:"manual": the 3xx itself.
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: false, status: 302, headers: new Headers() }),
     );
-    expect((await failure()).message).toContain("couldn't look up your token (302)");
+    const err = await failure();
+    expect(err).toBeInstanceOf(RedirectError);
+    // Deterministic for this base: never the transient-outage copy that says to retry.
+    expect(err.message).toBe(
+      "https://ymmv.fyi answered with a redirect (302), which the CLI doesn't follow with your login.",
+    );
+    expect(err.message).not.toMatch(/try again/i);
   });
 
   it("a thrown fetch reads as can't-reach, never a raw TypeError", async () => {

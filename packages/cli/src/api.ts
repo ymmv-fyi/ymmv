@@ -12,6 +12,7 @@ import {
   displayError,
   isTimeoutError,
   NetworkError,
+  redirectError,
   safeFetch,
   serverMessage,
   wireBody,
@@ -23,11 +24,11 @@ import type { Prompter } from "./prompt.js";
 import { message, sanitizeValue, signInOut } from "./render.js";
 import { type Credential, deleteTokenIf, loadCredential } from "./token-store.js";
 
-/** A publish the CLI refuses deterministically — identity drifted mid-command or auth failed after
- *  its one retry. Re-running the SAME attempt can never succeed (a fresh run must rebuild the merge
- *  under the current login), so the interactive edit loop rethrows this instead of re-offering a
- *  retry that would fail identically. Transient failures (5xx/429/422/network) stay plain Errors
- *  and keep the loop's answers alive. */
+/** A publish the CLI refuses deterministically — identity drifted mid-command, auth failed after
+ *  its one retry, or the server redirected. Re-running the SAME attempt can never succeed (a fresh
+ *  run must rebuild the merge under the current login), so the interactive edit loop rethrows this
+ *  instead of re-offering a retry that would fail identically. Transient failures
+ *  (5xx/429/422/network) stay plain Errors and keep the loop's answers alive. */
 export class PublishRefusal extends Error {
   constructor(msg: string) {
     super(msg);
@@ -357,6 +358,9 @@ export async function publishProfile(
   if (res.status === 412) throw new ProfileChanged();
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
+    // A refusal: the interactive loop's retry would draw the same redirect.
+    const moved = redirectError(res, BASE);
+    if (moved) throw new PublishRefusal(moved.message);
     // Server copy first: the Worker's 4xx bodies carry a human {message} (422 caps, 400 schema
     // upgrade). The status + capped raw dump remains only for bodies without one (plain-text
     // 500s, proxy pages).
@@ -451,6 +455,8 @@ export async function fetchOwnProfile(cred: Credential): Promise<OwnProfile | nu
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
+    const moved = redirectError(res, BASE);
+    if (moved) throw moved;
     // "fetch failed" prefix: the commands' abort-on-read-failure copy and tests key on it.
     const raw = await wireBody(res);
     throw new Error(withRetryHint(`fetch failed: ${res.status} ${wireText(raw)}`, res));
@@ -501,6 +507,8 @@ export async function deleteProfile(cred: Credential): Promise<void> {
   }
   if (res.status === 429) throw new Error(await rateLimitMessage(res));
   if (!res.ok) {
+    const moved = redirectError(res, BASE);
+    if (moved) throw moved;
     // Same message-first rule as publish: show the server's human copy when the body carries one.
     const raw = await wireBody(res);
     throw new Error(wireErrorBody(raw).message ?? `delete failed: ${res.status} ${wireText(raw)}`);

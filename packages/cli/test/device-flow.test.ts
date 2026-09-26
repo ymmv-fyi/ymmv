@@ -777,6 +777,59 @@ describe("login() orchestration", () => {
       expect(logs.at(-1)).toBe("\n  Logged in as carol."); // warn-only: the flow proceeds
     });
 
+    it("a ymmv.fyi alias base is the same server: no warning, and the mint retires its token", async () => {
+      // An older CLI stored this under https://www.ymmv.fyi; the gate now sends the user to the
+      // default base. Warning "set YMMV_API to that server" would point back at the refused alias.
+      expect(BASE).toBe("https://ymmv.fyi");
+      vi.mocked(peekCredential).mockResolvedValue({
+        base: "https://www.ymmv.fyi",
+        token: "ymmv_alias",
+      });
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_alias");
+      expect(errs.join("\n")).not.toContain("You're logged in to");
+      expect(logs.at(-1)).toBe("\n  Logged in as carol.");
+    });
+
+    it("a login stored through plain http to ymmv.fyi is retired by the mint too (loadToken refuses it)", async () => {
+      // loadToken reads it as logged out because its token crossed in cleartext; the rotation that
+      // promises only holds while retirable() still accepts it.
+      vi.mocked(peekCredential).mockResolvedValue({ base: "http://ymmv.fyi", token: "ymmv_clear" });
+      await run();
+      expect(mintYmmvToken).toHaveBeenCalledWith("gho_x", "ymmv_clear");
+      expect(errs.join("\n")).not.toContain("You're logged in to");
+    });
+
+    it("under another server's YMMV_API, an alias-stored login is warned about as https://ymmv.fyi", async () => {
+      // BASE bakes at import: re-import the graph under a staging base. The warning must name the
+      // server the token belongs to, never the www/http address the YMMV_API check refuses.
+      vi.resetModules();
+      vi.stubEnv("YMMV_API", "https://staging.example");
+      try {
+        const ah = await import("../src/auth-http.js");
+        const ts = await import("../src/token-store.js");
+        const df = await import("../src/device-flow.js");
+        vi.mocked(ah.mintYmmvToken).mockResolvedValue({
+          token: "ymmv_new",
+          handle: "carol",
+          github_id: 4242,
+        });
+        vi.mocked(ts.peekCredential).mockResolvedValue({
+          base: "https://www.ymmv.fyi",
+          token: "ymmv_alias",
+        });
+        await withTTY(true, () =>
+          df.login({ fetch: fetchSeq(DC, { access_token: "gho_x" }), sleep: noSleep, now: at0 }),
+        );
+        expect(ah.mintYmmvToken).toHaveBeenCalledWith("gho_x", undefined); // not this server's
+        expect(errs.join("\n")).toContain("You're logged in to https://ymmv.fyi.");
+        expect(errs.join("\n")).not.toContain("www.");
+      } finally {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
+    });
+
     it("a foreign-base or blank token in the post-mint peek is not a leftover: no revoke, save proceeds", async () => {
       // A login to another Worker, or a hand edit, between the two peeks: wrong server (or no
       // bearer at all) to revoke against, and only the pre-flow peek owns the cross-base warn.
