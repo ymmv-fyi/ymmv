@@ -1,8 +1,14 @@
 import type { MiddlewareHandler } from "astro";
-import { canonicalRedirect, isCanonicalHost, withHsts } from "./lib/canonical-origin.ts";
+import {
+  canonicalRedirect,
+  httpsRequired,
+  isCanonicalHost,
+  withHsts,
+} from "./lib/canonical-origin.ts";
 
-// Canonical origin + HSTS for every page and API route (src/lib/canonical-origin.ts). What never
-// reaches middleware, so is neither redirected nor given HSTS:
+// Canonical origin + HSTS for every page and API route, and the 403 for a credentialed or writing
+// request on plain http (src/lib/canonical-origin.ts). What never reaches middleware, so is
+// neither redirected, refused, nor given HSTS:
 //   • static assets (/_astro/*, public/*), which Workers Static Assets serves before the Worker,
 //     and the adapter's fall-through to them. Pages link assets root-relative, so they load from
 //     the origin the page is on, and every page is Worker-rendered, so HSTS still reaches the
@@ -21,7 +27,10 @@ export const onRequest: MiddlewareHandler = async (context, next) => {
   // The raw request URL, not context.url: Astro has already decoded context.url.pathname and
   // collapsed its `//`, which would corrupt %2F / %25 in the redirect target.
   const url = new URL(context.request.url);
-  const res = canonicalRedirect(url, context.request.method, site) ?? (await next());
+  const res =
+    httpsRequired(context.request, url, site) ??
+    canonicalRedirect(url, context.request.method, site) ??
+    (await next());
   // Canonical hosts only, so an https localhost (`wrangler dev --local-protocol https`) is never
   // pinned for a year. An http response skips it: browsers ignore HSTS sent over http.
   return url.protocol === "https:" && isCanonicalHost(url, site) ? withHsts(res) : res;

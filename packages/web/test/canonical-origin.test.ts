@@ -1,6 +1,12 @@
 import type { APIContext } from "astro";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalRedirect, HSTS, isCanonicalHost, withHsts } from "../src/lib/canonical-origin.ts";
+import {
+  canonicalRedirect,
+  HSTS,
+  httpsRequired,
+  isCanonicalHost,
+  withHsts,
+} from "../src/lib/canonical-origin.ts";
 import { onRequest } from "../src/middleware.ts";
 
 const SITE = new URL("https://ymmv.fyi");
@@ -93,6 +99,94 @@ describe("canonicalRedirect", () => {
     expect(res?.headers.get("cache-control")).toBe("public, max-age=86400");
     expect(res?.headers.get("access-control-allow-origin")).toBe("*");
   });
+
+  it("varies an http redirect on authorization (a credentialed GET gets the 403 instead)", () => {
+    // Cacheable 301, but httpsRequired answers the same URL differently when a bearer rides along:
+    // a shared cache must not serve this redirect to that request.
+    expect(redirectFor("http://ymmv.fyi/api/v1/u/bardisty")?.headers.get("vary")).toBe(
+      "authorization",
+    );
+    expect(redirectFor("http://www.ymmv.fyi/", "POST")?.headers.get("vary")).toBe("authorization");
+    // https has no 403 twin, so its redirect varies on nothing.
+    expect(redirectFor("https://www.ymmv.fyi/bardisty")?.headers.get("vary")).toBeNull();
+  });
+});
+
+describe("httpsRequired", () => {
+  function refusalFor(href: string, method = "GET", headers: HeadersInit = {}): Response | null {
+    return httpsRequired(new Request(href, { method, headers }), new URL(href), SITE);
+  }
+
+  it("403s a writing method on plain http, apex or www, API or not", () => {
+    for (const [href, method] of [
+      ["http://ymmv.fyi/api/v1/profile", "POST"],
+      ["http://ymmv.fyi/api/v1/profile", "DELETE"],
+      ["http://ymmv.fyi/api/v1/profile", "PUT"],
+      ["http://ymmv.fyi/api/v1/auth/token", "POST"],
+      ["http://www.ymmv.fyi/api/v1/auth/logout", "POST"],
+      ["http://ymmv.fyi//api/v1/profile", "POST"],
+      ["http://ymmv.fyi:8080/bardisty", "POST"],
+    ]) {
+      expect(refusalFor(href, method)?.status, `${method} ${href}`).toBe(403);
+    }
+  });
+
+  it("403s a read that carries a credential: the bearer must not be taught to repeat", () => {
+    const auth = { authorization: "Bearer ymmv_x" };
+    expect(refusalFor("http://ymmv.fyi/api/v1/auth/whoami", "GET", auth)?.status).toBe(403);
+    expect(refusalFor("http://ymmv.fyi/api/v1/u/bardisty", "HEAD", auth)?.status).toBe(403);
+  });
+
+  it("leaves an uncredentialed read to the redirect (public JSON and pages keep their 301)", () => {
+    for (const [href, method] of [
+      ["http://ymmv.fyi/api/v1/u/bardisty", "GET"],
+      ["http://ymmv.fyi/bardisty", "HEAD"],
+      ["http://www.ymmv.fyi/api/v1/u/bardisty", "OPTIONS"],
+    ]) {
+      expect(refusalFor(href, method), `${method} ${href}`).toBeNull();
+    }
+  });
+
+  it("leaves https (www keeps its 308) and every non-canonical host alone", () => {
+    const auth = { authorization: "Bearer ymmv_x" };
+    for (const href of [
+      "https://ymmv.fyi/api/v1/profile",
+      "https://www.ymmv.fyi/api/v1/profile",
+      "http://localhost:8788/api/v1/profile",
+      "http://127.0.0.1:8788/api/v1/profile",
+      "http://ymmv.fyi.evil.com/api/v1/profile",
+    ]) {
+      expect(refusalFor(href, "POST", auth), href).toBeNull();
+    }
+  });
+
+  it("normalizes the host like the redirect does: a trailing dot or upper case is still ymmv.fyi", () => {
+    for (const href of [
+      "http://ymmv.fyi./api/v1/profile",
+      "http://www.ymmv.fyi./api/v1/profile",
+      "HTTP://YMMV.FYI/api/v1/profile",
+    ]) {
+      expect(refusalFor(href, "POST")?.status, href).toBe(403);
+    }
+  });
+
+  it("fails closed on any other method, and on an OPTIONS that carries a credential", () => {
+    expect(refusalFor("http://ymmv.fyi/api/v1/profile", "PATCH")?.status).toBe(403);
+    const auth = { authorization: "Bearer ymmv_x" };
+    expect(refusalFor("http://ymmv.fyi/api/v1/profile", "OPTIONS", auth)?.status).toBe(403);
+  });
+
+  it("sends the https_required envelope, no-store, a CORS grant, and no Location", async () => {
+    const res = refusalFor("http://ymmv.fyi/api/v1/profile", "POST");
+    expect(res?.headers.get("content-type")).toBe("application/json");
+    expect(res?.headers.get("cache-control")).toBe("no-store");
+    expect(res?.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res?.headers.get("location")).toBeNull();
+    expect(await res?.json()).toEqual({
+      error: "https_required",
+      message: "This request must use https://ymmv.fyi, not plain http.",
+    });
+  });
 });
 
 describe("isCanonicalHost", () => {
@@ -151,12 +245,45 @@ describe("onRequest middleware", () => {
     return vi.fn(async () => res());
   }
 
-  it("redirects before any handler runs (an http POST never reaches the route)", async () => {
+  it("refuses an http POST before any handler runs: 403, no redirect to repeat it against", async () => {
     const next = nextReturning(() => new Response("handled"));
     const res = (await onRequest(ctx("http://ymmv.fyi/api/v1/profile", "POST"), next)) as Response;
     expect(next).not.toHaveBeenCalled();
+    expect(res.status).toBe(403);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("strict-transport-security")).toBeNull(); // an http response
+  });
+
+  it("refuses an http GET carrying a bearer before its 301 could teach the client to resend it", async () => {
+    const next = nextReturning(() => new Response("handled"));
+    const withBearer = {
+      request: new Request("http://www.ymmv.fyi/api/v1/auth/whoami", {
+        headers: { authorization: "Bearer ymmv_x" },
+      }),
+      site: SITE,
+    } as unknown as APIContext;
+    const res = (await onRequest(withBearer, next)) as Response;
+    expect(res.status).toBe(403);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("strict-transport-security")).toBeNull();
+    // The same read without the bearer keeps its 301.
+    const plain = (await onRequest(
+      ctx("http://www.ymmv.fyi/api/v1/auth/whoami"),
+      next,
+    )) as Response;
+    expect(plain.status).toBe(301);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("still 308s a write on https www before any handler runs", async () => {
+    const next = nextReturning(() => new Response("handled"));
+    const res = (await onRequest(
+      ctx("https://www.ymmv.fyi/api/v1/auth/token", "POST"),
+      next,
+    )) as Response;
+    expect(next).not.toHaveBeenCalled();
     expect(res.status).toBe(308);
-    expect(res.headers.get("location")).toBe("https://ymmv.fyi/api/v1/profile");
+    expect(res.headers.get("location")).toBe("https://ymmv.fyi/api/v1/auth/token");
   });
 
   it("adds HSTS to a canonical https response and keeps everything else", async () => {

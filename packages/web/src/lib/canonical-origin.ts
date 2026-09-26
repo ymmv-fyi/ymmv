@@ -1,8 +1,11 @@
+import { noStoreJson } from "./json.ts";
+
 // One public origin: https://ymmv.fyi (astro.config `site`). The production Worker also answers
 // on www.ymmv.fyi (a second custom domain) and on plain http, so src/middleware.ts sends both to
-// the canonical origin and pins HTTPS with HSTS. Pure (no astro: imports) so tests load it
-// directly. Only the canonical hosts are touched: localhost, the workers.dev staging Worker and
-// the unit tests' ymmv.test pass through as-is.
+// the canonical origin and pins HTTPS with HSTS, and refuses a credentialed or writing request on
+// plain http outright. Pure (no astro: imports) so tests load it directly. Only the canonical
+// hosts are touched: localhost, the workers.dev staging Worker and the unit tests' ymmv.test pass
+// through as-is.
 
 // One year, covering every *.ymmv.fyi host. No `preload`: listing is a separate, slower-to-undo
 // commitment. Browsers keep this for the full max-age once seen, so lowering it later only
@@ -39,8 +42,39 @@ export function canonicalRedirect(url: URL, method: string, site: URL): Response
       // Browsers run the CORS check on a redirect too; without this a cross-origin GET of
       // www.ymmv.fyi/api/v1/u/<handle> fails before reaching the apex (see api/v1/u/[handle].ts).
       "access-control-allow-origin": "*",
+      // On http the same GET gets httpsRequired's 403 instead when it carries `authorization`, so
+      // a shared cache must not hand this cacheable redirect to a credentialed request.
+      ...(url.protocol === "http:" ? { vary: "authorization" } : {}),
     },
   });
+}
+
+/** A 403 for a request on plain http to a canonical host that carries a credential (an
+ *  `authorization` header) or changes state (any method but GET/HEAD/OPTIONS; the mint's POST
+ *  carries a GitHub token in its body), or null. A redirect would teach such a client to repeat
+ *  it: Python requests and Go net/http follow a 308 and keep `authorization` on a same-host
+ *  upgrade, so every call would send the credential in cleartext first and then succeed. Refused,
+ *  each call fails, so the misconfigured URL gets noticed; the credential that crossed is not
+ *  revoked. Any path the Worker serves, not just /api/* (static assets never reach middleware):
+ *  nothing legitimate sends either to a page, and a `//api` or other-case spelling must not slip
+ *  through to this redirect. (Astro's own collapse of a doubled
+ *  trailing slash runs before middleware, see middleware.ts, so that one spelling takes one
+ *  same-scheme hop before arriving here.) */
+export function httpsRequired(request: Request, url: URL, site: URL): Response | null {
+  if (url.protocol !== "http:" || !isCanonicalHost(url, site)) return null;
+  const { method } = request;
+  const readOnly = method === "GET" || method === "HEAD" || method === "OPTIONS";
+  if (readOnly && !request.headers.has("authorization")) return null;
+  return noStoreJson(
+    403,
+    {
+      error: "https_required",
+      message: `This request must use ${site.origin}, not plain http.`,
+    },
+    // No Location on purpose, so nothing follows it. The CORS grant matches the redirects'; only
+    // a simple request can read it, since a preflight (OPTIONS, no credential) gets the redirect.
+    { "access-control-allow-origin": "*" },
+  );
 }
 
 /** `res` with HSTS set. A Response.redirect() or fetch() passthrough has read-only headers, so
