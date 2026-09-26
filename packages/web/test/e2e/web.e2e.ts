@@ -291,6 +291,28 @@ test.describe("routing", () => {
     expect(local.headers()["strict-transport-security"]).toBeUndefined();
   });
 
+  test("a write or a credential on plain http to ymmv.fyi is refused in the built Worker, not redirected", async ({
+    request,
+  }) => {
+    // Same http: URL wrangler dev always hands the Worker (above). A 308 here would let a client
+    // that keeps `authorization` across the upgrade resend its bearer in cleartext on every call.
+    const write = await request.post("/api/v1/profile", {
+      headers: { host: "ymmv.fyi" },
+      data: {},
+      maxRedirects: 0,
+    });
+    expect(write.status()).toBe(403);
+    expect(write.headers().location).toBeUndefined();
+    expect((await write.json()).error).toBe("https_required");
+
+    const bearer = await request.get("/api/v1/auth/whoami", {
+      headers: { host: "www.ymmv.fyi", authorization: "Bearer ymmv_not_a_real_token" },
+      maxRedirects: 0,
+    });
+    expect(bearer.status()).toBe(403);
+    expect((await bearer.json()).error).toBe("https_required");
+  });
+
   test("the JSON read is cross-origin readable and preflightable (the open-data contract)", async ({
     request,
   }) => {
