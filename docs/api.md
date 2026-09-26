@@ -8,7 +8,10 @@ Public, read-only, no auth. Every published profile is available as JSON.
 
 The API lives at `https://ymmv.fyi` only. A request to `http://` or `www.ymmv.fyi` gets a
 redirect to the same path and query there (301 for GET and HEAD, 308 otherwise), so call the
-canonical origin directly.
+canonical origin directly. The exception is a plain `http://` request that carries an
+`Authorization` header or uses a method other than GET, HEAD or OPTIONS. That one gets a 403
+and no redirect, so a client that follows redirects fails instead of quietly sending its
+credential over plain http on every call.
 
 ## Example
 
@@ -55,11 +58,12 @@ untrusted. Sanitize before rendering them anywhere. (`key` is server-curated and
 | 200 | Live published profile | Profile JSON (above) |
 | 301 | Handle was renamed | Empty. `Location` stays under `/api/v1/u/<current>`. Browsers and most HTTP clients follow it automatically; the hop is chiefly observable to curl and server-side clients. |
 | 301, 308 | Request on `http://` or `www.ymmv.fyi` | Empty. `Location` is the same path and query on `https://ymmv.fyi`, as an absolute URL. The handle is unchanged; this is not a rename. |
+| 403 | Request on `http://` with an `Authorization` header, or with a method other than GET, HEAD or OPTIONS | `{"error":"https_required","message":"..."}`. No `Location`: resend it to `https://ymmv.fyi`. |
 | 404 | Unknown, reserved, or unpublished handle | `{"error":"not_found"}` |
 | 500 | Server fault (never masked as a 404) | `{"error":"internal_error"}` |
 
 Every response body, including errors, is `application/json`, so a plain `res.json()`
-works on any JSON-bodied response (200, 404, 500). Redirect bodies (301, 308) are empty;
+works on any JSON-bodied response (200, 403, 404, 500). Redirect bodies (301, 308) are empty;
 browsers and most HTTP clients follow them automatically and land on one of the JSON-bodied
 statuses.
 
@@ -71,7 +75,8 @@ behavior):
 | Status | cache-control |
 |--------|---------------|
 | 200, 301 (rename) | `public, max-age=0, s-maxage=30, stale-while-revalidate=86400` |
-| 301, 308 (`http://` or `www.`) | `public, max-age=86400` |
+| 301, 308 (`http://` or `www.`) | `public, max-age=86400` (on `http://`, also `Vary: Authorization`) |
+| 403 (`http://`) | `no-store` |
 | 404 | `public, max-age=0, s-maxage=10, stale-while-revalidate=60` |
 | 500 | `no-store` |
 
@@ -90,8 +95,8 @@ headers. Responses generated outside the endpoint (WAF pages, platform errors) a
 outside that promise.
 
 The `http://` and `www.` redirects also carry `access-control-allow-origin: *`, so a simple
-browser GET follows them. A preflighted request can't follow a redirect, so it must go to
-`https://ymmv.fyi`.
+browser GET follows them. A preflighted request, which includes any request with an
+`Authorization` header, can't follow a redirect, so it must go to `https://ymmv.fyi`.
 
 ## Stability
 
