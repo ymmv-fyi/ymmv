@@ -819,7 +819,23 @@ test.describe("the 3-column diff", () => {
   test("404s a diff against an unknown profile", async ({ page }) => {
     const res = await page.goto("/ghosthandle/vs/bardisty");
     expect(res?.status()).toBe(404);
+    // A genuine miss keeps the short not-found TTL; only a thrown render is the no-store 500.
+    expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
     await expect(page.locator(".empty-msg")).toContainText("no ymmv profile for");
+  });
+
+  test("a diff whose render throws is a 500 no-store, never a cached 404", async ({ request }) => {
+    // The seed stores corruptrow's editor as a BLOB, so diff() throws in the page frontmatter.
+    // Astro's own error path rendered that as the /[handle] not-found page, cached for 10s.
+    for (const path of ["/corruptrow/vs/antfu", "/antfu/vs/corruptrow"]) {
+      const res = await request.get(path);
+      expect(res.status(), path).toBe(500);
+      expect(res.headers()["cache-control"], path).toBe("no-store");
+      // The fixed error page: not a profile, not a not-found page, nothing of the error itself.
+      const body = await res.text();
+      expect(body, path).toContain("Server error. Try again in a moment.");
+      expect(body, path).not.toMatch(/empty-msg|readout|toLowerCase/);
+    }
   });
 });
 

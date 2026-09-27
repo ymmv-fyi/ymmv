@@ -7,7 +7,8 @@ import Profile from "../../components/Profile.astro";
 import { readCacheControl, resolveProfile } from "../../lib/profile-read.ts";
 
 // SSR profile page. Shares the resolver with the JSON endpoint, so HTML + JSON agree on
-// live / renamed (301) / not-found. A D1 throw bubbles → Astro 500 (error honesty), never a fake 404.
+// live / renamed (301) / not-found. A D1 throw bubbles to the middleware's 500 (error honesty),
+// never a fake 404.
 const raw = String(Astro.params.handle ?? "");
 
 // A native (script-failed) diff-form submit lands here as GET /<handle>?you=<x> — honor it
