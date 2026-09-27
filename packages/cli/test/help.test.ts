@@ -105,7 +105,17 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
   });
 
   it("takes credentials from env only and commits no secret-shaped literals", () => {
-    expect(script).toContain("CLOUDFLARE_API_TOKEN");
+    // Its own token name, so DEPLOY.md step 4 never replaces the Workers-deploy token step 5
+    // needs. The deploy token's name survives only in the fallback, and only the WAF token is
+    // ever sent as the bearer.
+    const code = script.split("\n").filter((l) => !l.trimStart().startsWith("#"));
+    expect(script).toContain("CLOUDFLARE_WAF_TOKEN=$CLOUDFLARE_API_TOKEN");
+    expect(
+      code.filter((l) => l.includes("CLOUDFLARE_API_TOKEN") && !l.includes("CLOUDFLARE_WAF_TOKEN")),
+    ).toEqual([]);
+    const bearer = code.filter((l) => l.includes("Authorization: Bearer"));
+    expect(bearer).toHaveLength(1);
+    expect(bearer[0]).toContain('"$CLOUDFLARE_WAF_TOKEN"');
     expect(script).toContain("CLOUDFLARE_ZONE_ID");
     expect(script).not.toMatch(/Bearer [A-Za-z0-9_-]{20,}/);
     // A 32-hex literal would be a pasted zone/ruleset/rule id — matching is by description and

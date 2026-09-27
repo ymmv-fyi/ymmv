@@ -4,15 +4,18 @@
 # lives in packages/web/wrangler.jsonc + packages/web/src/lib/rate-limit.ts.
 #
 # Usage:
-#   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ZONE_ID=... ./infra/waf-ratelimit.sh verify
-#   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ZONE_ID=... ./infra/waf-ratelimit.sh apply
+#   CLOUDFLARE_WAF_TOKEN=... CLOUDFLARE_ZONE_ID=... ./infra/waf-ratelimit.sh verify
+#   CLOUDFLARE_WAF_TOKEN=... CLOUDFLARE_ZONE_ID=... ./infra/waf-ratelimit.sh apply
 #
 #   verify   read-only: print the live rule and compare it to this file's constants.
 #            exit 0 = matches, 1 = drifts (or is ambiguous), 2 = absent.
 #   apply    create-or-update the rule to match this file. Idempotent; safe to re-run.
 #
-# Env (never committed): CLOUDFLARE_API_TOKEN (zone WAF read for verify, edit for apply),
+# Env (never committed): CLOUDFLARE_WAF_TOKEN (zone WAF read for verify, edit for apply),
 # CLOUDFLARE_ZONE_ID (the ymmv.fyi zone). Requires curl + jq. Exit 4 = API/transport failure.
+# CLOUDFLARE_WAF_TOKEN falls back to CLOUDFLARE_API_TOKEN, with a note on stderr so a 403 can be
+# traced to the wrong token. Its own name lets the WAF token sit
+# beside the Workers-deploy token in one shell (packages/web/DEPLOY.md step 4) without replacing it.
 #
 # Blast-radius rules baked into `apply`:
 #   - PUT on the phase entrypoint REPLACES every rule in the phase, so PUT is used ONLY when the
@@ -55,7 +58,11 @@ API="https://api.cloudflare.com/client/v4"
 
 command -v curl >/dev/null 2>&1 || { echo "error: curl is required" >&2; exit 3; }
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required (https://jqlang.org)" >&2; exit 3; }
-: "${CLOUDFLARE_API_TOKEN:?error: set CLOUDFLARE_API_TOKEN (zone WAF read for verify, edit for apply)}"
+if [ -z "${CLOUDFLARE_WAF_TOKEN:-}" ] && [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+  echo "note: CLOUDFLARE_WAF_TOKEN is unset, so using CLOUDFLARE_API_TOKEN" >&2
+  CLOUDFLARE_WAF_TOKEN=$CLOUDFLARE_API_TOKEN
+fi
+: "${CLOUDFLARE_WAF_TOKEN:?error: set CLOUDFLARE_WAF_TOKEN (zone WAF read for verify, edit for apply)}"
 : "${CLOUDFLARE_ZONE_ID:?error: set CLOUDFLARE_ZONE_ID (the ymmv.fyi zone)}"
 
 # METHOD PATH [JSON_BODY] -> fills API_STATUS (HTTP code) + API_BODY (response text).
@@ -70,7 +77,7 @@ api_call() {
   if [ -n "$body" ]; then
     args+=(-H "Content-Type: application/json" --data "$body")
   fi
-  out=$(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN" \
+  out=$(printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_WAF_TOKEN" \
     | curl "${args[@]}") || {
     echo "error: transport failure on $method $path" >&2
     exit 4
