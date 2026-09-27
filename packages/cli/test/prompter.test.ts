@@ -396,17 +396,26 @@ describe("prompt lines as output units (spacing convention)", () => {
     expect(f.rl.question).toHaveBeenCalledWith("  Editor: ", expect.anything());
   });
 
-  it("an ask() hint is shown, and Enter still returns the default, never the hint", async () => {
+  it("an ask() shows its default and hint, and Enter returns neither: the caller decides what it keeps", async () => {
     const f = fakeRl();
     vi.mocked(createInterface).mockReturnValue(f.rl as never);
-    const p = makePrompter().ask("Editor", "Zed", "detected: Neovim");
+    const prompter = makePrompter();
+    const p = prompter.ask("Editor", "Zed", "detected: Neovim");
     await tick();
     f.answer("");
-    await expect(p).resolves.toBe("Zed");
+    await expect(p).resolves.toBe("");
     expect(f.rl.question).toHaveBeenCalledWith(
       "  Editor [Zed] (detected: Neovim): ",
       expect.anything(),
     );
+    const spaces = prompter.ask("Editor", "Zed");
+    await tick();
+    f.answer("   ");
+    await expect(spaces).resolves.toBe(""); // whitespace alone is Enter too
+    const typed = prompter.ask("Editor", "Zed");
+    await tick();
+    f.answer("  Helix ");
+    await expect(typed).resolves.toBe("Helix");
   });
 
   it("a tight choice continues the caller's unit: no opening blank, and a typo re-asks", async () => {

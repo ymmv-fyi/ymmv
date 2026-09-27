@@ -35,7 +35,7 @@ import { detectStack } from "../src/detect.js";
 import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
-import { link, sanitizeValue } from "../src/render.js";
+import { link } from "../src/render.js";
 import { deleteTokenIf, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
@@ -96,6 +96,9 @@ const firstPublish = () =>
     .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
 /** The label of every `ask`, in order: which prompts a run showed. */
 const askedLabels = (ask: { mock: { calls: unknown[][] } }) => ask.mock.calls.map((c) => c[0]);
+/** The hint (ask's third argument) each ask of `label` carried. */
+const hintsFor = (ask: { mock: { calls: unknown[][] } }, label: string) =>
+  ask.mock.calls.filter((c) => c[0] === label).map((c) => c[2]);
 
 let logs: string[];
 let errs: string[];
@@ -321,7 +324,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes(prof("me", [foreign, { key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (_label: string, def?: string) => def ?? "");
+    const ask = vi.fn(async () => "");
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
@@ -407,9 +410,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Zed" : (def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
@@ -426,9 +427,7 @@ describe("publish", () => {
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "-" : (def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "-" : ""));
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("n"),
@@ -816,10 +815,10 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST 2
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return def ?? "";
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter, then a real value
+      return editorAsks === 1 ? "" : "Helix"; // Enter, then a real value
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -854,9 +853,9 @@ describe("publish", () => {
       .mockResolvedValueOnce(own(after, '"B"'))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    // Enter keeps the default (the prompter hands it back); "-" clears.
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Neovim" : label === "OS" ? "-" : (def ?? ""),
+    // Enter ("") keeps the default; "-" clears.
+    const ask = vi.fn(async (label: string) =>
+      label === "Editor" ? "Neovim" : label === "OS" ? "-" : "",
     );
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
     const prompter = stubPrompter({ ask, choice });
@@ -1030,7 +1029,7 @@ describe("publish", () => {
 
   it("an over-cap DETECTED default names itself as the problem on Enter-to-keep (no loop)", async () => {
     // The other half of the default-is-the-problem rule: an over-cap env value fills a key the
-    // saved profile lacks, and Enter returns it unchanged. (A first run drops such a detection
+    // saved profile lacks, and Enter keeps it unchanged. (A first run drops such a detection
     // before its walk, so this is a republish: the loop-top gate walks the prompts.)
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(detectStack).mockReturnValue(new Map([["editor", "x".repeat(300)]]));
@@ -1040,10 +1039,10 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return def ?? "";
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? (def ?? "") : "Helix"; // Enter keeps the (over-cap) default
+      return editorAsks === 1 ? "" : "Helix"; // Enter keeps the (over-cap) default
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -1094,11 +1093,10 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return def ?? "";
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      // Enter keeps the default, in the sanitized form makePrompter().ask() returns it.
-      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix";
+      return editorAsks === 1 ? "" : "Helix";
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -1124,10 +1122,10 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return def ?? "";
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix";
+      return editorAsks === 1 ? "" : "Helix";
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -1140,8 +1138,8 @@ describe("publish", () => {
   });
 
   it("Enter on a SAVED default that sanitizes to nothing re-asks instead of silently clearing", async () => {
-    // A bidi-only default (U+202E) displays as nothing and the real prompter returns "" for it on
-    // Enter. Under "Enter to keep", treating that "" as "skip the key" would clear it and a 412
+    // A bidi-only default (U+202E) fails the visibility rule, so Enter keeps its shown form, "".
+    // Under "Enter to keep", treating that "" as "skip the key" would clear it and a 412
     // rebase would replay the clear; it must re-ask with the saved-value note instead. Only a
     // saved value gets here: a detection that shows as nothing never enters the defaults.
     vi.mocked(loadToken).mockResolvedValue(stored());
@@ -1153,10 +1151,10 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
+    const ask = vi.fn(async (label: string) => {
       if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter → "" for a bidi-only default
+      return editorAsks === 1 ? "" : "Helix"; // Enter, then a real value
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -1178,16 +1176,204 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return def ?? "";
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? (def ?? "") : "-"; // Enter keeps it, then "-" clears it
+      return editorAsks === 1 ? "" : "-"; // Enter keeps it, then "-" clears it
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
     expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, then done
     expect(posted(fetchFn).entries).toEqual([{ key: "os", value: "macOS" }]); // editor dropped
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe("publish: Enter in a walk keeps the saved value as stored", () => {
+  const ESC = String.fromCodePoint(0x1b);
+  const RLO = String.fromCodePoint(0x202e);
+  const DASH_ZSH: Profile["entries"] = [
+    { key: "editor", value: "-" },
+    { key: "shell", value: "zsh" },
+  ];
+  const VIM_ZSH: Profile["entries"] = [
+    { key: "editor", value: "Vim" },
+    { key: "shell", value: "zsh" },
+  ];
+  /** Enter ("") everywhere; `typed` answers prompts by label, and "Which field" takes `field`
+   *  (default Enter, the whole walk). */
+  const enterAll = (typed: Record<string, string> = {}, field = "") =>
+    vi.fn(async (label: string) => (label === "Which field" ? field : (typed[label] ?? "")));
+  /** A republish of `entries` that answers e at the first card and y after. With `reload`, the
+   *  first POST (call 1) is a 412 whose re-read returns it, and the retry is call 3. */
+  async function walk(
+    ask: ReturnType<typeof enterAll>,
+    entries = DASH_ZSH,
+    reload?: Profile["entries"],
+  ) {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValueOnce(own(prof("me", entries), '"A"'));
+    if (reload) {
+      fetchFn
+        .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+        .mockResolvedValueOnce(own(prof("me", reload), '"B"'));
+    }
+    fetchFn.mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    return { fetchFn, choice };
+  }
+
+  it('Enter keeps "-" through the e walk, and a 412 rebase replays no clear', async () => {
+    // Enter used to hand back the shown default, "-", which read as the clear sentinel. The
+    // drop was then recorded as an edit, so the rebase deleted the other device's Editor too.
+    const ask = enterAll();
+    const { fetchFn } = await walk(ask, DASH_ZSH, VIM_ZSH);
+    expect(askedLabels(ask)).toEqual(["Which field", ...CURATED_KEYS.map((k) => KEY_LABELS[k])]);
+    expect(hintsFor(ask, "Editor")).toEqual([undefined]); // a "-" default explains itself too
+    expect(posted(fetchFn, 1).entries).toEqual(DASH_ZSH);
+    expect(posted(fetchFn, 3).entries).toEqual(VIM_ZSH); // no edit, so the live Editor goes out
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('Enter at the one field e names keeps "-"', async () => {
+    const ask = enterAll({}, "editor");
+    const { fetchFn } = await walk(ask);
+    expect(askedLabels(ask)).toEqual(["Which field", "Editor"]);
+    expect(posted(fetchFn).entries).toEqual(DASH_ZSH);
+  });
+
+  it('Enter keeps "-" in the walk the write-rule gate forces', async () => {
+    // The saved Font has no visible text, so the loop top walks every row before any card.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [...DASH_ZSH, { key: "font", value: String.fromCodePoint(0x200b) }])),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = enterAll({ Font: "Iosevka" });
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // the gate's walk, no e
+    expect(posted(fetchFn).entries).toEqual([...DASH_ZSH, { key: "font", value: "Iosevka" }]);
+  });
+
+  it.each([
+    ["an escape", `${ESC}[31m-`, ESC],
+    ["a bidi control", `-${RLO}`, RLO],
+  ])(
+    'Enter keeps a saved "-" behind %s as stored, and no card prints the hidden byte',
+    async (_, dash, hidden) => {
+      // Only a SAVED value reaches the walk still decorated: detection is sanitized on its way
+      // into the defaults.
+      const saved: Profile["entries"] = [{ key: "editor", value: dash }, DASH_ZSH[1]];
+      const { fetchFn } = await walk(enterAll(), saved, VIM_ZSH);
+      expect(posted(fetchFn, 1).entries).toEqual(saved);
+      expect(posted(fetchFn, 3).entries).toEqual(VIM_ZSH);
+      expect(logs.join("\n")).not.toContain(hidden);
+    },
+  );
+
+  it("Enter on any decorated saved value keeps its bytes, so a 412 rebase takes the live one", async () => {
+    // Enter used to store the sanitized form, which publish recorded as an edit: the retry then
+    // wrote "Vim" over the Emacs another device had published.
+    const saved: Profile["entries"] = [{ key: "editor", value: `${RLO}Vim` }, DASH_ZSH[1]];
+    const emacs: Profile["entries"] = [{ key: "editor", value: "Emacs" }, DASH_ZSH[1]];
+    const { fetchFn } = await walk(enterAll(), saved, emacs);
+    expect(posted(fetchFn, 1).entries).toEqual(saved);
+    expect(posted(fetchFn, 3).entries).toEqual(emacs);
+  });
+
+  it("retyping a decorated value stores what was typed", async () => {
+    const saved: Profile["entries"] = [{ key: "editor", value: `${RLO}Vim` }, DASH_ZSH[1]];
+    const { fetchFn } = await walk(enterAll({ Editor: "Vim" }), saved);
+    expect(posted(fetchFn).entries).toEqual(VIM_ZSH);
+  });
+
+  it("a stored value over the cap that shows as a short one goes out in its shown form", async () => {
+    // Keeping the stored bytes here would leave Enter re-asking about a value that shows as three
+    // characters.
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const padded = `Vim${`${ESC}[0m`.repeat(70)}`; // 283 characters, "Vim" on screen
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: padded }, DASH_ZSH[1]])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = enterAll();
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") }),
+    });
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one gate walk, no second
+    expect(posted(fetchFn).entries).toEqual(VIM_ZSH);
+  });
+
+  it("Enter on a saved value still over the cap once shown names it, counting what it shows", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const long = `${"x".repeat(300)}${`${ESC}[0m`.repeat(10)}`; // 340 stored, 300 shown
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: long }, DASH_ZSH[1]])))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    let editorAsks = 0;
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
+      editorAsks += 1;
+      return editorAsks === 1 ? "" : "Helix";
+    });
+    const choice = vi.fn().mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    expect(logs.join("\n")).toMatch(
+      /the saved value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
+    );
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }, DASH_ZSH[1]]);
+  });
+
+  it('Enter keeps a detected dash that sanitizes to "-", and "-" leaves it off', async () => {
+    // EDITOR=$'\e[31m-': detection strips the escape on the way into the defaults.
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", `${ESC}[31m-`]]));
+    const kept = await walk(enterAll(), [DASH_ZSH[1]]);
+    expect(posted(kept.fetchFn).entries).toEqual(DASH_ZSH);
+    const dropped = await walk(enterAll({ Editor: "-" }), [DASH_ZSH[1]]);
+    expect(posted(dropped.fetchFn).entries).toEqual([DASH_ZSH[1]]);
+  });
+
+  it('a first run never asks a detected "-", and its e walk keeps it', async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "-"]]));
+    const fetchFn = firstPublish();
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = enterAll();
+    const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+    const gaps = CURATED_KEYS.length - 1;
+    expect(askedLabels(ask).slice(0, gaps)).not.toContain("Editor");
+    expect(askedLabels(ask)[gaps]).toBe("Which field");
+    expect(posted(fetchFn).entries).toEqual([DASH_ZSH[0]]);
+  });
+
+  it('Enter on a marked "-" row keeps it and settles the mark', async () => {
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Helix"]]));
+    const ask = enterAll();
+    const { fetchFn, choice } = await walk(ask);
+    expect(hintsFor(ask, "Editor")).toEqual(["detected: Helix"]);
+    expect(posted(fetchFn).entries).toEqual(DASH_ZSH);
+    expect(logs.filter(isCard).at(-1)).not.toContain("(detected");
+    expect(choice.mock.calls[1][1]).toEqual(["y", "n", "e"]);
+  });
+
+  it('"-" clears any value, "-" included, and a gap; whitespace alone is Enter', async () => {
+    const ask = enterAll({ Editor: "-", Shell: "   ", Font: "-" });
+    const { fetchFn } = await walk(ask);
+    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // no re-ask for the gap
+    expect(posted(fetchFn).entries).toEqual([DASH_ZSH[1]]);
   });
 });
 
@@ -1227,9 +1413,9 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     // The first walk keeps everything; the second changes one key, clears one, and adds one.
     const typed: Record<string, string> = { Editor: "Zed", Shell: "-", Font: "Lilex" };
     let walks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
+    const ask = vi.fn(async (label: string) => {
       if (label === "Editor") walks += 1; // Editor opens every walk
-      return (walks === 2 ? typed[label] : undefined) ?? sanitizeValue(def ?? "");
+      return (walks === 2 ? typed[label] : undefined) ?? "";
     });
     const choice = vi
       .fn()
@@ -1363,9 +1549,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
       .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412)) // the retry
       .mockResolvedValueOnce(own(landed, '"2026-02-02"'));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
     const choice = vi
       .fn()
       .mockResolvedValueOnce("e")
@@ -1402,9 +1586,9 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     vi.stubGlobal("fetch", fetchFn);
     const typed = ["Zed", "Vim"];
     let walks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
+    const ask = vi.fn(async (label: string) => {
       if (label === "Editor") walks += 1;
-      return label === "Editor" ? (typed[walks - 1] ?? "") : sanitizeValue(def ?? "");
+      return label === "Editor" ? (typed[walks - 1] ?? "") : "";
     });
     const choice = vi
       .fn()
@@ -1482,9 +1666,9 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     vi.stubGlobal("fetch", fetchFn);
     const typed = ["Zed", "Vim"];
     let walks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
+    const ask = vi.fn(async (label: string) => {
       if (label === "Editor") walks += 1;
-      return label === "Editor" ? (typed[walks - 1] ?? "") : sanitizeValue(def ?? "");
+      return label === "Editor" ? (typed[walks - 1] ?? "") : "";
     });
     const choice = vi
       .fn()
@@ -1609,8 +1793,8 @@ describe("publish: the card marks what changes on the live profile, and an uncha
 describe("publish: a changed detection is marked on the card and taken with d", () => {
   const ESC = String.fromCharCode(27);
   const ZWSP = String.fromCharCode(0x200b);
-  /** Enter hands back the SANITIZED default, exactly as makePrompter().ask() does. */
-  const keepAll = () => vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
+  /** Enter ("") at every prompt: the walk keeps each default as stored. */
+  const keepAll = () => vi.fn(async () => "");
   const choiceCalls = (choice: { mock: { calls: unknown[][] } }) =>
     choice.mock.calls.map((c) => ({ keys: c[1], hint: c[3] }));
   const THREE = { keys: ["y", "n", "e"], hint: "Y/n/e=edit" };
@@ -1728,8 +1912,8 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     // The first run never asks about a detected key, so typing over one goes through `e`.
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Which field" ? "editor" : label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
+    const ask = vi.fn(async (label: string) =>
+      label === "Which field" ? "editor" : label === "Editor" ? "Zed" : "",
     );
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
@@ -1746,9 +1930,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).toContain("(detected: Neovim)");
@@ -1864,9 +2046,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "-" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "-" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[1]).toMatch(/- Editor\s+Vim → —/);
@@ -2070,9 +2250,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(own(after, '"B"'))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Terminal" ? "Ghostty" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Terminal" ? "Ghostty" : ""));
     const choice = vi.fn().mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).not.toContain("(detected"); // nothing disagreed before the reload
@@ -2104,9 +2282,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Vim" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Vim" : ""));
     const choice = vi.fn().mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(ask).toHaveBeenCalledWith("Shell", "zsh", "detected: fish");
@@ -2237,9 +2413,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Editor" ? "Zed" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).toContain("(detected: Neovim)");
@@ -3048,8 +3222,8 @@ describe("publish: e asks which field", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     const queue = [...fields];
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Which field" ? (queue.shift() ?? "") : (values[label] ?? sanitizeValue(def ?? "")),
+    const ask = vi.fn(async (label: string) =>
+      label === "Which field" ? (queue.shift() ?? "") : (values[label] ?? ""),
     );
     const answers = [...choices];
     const choice = vi.fn(async () => answers.shift() ?? "y");
@@ -3203,8 +3377,8 @@ describe("publish: e asks which field", () => {
       .mockResolvedValueOnce(own(prof("me", [{ key: "editor", value: "emacs" }]), '"B"'))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Which field" ? "font" : label === "Font" ? "Lilex" : sanitizeValue(def ?? ""),
+    const ask = vi.fn(async (label: string) =>
+      label === "Which field" ? "font" : label === "Font" ? "Lilex" : "",
     );
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
@@ -3230,11 +3404,8 @@ describe("publish: e asks which field", () => {
 });
 
 describe("publish: a walk prompt with no default shows an example", () => {
-  /** Enter hands back the SANITIZED default, exactly as makePrompter().ask() does. */
-  const keep = () => vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
-  /** The hint (ask's third argument) each ask of `label` carried. */
-  const hintsFor = (ask: { mock: { calls: unknown[][] } }, label: string) =>
-    ask.mock.calls.filter((c) => c[0] === label).map((c) => c[2]);
+  /** Enter ("") at every prompt: the walk keeps each default as stored. */
+  const keep = () => vi.fn(async () => "");
 
   it("every bare prompt carries its example; a prefilled one explains itself", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
@@ -3264,8 +3435,8 @@ describe("publish: a walk prompt with no default shows an example", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let fontAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Font") return sanitizeValue(def ?? "");
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Font") return "";
       fontAsks += 1;
       return fontAsks === 1 ? "x".repeat(300) : "Lilex"; // over the cap, then a real answer
     });
@@ -3294,10 +3465,10 @@ describe("publish: a walk prompt with no default shows an example", () => {
         .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })),
     );
     let editorAsks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
-      if (label !== "Editor") return sanitizeValue(def ?? "");
+    const ask = vi.fn(async (label: string) => {
+      if (label !== "Editor") return "";
       editorAsks += 1;
-      return editorAsks === 1 ? sanitizeValue(def ?? "") : "Helix"; // Enter re-asks, then a value
+      return editorAsks === 1 ? "" : "Helix"; // Enter re-asks, then a value
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
@@ -3320,10 +3491,10 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     let walks = 0;
-    const ask = vi.fn(async (label: string, def?: string) => {
+    const ask = vi.fn(async (label: string) => {
       if (label === "Editor") walks += 1;
       // The first walk types the value; any later one is Enter all the way down.
-      return walks === 1 && label === "Dotfiles" ? dotfiles : sanitizeValue(def ?? "");
+      return walks === 1 && label === "Dotfiles" ? dotfiles : "";
     });
     const answers = [...publishAnswers];
     const choice = vi.fn(async (q: string) =>
@@ -3370,9 +3541,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing());
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Dotfiles" ? "me/dotfiles" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Dotfiles" ? "me/dotfiles" : ""));
     const choice = vi.fn().mockRejectedValue(new PromptAborted());
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(choice.mock.calls[0]?.[0]).toBe(OFFER); // the walk aborted AT the offer, before the card
@@ -3395,9 +3564,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string, def?: string) =>
-      label === "Dotfiles" ? "-" : sanitizeValue(def ?? ""),
-    );
+    const ask = vi.fn(async (label: string) => (label === "Dotfiles" ? "-" : ""));
     const answers = ["e", "y"];
     const choice = vi.fn(async (q: string) =>
       q.startsWith("use ") ? "y" : (answers.shift() ?? "y"),
@@ -3408,7 +3575,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
   });
 
   it("a saved scheme-less value kept with Enter is not asked about", async () => {
-    // The second one reads differently once sanitized, which is the form Enter hands back.
+    // The second one's stored form differs from its shown form: Enter keeps the stored bytes.
     const bidi = String.fromCodePoint(0x061c);
     for (const saved of ["github.com/me/dots", `${bidi}github.com/me/dots`]) {
       vi.mocked(loadToken).mockResolvedValue(stored());
@@ -3418,9 +3585,28 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
         .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
       vi.stubGlobal("fetch", fetchFn);
       const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
-      const ask = vi.fn(async (_label: string, def?: string) => sanitizeValue(def ?? ""));
+      const ask = vi.fn(async () => "");
       await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
       expect(offers(choice), saved).toEqual([]);
+    }
+  });
+
+  it("a saved scheme-less value typed back as shown is not asked about either", async () => {
+    const bidi = String.fromCodePoint(0x061c);
+    for (const saved of ["github.com/me/dots", `${bidi}github.com/me/dots`]) {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(own(prof("me", [{ key: "dotfiles", value: saved }])))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
+      const ask = vi.fn(async (label: string) =>
+        label === "Dotfiles" ? "github.com/me/dots" : "",
+      );
+      await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
+      expect(offers(choice), saved).toEqual([]);
+      expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: "github.com/me/dots" }]);
     }
   });
 });

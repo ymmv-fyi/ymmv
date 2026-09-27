@@ -22,6 +22,11 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   sends your token to it. `ymmv logout` still runs with such an address, so a login stored
   under it can be revoked.
 
+### Fixed
+- **Enter at a field prompt keeps the saved value.** It used to delete a value of `-`, and to
+  rewrite one holding hidden characters such as color codes, so publishing could undo a change
+  made from another device in the meantime. Typing `-` clears a field, whatever its value.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

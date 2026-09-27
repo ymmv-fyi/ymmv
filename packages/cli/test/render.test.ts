@@ -21,7 +21,7 @@ const BEL = String.fromCharCode(7);
 const AMBER = `${ESC}[93m`;
 const OSC8_OPEN = `${ESC}]8;;`;
 
-describe("shownValue (the form the card shows and Enter hands back)", () => {
+describe("shownValue (the form a prompt's default and the card show)", () => {
   it("sanitizes, then trims: whitespace an escape was hiding goes too", () => {
     expect(shownValue(`  Neo${ESC}[2Jvim  `)).toBe("Neovim");
     expect(shownValue(` ${ESC}[31m `)).toBe("");

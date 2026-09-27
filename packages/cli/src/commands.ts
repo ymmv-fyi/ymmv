@@ -174,10 +174,10 @@ function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | 
 }
 
 /** Which write rule a curated value fails, or undefined. The ONE predicate behind the four
- *  siblings of the argv pre-flight: promptEntries' re-ask, the first run's drop of a refused
- *  detection (firstRunValues), the publish loop's walk gate, and writeRuleRefusal. They must agree
- *  exactly, or a value the gate rejects and the re-ask accepts would walk the 13 prompts forever
- *  without ever reaching a card. */
+ *  siblings of the argv pre-flight: promptEntries' re-ask (and what its Enter keeps), the first
+ *  run's drop of a refused detection (firstRunValues), the publish loop's walk gate, and
+ *  writeRuleRefusal. They must agree exactly, or a value the gate rejects and the re-ask accepts
+ *  would walk the 13 prompts forever without ever reaching a card. */
 function valueProblem(value: string): "invisible" | "over-cap" | undefined {
   if (!showsVisibleText(value)) return "invisible";
   if (value.length > MAX_VALUE) return "over-cap";
@@ -304,36 +304,43 @@ async function promptEntries(
         : sanitizeValue(defaults.get(key) ?? "")
           ? undefined
           : walkHint(key);
+    // Enter keeps the default as stored, not as shown: publish would record a decorated value's
+    // sanitized form as an edit, and a 412 rebase would write it over the live value. The one
+    // exception is a stored form that fails a write rule its shown form passes (escape bytes
+    // pushing it over the cap): repairing that is what the gate's walk is for.
+    const rawDefault = defaults.get(key) ?? "";
+    const shown = shownValue(rawDefault);
+    const kept = valueProblem(rawDefault) === undefined ? rawDefault : shown;
     // Re-ask on an over-cap or invisible-only paste instead of letting the server 422 the whole
     // publish after every answer is in. A DETECTED default can fail either rule (an env value
     // of only U+200B survives detection's trim; a stale CLI can see a server-raised cap), and then
     // Enter-to-keep would loop forever — so name the default as the problem and the two ways out.
     for (;;) {
+      // "" is Enter (prompt.ts returns what was typed). Anything typed is the answer as typed:
+      // "-" clears, whatever the default, and retyping a default stores the retyped form.
       const answer = (await prompter.ask(KEY_LABELS[key], defaults.get(key), hint)).trim();
-      const value = answer === "-" ? "" : answer;
-      // Enter returns the SANITIZED default (prompt.ts), so compare against that form: a default
-      // carrying a bidi control would otherwise never read as "the saved value". A default that
-      // sanitizes to nothing comes back as "", which must not pass for "no answer, skip the key":
-      // under "Enter to keep" that would silently clear it, and a 412 rebase replays the clear.
-      const rawDefault = defaults.get(key) ?? "";
-      const isDefault = value === shownValue(rawDefault);
-      const emptiedDefault = answer === "" && rawDefault !== "";
+      const enter = answer === "";
+      const value = enter ? kept : answer === "-" ? "" : answer;
+      // A default that shows as nothing leaves Enter with "", which must not pass for "no
+      // default, skip the key": under "Enter to keep" that would silently clear it, and a 412
+      // rebase replays the clear.
+      const emptiedDefault = enter && value === "" && rawDefault !== "";
       const problem = emptiedDefault ? "invisible" : value === "" ? undefined : valueProblem(value);
       if (problem !== undefined) {
         // Name the default's real source when it is the problem (a saved value is the user's own,
         // a detected one is their environment's), and the two ways out.
         const which = `the ${saved.has(key) ? "saved" : "detected"} value`;
         const clause = ruleClause(problem, value);
-        const note = isDefault
+        const note = enter
           ? `${which} ${clause}. Type a ${problem === "invisible" ? "value" : "shorter value"} or - to clear`
           : `that value ${clause}`;
         console.log(message(`${c.faint}${note}${c.reset}`));
         continue;
       }
-      // A kept default is not re-offered: declining once makes the typed form the default of any
-      // later walk, and Enter there keeps it.
+      // A kept default is not re-offered, typed back or not: declining once makes the typed form
+      // the default of any later walk, and keeping it there must not ask again.
       const final =
-        key === "dotfiles" && !isDefault
+        key === "dotfiles" && !enter && value !== shown
           ? await offerLinkForm(value, handle, prompter, true)
           : value;
       if (final) chosen.set(key, final);

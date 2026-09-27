@@ -67,8 +67,9 @@ export class PrompterMisuse extends Error {
 }
 
 export interface Prompter {
-  /** Ask for a value, offering `def` as the default; empty input returns `def`. `hint` is a faint
-   *  parenthetical after the default, display only: it never changes what Enter returns. */
+  /** Ask for a value, showing `def` as the default. Returns what was typed, trimmed, so "" is
+   *  Enter: the caller decides what Enter means (the walk keeps the default as stored, which a
+   *  typed copy of its shown form could not). `hint` is a faint parenthetical, display only. */
   ask(label: string, def?: string, hint?: string): Promise<string>;
   /** Yes/no question; empty input returns `defYes`. */
   confirm(question: string, defYes: boolean): Promise<boolean>;
@@ -231,10 +232,7 @@ export function makePrompter(): Prompter {
   };
   return {
     async ask(label, def, hint) {
-      // Empty input accepts the SANITIZED default — what you saw is what you accepted.
-      const clean = def ? sanitizeValue(def) : def;
-      const answer = (await question(promptLine(label, def, color, hint))).trim();
-      return answer === "" ? (clean ?? "") : answer;
+      return (await question(promptLine(label, def, color, hint))).trim();
     },
     // Prompts are output units (render.ts convention): confirm/choice open with the unit's one
     // blank line here — never in the caller's question string. Field ask()s stay tight: the

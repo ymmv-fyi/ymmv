@@ -86,12 +86,12 @@ export function sanitizeValue(value: string): string {
   return value.replace(ANSI_RE, "").replace(CTRL_RE, "").replace(BIDI_RE, "");
 }
 
-/** The form Enter hands back at a prompt (prompt.ts sanitizes the default; the walk trims the
- *  answer), which is also what the card row shows for an already-trimmed value. Every "does this
- *  name the same thing the user saw" comparison uses it: promptEntries' Enter-to-keep check,
- *  detectionDisagreements, and the dismissal match (isDismissed, and the `saved` form publish
- *  records on an "n"). publish()'s edit diff and its 412 keep-pruning compare raw
- *  stored values on purpose: they ask whether the answer changed, not how it reads. */
+/** The form a prompt's `[default]` and the card row show for a value. Every "does this name the
+ *  same thing the user saw" comparison uses it: promptEntries' typed-back dotfiles check and its
+ *  repair of a stored form that fails a write rule, detectionDisagreements, and the dismissal
+ *  match (isDismissed, and the `saved` form publish records on an "n"). Enter in the walk,
+ *  publish()'s edit diff and its 412 keep-pruning keep or compare raw stored values on purpose:
+ *  they ask whether the value changed, not how it reads. */
 export function shownValue(value: string): string {
   return sanitizeValue(value).trim();
 }
