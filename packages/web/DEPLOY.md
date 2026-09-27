@@ -93,11 +93,17 @@ pnpm --filter @ymmv/web build
 Remove-Item Env:\CLOUDFLARE_ENV        # critical: must not reach wrangler deploy
 ```
 
-### 3. Sanity-check the baked config (mirrors CI's RL asserts + confirms the name)
+### 3. Sanity-check the baked config (mirrors CI's baked-config asserts + confirms the name)
 
 ```powershell
 Select-String packages/web/dist/server/wrangler.json -Pattern 'ymmv-production|RL_WRITE|RL_AUTH'
+$baked = Get-Content packages/web/dist/server/wrangler.json -Raw | ConvertFrom-Json
+if ($baked.workers_dev -ne $false -or $baked.preview_urls -ne $false) { throw 'workers_dev and preview_urls must both be false' }
 ```
+
+The second check throws unless `workers_dev` and `preview_urls` are both `false`, so the custom
+domains are the only origins, with no `workers.dev` or
+`<version>-ymmv-production.<subdomain>.workers.dev` preview URL.
 
 ### 4. Zone WAF rate-limit rule, BEFORE the deploy (only when `infra/waf-ratelimit.sh` changed)
 
@@ -145,3 +151,22 @@ with `strict-transport-security: max-age=31536000; includeSubDomains`;
 An http GET row answering 200, or the POST answering anything but 403 (the route's own 401, say),
 means the Worker never saw an `http:` scheme in `request.url`, so the redirect or refusal didn't
 fire: stop and investigate.
+
+Then confirm the Worker answers only on its custom domains. `<subdomain>` is the account's
+workers.dev subdomain (staging is served on it), `<ver8>` the first 8 characters of the Current
+Version ID from step 5:
+
+```powershell
+curl.exe -sS -o NUL -w "%{http_code} staging control\n" 'https://ymmv-staging.<subdomain>.workers.dev/'
+foreach ($u in 'https://ymmv-production.<subdomain>.workers.dev/', 'https://<ver8>-ymmv-production.<subdomain>.workers.dev/') {
+  curl.exe -sS -w " %{http_code} $u\n" $u
+}
+```
+
+Expect `200` for the staging control, which proves `<subdomain>` is right. Each production row must
+show the body `error code: 1042` with status `404`: Cloudflare's own reply for a workers.dev host it
+doesn't serve. A 200 means workers.dev or Preview URLs are on for `ymmv-production`: turn them off
+in the dashboard and deploy again. Any other reply (a 3xx, 403 or 5xx) means stop and investigate,
+and `000` means curl got no answer (a placeholder left in): fill it in and rerun. The staging row
+proves only `<subdomain>`, and a mistyped `<ver8>` also gets the 1042 reply, so copy it from this
+deploy's Current Version ID, not the Deployment ID.
