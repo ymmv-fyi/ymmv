@@ -200,6 +200,13 @@ jobs:
       - name: Assert RL_AUTH is bound
         run: grep -q "RL_AUTH" dist/server/wrangler.json || { echo "::error::RL_AUTH missing from generated config — the mint per-IP cap would silently fail open"; exit 1; }
         working-directory: packages/web
+      # Production is served only through its custom domains: workers_dev and preview_urls MUST both be
+      # false in the env-baked config, or the Worker would also answer on workers.dev and per-version
+      # preview URLs, origins outside canonicalHosts(). Staging lives on workers.dev, so production only.
+      - name: Assert workers.dev and preview URLs are off
+        if: needs.prep.outputs.environment == 'production'
+        run: node -e "const c=require('./dist/server/wrangler.json');process.exit(c.workers_dev===false&&c.preview_urls===false?0:1)" || { echo "::error::workers_dev/preview_urls not false in generated config — production would serve workers.dev origins"; exit 1; }
+        working-directory: packages/web
       # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
       - name: Apply D1 migrations
         if: needs.prep.outputs.dry_run == 'false'
