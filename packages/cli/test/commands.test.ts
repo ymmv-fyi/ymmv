@@ -1313,6 +1313,52 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
     expect(posted(fetchFn).entries).toEqual(VIM_ZSH);
   });
 
+  it("that repair is no edit: a 412 whose reload changed the value takes the live one", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const padded = `Vim${`${ESC}[0m`.repeat(70)}`;
+    const emacs: Profile["entries"] = [{ key: "editor", value: "Emacs" }, DASH_ZSH[1]];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: padded }, DASH_ZSH[1]]), '"A"'),
+      )
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me", emacs), '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({ ask: enterAll(), choice: vi.fn().mockResolvedValue("y") }),
+    });
+    expect(posted(fetchFn, 1).entries).toEqual(VIM_ZSH);
+    expect(posted(fetchFn, 3).entries).toEqual(emacs);
+  });
+
+  it("typing that value's shown form is an edit, and a 412 rebase keeps it", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const padded = `Vim${`${ESC}[0m`.repeat(70)}`;
+    const emacs: Profile["entries"] = [{ key: "editor", value: "Emacs" }, DASH_ZSH[1]];
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(prof("me", [{ key: "editor", value: padded }, DASH_ZSH[1]]), '"A"'),
+      )
+      .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412))
+      .mockResolvedValueOnce(own(prof("me", emacs), '"B"'))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({
+      interactive: true,
+      yes: false,
+      prompter: stubPrompter({
+        ask: enterAll({ Editor: "Vim" }),
+        choice: vi.fn().mockResolvedValue("y"),
+      }),
+    });
+    expect(posted(fetchFn, 3).entries).toEqual(VIM_ZSH);
+  });
+
   it("Enter on a saved value still over the cap once shown names it, counting what it shows", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const long = `${"x".repeat(300)}${`${ESC}[0m`.repeat(10)}`; // 340 stored, 300 shown

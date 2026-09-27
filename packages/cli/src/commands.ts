@@ -276,7 +276,8 @@ async function offerLinkForm(
  *  no default carries an example instead. `handle` is whose `user/repo` a dotfiles answer may name.
  *  `only` narrows the walk to those keys (a first run's gaps, one field under `e`); the rest keep
  *  their default unasked. `lead` is the line that opens the walk.
- *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled. */
+ *  Returns the chosen map so the edit loop can re-enter with the previous answers prefilled, and
+ *  the keys whose Enter repaired a stored form that fails a write rule (see `kept` below). */
 async function promptEntries(
   defaults: Map<CuratedKey, string>,
   saved: ReadonlySet<string>,
@@ -285,10 +286,11 @@ async function promptEntries(
   handle: string,
   only?: ReadonlySet<CuratedKey>,
   lead = 'Enter to keep, "-" to clear',
-): Promise<Map<CuratedKey, string>> {
+): Promise<{ chosen: Map<CuratedKey, string>; repaired: Set<CuratedKey> }> {
   const c = palette(colorEnabled());
   console.log(message(`${c.faint}${lead}${c.reset}`));
   const chosen = new Map<CuratedKey, string>();
+  const repaired = new Set<CuratedKey>();
   for (const key of CURATED_KEYS) {
     if (only && !only.has(key)) {
       const unasked = defaults.get(key);
@@ -344,10 +346,11 @@ async function promptEntries(
           ? await offerLinkForm(value, handle, prompter, true)
           : value;
       if (final) chosen.set(key, final);
+      if (enter && kept !== rawDefault) repaired.add(key);
       break;
     }
   }
-  return chosen;
+  return { chosen, repaired };
 }
 
 /** The card a run with no login shows before the GitHub sign-in, under a placeholder handle: the
@@ -614,10 +617,14 @@ export async function publish(io: PublishIO): Promise<void> {
     const before = values;
     const marked = disagreeing();
     if (only) for (const key of marked.keys()) if (!only.has(key)) marked.delete(key);
-    values = await promptEntries(values, saved, prompter, marked, handle, only, lead);
+    const walked = await promptEntries(values, saved, prompter, marked, handle, only, lead);
+    values = walked.chosen;
+    // A repair is not an edit: replaying Enter's shown form of a rule-failing value over a 412
+    // reload would overwrite whatever is live by then. A reloaded value that still fails goes
+    // through the loop-top gate again.
     for (const key of CURATED_KEYS) {
       const after = values.get(key);
-      if (after !== before.get(key)) edits.set(key, after);
+      if (after !== before.get(key) && !walked.repaired.has(key)) edits.set(key, after);
     }
     // Every marked row's prompt showed its detection; a mark that survives that look is a
     // decision, not a gap. This run only: persisting takes the per-key "n".
