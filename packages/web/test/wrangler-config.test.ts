@@ -17,9 +17,16 @@ interface RatelimitBinding {
 interface Route {
   pattern?: string;
 }
-interface WranglerConfig {
+/** The keys that decide which origins serve a Worker. Wrangler inherits all four from the top level. */
+interface OriginKeys {
+  route?: unknown;
+  routes?: Route[];
+  workers_dev?: boolean;
+  preview_urls?: boolean;
+}
+interface WranglerConfig extends OriginKeys {
   ratelimits?: RatelimitBinding[];
-  env?: Record<string, { ratelimits?: RatelimitBinding[]; routes?: Route[] }>;
+  env?: Record<string, OriginKeys & { ratelimits?: RatelimitBinding[] }>;
 }
 
 const errors: ParseError[] = [];
@@ -97,5 +104,19 @@ describe("wrangler.jsonc custom domains", () => {
     expect(siteUrl.protocol).toBe("https:");
     const patterns = (config.env?.production?.routes ?? []).map((r) => r.pattern).sort();
     expect(patterns).toEqual(canonicalHosts(siteUrl).sort());
+  });
+
+  it("production serves no workers.dev or preview URL, staging stays on workers.dev", () => {
+    // Wrangler leaves an unset preview_urls out of the deploy request (the API picks the value), and
+    // a Worker with preview URLs on serves every version at <version>-ymmv-production.<subdomain>.workers.dev:
+    // a third origin outside canonicalHosts(). Explicit false on both keys turns them off on deploy.
+    expect(config.env?.production?.workers_dev).toBe(false);
+    expect(config.env?.production?.preview_urls).toBe(false);
+    // Staging has no custom domain; workers.dev is its only origin. A top-level route, or the
+    // production values moved up to the top level, would be inherited and take staging offline.
+    const staging = config.env?.staging;
+    expect(staging?.routes ?? config.routes ?? []).toEqual([]);
+    expect(staging?.route ?? config.route).toBeUndefined();
+    expect(staging?.workers_dev ?? config.workers_dev).not.toBe(false);
   });
 });
