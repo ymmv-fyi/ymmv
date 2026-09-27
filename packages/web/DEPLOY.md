@@ -76,6 +76,10 @@ $env:CLOUDFLARE_ACCOUNT_ID = '<account id>'
 $env:CLOUDFLARE_API_TOKEN  = '<token: Workers Scripts edit + Zone DNS edit>'
 ```
 
+Run the steps in PowerShell 7.1 or later (`pwsh`): step 4's masked prompt needs it, and Windows
+PowerShell 5.1 would echo the token. Step 4 also needs Git for Windows (for Git Bash) and `jq` on
+`PATH`.
+
 ## Steps (from repo root)
 
 ### 1. Gates (same as CI's gate job)
@@ -107,22 +111,60 @@ domains are the only origins, with no `workers.dev` or
 
 ### 4. Zone WAF rate-limit rule, BEFORE the deploy (only when `infra/waf-ratelimit.sh` changed)
 
-The committed rule expression is the source of truth for the edge rate limit, and it is the only
-limiter in front of the bearer GETs, `/api/v1/auth/whoami` and `/api/v1/profile` (no Workers
-binding). When the expression changed
-since the last deploy, apply it first, so the Worker never serves a new endpoint the rule does not
-yet cover; then verify. Needs a zone WAF-edit API token. Still from the repo root:
+The rule in `infra/waf-ratelimit.sh` is the source of truth for the edge rate limit, and it is the
+only limiter in front of the bearer GETs, `/api/v1/auth/whoami` and `/api/v1/profile` (no Workers
+binding). When the script changed since the last deploy, apply it first, so the Worker never serves
+a new endpoint the rule does not yet cover; then verify. To tell, diff it against the commit the
+live Worker was built from:
 
 ```powershell
-$env:CLOUDFLARE_API_TOKEN = '...'; $env:CLOUDFLARE_ZONE_ID = '...'
-bash infra/waf-ratelimit.sh apply
-bash infra/waf-ratelimit.sh verify
-Remove-Item Env:\CLOUDFLARE_API_TOKEN
+git diff --stat '<last deployed commit>' HEAD -- infra/waf-ratelimit.sh
 ```
 
-`verify` reports drift between the committed expression and the live rule.
+Any output means run this step. An edit that leaves the rule as it is costs one `apply`, which is
+idempotent. If you don't know the last deployed commit, run the step anyway.
+
+The script reads the zone WAF-edit token from `CLOUDFLARE_WAF_TOKEN`, so the `CLOUDFLARE_API_TOKEN`
+step 5 deploys with is never touched. Run it with Git Bash: in PowerShell a bare `bash` can be WSL's,
+which never sees the PowerShell environment. From the repo root, paste exactly this block (the
+prompt masks the token and keeps it out of the command line):
+
+```powershell
+try {
+  if ($PSVersionTable.PSVersion -lt [version]'7.1') { throw 'run this in pwsh 7.1+: this shell would echo the token' }
+  $env:CLOUDFLARE_WAF_TOKEN = Read-Host -MaskInput 'zone WAF-edit token'
+  if (-not $env:CLOUDFLARE_WAF_TOKEN) { throw 'no WAF token entered: do not deploy' }
+  if (-not $env:CLOUDFLARE_ZONE_ID) { $env:CLOUDFLARE_ZONE_ID = Read-Host 'ymmv.fyi zone id' }
+  "zone: $env:CLOUDFLARE_ZONE_ID (must be ymmv.fyi's)"
+  $gitBash = Join-Path (Split-Path (Split-Path (Get-Command git).Source)) 'bin\bash.exe'
+  if (-not (Test-Path $gitBash)) { throw "Git Bash not found ($gitBash): do not deploy" }
+  & $gitBash infra/waf-ratelimit.sh apply;  if ($LASTEXITCODE) { throw 'WAF apply failed: do not deploy' }
+  & $gitBash infra/waf-ratelimit.sh verify; if ($LASTEXITCODE) { throw 'WAF verify failed: do not deploy' }
+} finally {
+  Remove-Item Env:\CLOUDFLARE_WAF_TOKEN -ErrorAction Ignore
+}
+```
+
+A throw from any line means stop: don't run step 5 until `verify` exits 0 (the live rule matches the
+committed one). Its other exits: 1 drift, an ambiguous match or a missing variable; 2 no rule; 3 a
+missing tool; 4 an API or transport failure.
 
 ### 5. Deploy the baked config (no `--env`)
+
+First confirm the deploy uses the token in your shell. With `CLOUDFLARE_API_TOKEN` unset, wrangler
+falls back to a cached `wrangler login`, which can be a different Cloudflare account:
+
+```powershell
+if (-not $env:CLOUDFLARE_API_TOKEN -or -not $env:CLOUDFLARE_ACCOUNT_ID) {
+  throw 'set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (Prereqs)'
+} else {
+  "deploying to account $env:CLOUDFLARE_ACCOUNT_ID"
+  pnpm --filter @ymmv/web exec wrangler whoami
+}
+```
+
+Stop if that throws, or if the account table `whoami` prints has no row with the account ID printed
+above. Then deploy:
 
 ```powershell
 cd packages/web

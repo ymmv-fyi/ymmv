@@ -33,7 +33,8 @@ Workers + D1.
   migrations (new file in `packages/web/migrations` + apply local for tests
   **and** prod on deploy), the `RL_WRITE`/`RL_AUTH` bindings, the zone WAF
   rate-limit rule (`infra/waf-ratelimit.sh`, applied before the Worker deploy
-  when its expression changed), npm publish (tag-driven OIDC `release.yml`), DNS.
+  whenever the script changed, with a zone WAF-edit token in `CLOUDFLARE_WAF_TOKEN`:
+  `packages/web/DEPLOY.md` step 4), npm publish (tag-driven OIDC `release.yml`), DNS.
 - **Versioning is tag-driven - NEVER bump a version.** There is no VERSION file,
   and all four `package.json`s are intentionally `0.0.0` (CI runs `npm pkg set
   version` from the `vX.Y.Z` tag at publish time, ephemerally on the runner).

@@ -123,6 +123,19 @@ describe("infra/waf-ratelimit.sh stays present, honest, and secret-free", () => 
     expect(script).not.toMatch(/\b[0-9a-f]{32}\b/);
   });
 
+  it("DEPLOY.md step 4 gives the script its own token and never touches the deploy token", () => {
+    const md = readFileSync(new URL("../../../packages/web/DEPLOY.md", import.meta.url), "utf8");
+    const start = md.indexOf("### 4.");
+    const end = md.indexOf("### 5.", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const step4 = md.slice(start, end);
+    expect(step4).toContain("$env:CLOUDFLARE_WAF_TOKEN =");
+    expect(step4).toMatch(/Env:.CLOUDFLARE_WAF_TOKEN/);
+    expect(step4).not.toMatch(/[$]env:CLOUDFLARE_API_TOKEN *=/);
+    expect(step4).not.toMatch(/Env:.CLOUDFLARE_API_TOKEN/);
+  });
+
   it("both referencing web sources still point at this path (a rename trips here)", () => {
     for (const ref of [
       "../../../packages/web/wrangler.jsonc",
