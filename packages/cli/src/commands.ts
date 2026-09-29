@@ -177,7 +177,7 @@ function writeRuleRefusal(entries: Entry[], existing: Profile | null): string | 
  *  siblings of the argv pre-flight: promptEntries' re-ask (and what its Enter keeps), the first
  *  run's drop of a refused detection (firstRunValues), the publish loop's walk gate, and
  *  writeRuleRefusal. They must agree exactly, or a value the gate rejects and the re-ask accepts
- *  would walk the 13 prompts forever without ever reaching a card. */
+ *  would walk the prompts forever without ever reaching a card. */
 function valueProblem(value: string): "invisible" | "over-cap" | undefined {
   if (!showsVisibleText(value)) return "invisible";
   if (value.length > MAX_VALUE) return "over-cap";
@@ -191,6 +191,13 @@ function ruleClause(problem: "invisible" | "over-cap", value: string): string {
     : `is ${value.length} characters; the cap is ${MAX_VALUE}`;
 }
 
+/** Labels as prose: "Editor", "Editor and Font", "Editor, Font and Theme". */
+function listLabels(keys: readonly CuratedKey[]): string {
+  const labels = keys.map((key) => KEY_LABELS[key]);
+  const last = labels.pop();
+  return labels.length > 0 ? `${labels.join(", ")} and ${last}` : (last ?? "");
+}
+
 /** Every key the saved profile carries (curated and newer-taxonomy alike): a failing default under
  *  one of these is the user's own stored value, anything else came from detection. */
 function savedKeys(existing: Profile | null): ReadonlySet<string> {
@@ -200,7 +207,7 @@ function savedKeys(existing: Profile | null): ReadonlySet<string> {
 /** What a first run starts from: detection alone, minus any value the write rules refuse (over
  *  the cap, zero-width only). Nobody chose a detected value, so a refused one is dropped rather
  *  than offered: its prompt is an ordinary bare one that Enter skips, and it never sends the
- *  loop-top gate into a second, full walk. The sign-in card shows this same map, so the card
+ *  loop-top gate into a second walk. The sign-in card shows this same map, so the card
  *  before the device flow and the gap walk after it agree. */
 function firstRunValues(detected: Map<CuratedKey, string>): Map<CuratedKey, string> {
   return new Map(
@@ -441,6 +448,11 @@ async function askToSignIn(
  *   Every walk (the first run's gaps, `e`, the write-rule gate): a prompt with no default shows
  *   a faint example, and a dotfiles answer typed without a scheme is offered once in its https
  *   form, "use <url>?" [Y/n].
+ *
+ *   The write-rule gate: at each LOOP top, a value the server would refuse (saved before a rule
+ *   existed, or detected into a gap) sends the keys that fail, and only those, through a walk
+ *   first, under "<Label> can't publish as it is." (the usual keep/clear line when Enter
+ *   repairs each one).
  *
  *   With no login stored, -y runs the device flow before anything prints and shows no sign-in
  *   card: the flag is the consent.
@@ -717,13 +729,36 @@ export async function publish(io: PublishIO): Promise<void> {
         );
       }
     }
-    const failsRule = ([, v]: [CuratedKey, string]) => valueProblem(v) !== undefined;
     for (;;) {
       // Never offer a card the server would 422 and this loop would re-offer unchanged: when a
       // merged default fails a write rule (a value saved before the rule existed, or a detected
-      // value filling a key the saved profile lacks), walk first, where the re-ask names the saved
-      // value and offers "-". At the loop top so a 412 reload's fresh merge is gated the same way.
-      if ([...values].some(failsRule)) await prompt(io.prompter);
+      // value filling a key the saved profile lacks), walk those keys first, where the re-ask
+      // names the saved value and offers "-". Only those: an asked key leaves the walk fixed or
+      // cleared, so nothing else can fail, and walking all 13 to fix one row would cost a
+      // returning user what a first run never pays. The rows it skips keep their detection
+      // marks (see prompt). At the loop top so a 412 reload's fresh merge is gated the same way.
+      const failing = CURATED_KEYS.filter((key) => {
+        const value = values.get(key);
+        return value !== undefined && valueProblem(value) !== undefined;
+      });
+      if (failing.length > 0) {
+        // The lead says why these rows are asked, unless Enter fixes every one of them: a stored
+        // form that fails only for bytes it does not show (escape sequences past the cap) is
+        // repaired by Enter to its shown form (see promptEntries), and "type a new value" there
+        // would turn a repair into an edit a 412 rebase replays.
+        const one = failing.length === 1;
+        const enterFixes = failing.every(
+          (key) => valueProblem(shownValue(values.get(key) ?? "")) === undefined,
+        );
+        await prompt(
+          io.prompter,
+          new Set(failing),
+          enterFixes
+            ? undefined
+            : `${listLabels(failing)} can't publish as ${one ? "it is" : "they are"}. ` +
+                `Type ${one ? "a new value" : "new values"}, or "-" to clear.`,
+        );
+      }
       const entries = assemble();
       const disagreements = disagreeing();
       showCard(entries, disagreements, pending());

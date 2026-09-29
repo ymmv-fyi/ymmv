@@ -19,6 +19,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   prints `no ymmv profile for "x" yet.` and no longer suggests publishing one for them. If you
   signed in with `ymmv login` and have no profile of your own, it adds `publish yours → run ymmv`.
   An old handle shows the profile under its new one, with `(old is now new)` on stderr.
+- **A saved value that breaks a limit asks only for that field.** When a value is too long or
+  has nothing visible, `ymmv` used to walk all 13 prompts before the card. It now asks only for
+  the fields that fail, under a line such as `Editor can't publish as it is.`, then shows the
+  card. Rows it did not ask about keep their `(detected: …)` note, and `d` still offers them.
 - **`ymmv delete` says it signed you out.** Deleting a profile signs out every login for it.
   The line now says so, and names what the next publish needs: a sign-in, or a new
   `YMMV_TOKEN` from `ymmv login`.

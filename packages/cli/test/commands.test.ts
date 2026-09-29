@@ -904,7 +904,11 @@ describe("publish", () => {
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // no walk before the first card
+    // No walk before the first card; after the reload, the failing key alone, re-asked once.
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]);
+    expect(logs).toContain(
+      '\n  Editor can\'t publish as it is. Type a new value, or "-" to clear.',
+    );
     expect(logs.join("\n")).toMatch(/the saved value has no visible text/);
     expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
     expect(posted(fetchFn, 3).entries).toEqual([
@@ -1131,7 +1135,7 @@ describe("publish", () => {
     expect(logs.join("\n")).toMatch(
       /the detected value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
     );
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([
       { key: "editor", value: "Helix" },
       { key: "shell", value: "zsh" },
@@ -1185,7 +1189,7 @@ describe("publish", () => {
     expect(logs.join("\n")).toMatch(
       /the detected value has no visible text\. Type a value or - to clear/,
     );
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([
       { key: "editor", value: "Helix" },
       { key: "shell", value: "zsh" },
@@ -1211,7 +1215,7 @@ describe("publish", () => {
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // walked, one re-ask
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([
       { key: "editor", value: "Helix" },
       { key: "shell", value: "zsh" },
@@ -1243,7 +1247,7 @@ describe("publish", () => {
     expect(logs.join("\n")).toMatch(
       /the saved value has no visible text\. Type a value or - to clear/,
     );
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }]);
   });
 
@@ -1265,9 +1269,38 @@ describe("publish", () => {
     });
     const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
     await publish({ interactive: true, yes: false, prompter });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1); // one re-ask, then done
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([{ key: "os", value: "macOS" }]); // editor dropped
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("the gate walks every failing key and only those, under a lead that names them", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        own(
+          prof("me", [
+            { key: "editor", value: "x".repeat(300) },
+            { key: "shell", value: "zsh" },
+            { key: "font", value: String.fromCodePoint(0x200b) },
+            { key: "theme", value: "y".repeat(257) },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Helix" : "-"));
+    const prompter = stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") });
+    await publish({ interactive: true, yes: false, prompter });
+    expect(askedLabels(ask)).toEqual(["Editor", "Font", "Theme"]);
+    expect(logs).toContain(
+      '\n  Editor, Font and Theme can\'t publish as they are. Type new values, or "-" to clear.',
+    );
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Helix" },
+      { key: "shell", value: "zsh" },
+    ]);
   });
 });
 
@@ -1327,7 +1360,7 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
   });
 
   it('Enter keeps "-" in the walk the write-rule gate forces', async () => {
-    // The saved Font has no visible text, so the loop top walks every row before any card.
+    // The saved Font has no visible text, so the loop top walks it before any card.
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi
       .fn()
@@ -1339,7 +1372,7 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
     const ask = enterAll({ Font: "Iosevka" });
     const choice = vi.fn().mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // the gate's walk, no e
+    expect(askedLabels(ask)).toEqual(["Font"]); // the gate's walk, no e
     expect(posted(fetchFn).entries).toEqual([...DASH_ZSH, { key: "font", value: "Iosevka" }]);
   });
 
@@ -1391,7 +1424,9 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
       yes: false,
       prompter: stubPrompter({ ask, choice: vi.fn().mockResolvedValue("y") }),
     });
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length); // one gate walk, no second
+    expect(askedLabels(ask)).toEqual(["Editor"]); // one gate walk, no second
+    // Enter is the fix here, so the walk keeps the usual line rather than asking for a new value.
+    expect(logs).toContain('\n  Enter to keep, "-" to clear');
     expect(posted(fetchFn).entries).toEqual(VIM_ZSH);
   });
 
@@ -1460,7 +1495,7 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
     expect(logs.join("\n")).toMatch(
       /the saved value is 300 characters; the cap is 256\. Type a shorter value or - to clear/,
     );
-    expect(ask).toHaveBeenCalledTimes(CURATED_KEYS.length + 1);
+    expect(askedLabels(ask)).toEqual(["Editor", "Editor"]); // the failing key alone, re-asked once
     expect(posted(fetchFn).entries).toEqual([{ key: "editor", value: "Helix" }, DASH_ZSH[1]]);
   });
 
@@ -2354,11 +2389,11 @@ describe("publish: a changed detection is marked on the card and taken with d", 
     expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
   });
 
-  it("412 whose reload forces a walk: the walk shows the mark the reload introduced, and Enter keeps it", async () => {
+  it("412 whose reload forces a walk: it asks the failing key alone, and the reload's mark reaches the card", async () => {
     // Before: editor agrees with detection, the saved terminal masks an over-cap detected one.
     // Another device then changes the editor and removes the terminal, so the reload's gap-filler
-    // fails a rule and the walk runs before the reloaded card. No card has shown the editor mark,
-    // but its prompt carries the detection, so Enter there is a keep made with it in view.
+    // fails a rule and the walk runs before the reloaded card. The walk asks Terminal only, so the
+    // editor mark it never showed is still undecided: the card carries it, and d is offered.
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(detectStack).mockReturnValue(
       new Map([
@@ -2382,10 +2417,9 @@ describe("publish: a changed detection is marked on the card and taken with d", 
     const choice = vi.fn().mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).not.toContain("(detected"); // nothing disagreed before the reload
-    expect(ask).toHaveBeenCalledWith("Editor", "Emacs", "detected: Neovim"); // the forced walk
-    expect(cards()[1]).toMatch(/Editor\s+Emacs\n/);
-    expect(cards()[1]).not.toContain("(detected");
-    expect(choiceCalls(choice)).toEqual([SAME_THREE, THREE]);
+    expect(askedLabels(ask)).toEqual(["Terminal"]); // the forced walk
+    expect(cards()[1]).toMatch(/Editor\s+Emacs {2}\(detected: Neovim\)\n/);
+    expect(choiceCalls(choice)).toEqual([SAME_THREE, FOUR]);
     expect(posted(fetchFn, 3).entries).toEqual([
       { key: "editor", value: "Emacs" },
       { key: "terminal", value: "Ghostty" },
@@ -2393,9 +2427,9 @@ describe("publish: a changed detection is marked on the card and taken with d", 
     expect(ifMatchOf(fetchFn, 3)).toBe('"B"');
   });
 
-  it("a walk forced BEFORE any card (a saved value fails a rule) shows the detection, and Enter keeps", async () => {
-    // The over-cap saved editor sends the loop through the prompts first. The shell prompt shows
-    // what detection says, so Enter there resolves the mark before the first card.
+  it("a walk forced BEFORE any card (a saved value fails a rule) leaves the other rows marked", async () => {
+    // The over-cap saved editor sends the loop through its prompt first, and through no other:
+    // the shell mark was never in view, so the card carries it and d offers it.
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(detectStack).mockReturnValue(new Map([["shell", "fish"]]));
     const fetchFn = vi
@@ -2411,15 +2445,17 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     const ask = vi.fn(async (label: string) => (label === "Editor" ? "Vim" : ""));
-    const choice = vi.fn().mockResolvedValue("y");
+    // d at the first card, y to take fish, then publish.
+    const choice = vi.fn().mockResolvedValueOnce("d").mockResolvedValue("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
-    expect(ask).toHaveBeenCalledWith("Shell", "zsh", "detected: fish");
-    expect(cards()[0]).toMatch(/Shell\s+zsh\n/);
-    expect(cards()[0]).not.toContain("(detected");
-    expect(choiceCalls(choice)).toEqual([THREE]);
+    expect(askedLabels(ask)).toEqual(["Editor"]);
+    expect(hintsFor(ask, "Editor")).toEqual([undefined]); // a default explains itself
+    expect(cards()[0]).toMatch(/Shell\s+zsh {2}\(detected: fish\)\n/);
+    expect(choiceCalls(choice)).toEqual([FOUR, TAKE, THREE]);
+    expect(takeQuestions(choice)).toEqual([{ q: "Shell  zsh → fish", tight: false }]);
     expect(posted(fetchFn).entries).toEqual([
       { key: "editor", value: "Vim" },
-      { key: "shell", value: "zsh" },
+      { key: "shell", value: "fish" },
     ]);
   });
 
