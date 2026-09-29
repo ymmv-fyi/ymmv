@@ -4,10 +4,10 @@ import type { CuratedKey } from "./keys.js";
 import type { Entry, Extra, Profile } from "./types.js";
 import { SCHEMA_VERSION } from "./types.js";
 
-function profile(entries: Entry[], extras: Extra[] = []): Profile {
+function profile(entries: Entry[], extras: Extra[] = [], handle = "test"): Profile {
   return {
     schema_version: SCHEMA_VERSION,
-    handle: "test",
+    handle,
     entries,
     extras,
     updated_at: "2026-06-28T00:00:00Z",
@@ -63,8 +63,8 @@ describe("diff()", () => {
 
   it("6. extras render as a separate block — never rows, never mismatches", () => {
     const result = diff(
-      profile([{ key: "editor", value: "vim" }], [{ label: "Launcher", value: "Raycast" }]),
-      profile([{ key: "editor", value: "vim" }], [{ label: "Keyboard", value: "HHKB" }]),
+      profile([{ key: "editor", value: "vim" }], [{ label: "Launcher", value: "Raycast" }], "me"),
+      profile([{ key: "editor", value: "vim" }], [{ label: "Keyboard", value: "HHKB" }], "them"),
     );
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]?.status).toBe("same");
@@ -241,5 +241,18 @@ describe("diff()", () => {
       profile([{ key: "dotfiles", value: "https://github.com/antfu/Dotfiles" }]),
     );
     expect(cased.rows[0]?.status).toBe("changed"); // case significant for URLs
+  });
+
+  it("22. self-diff — the same handle in any case carries the extras once, as theirs", () => {
+    const entries: Entry[] = [{ key: "editor", value: "vim" }];
+    const extras: Extra[] = [{ label: "Keyboard", value: "HHKB" }];
+    const result = diff(profile(entries, extras, "antfu"), profile(entries, extras, "AntFu"));
+    expect(result.rows).toEqual(diff(profile(entries), profile(entries)).rows);
+    expect(result.extras).toEqual({ mine: [], theirs: extras });
+    // Two profiles keep both sides, even with the same extras.
+    expect(diff(profile(entries, extras, "a"), profile(entries, extras, "b")).extras).toEqual({
+      mine: extras,
+      theirs: extras,
+    });
   });
 });

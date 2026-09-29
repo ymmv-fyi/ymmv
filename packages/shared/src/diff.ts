@@ -18,7 +18,10 @@
  *  - Duplicate keys in `entries` resolve LAST-WINS (Map insertion semantics).
  *  - Non-curated keys in `entries` are IGNORED (never a row) — the API rejects them on
  *    write, so this is purely defensive against malformed input.
- *  - extras never diff: both sides are carried through unchanged for separate-block render.
+ *  - extras never diff: both sides are carried through unchanged for separate-block render. A
+ *    self-diff (the same handle on both sides, in any case) carries them once, as `theirs`:
+ *    both sides are one profile, and each surface would otherwise list every extra twice under
+ *    the same handle.
  *
  *     mine.entries ──┐                              ┌── rows[] (CURATED_KEYS order)
  *                    ├─► build lookups ─► compare ──┤
@@ -75,9 +78,10 @@ export function diff(mine: Profile, theirs: Profile): DiffResult {
     rows.push({ key, label: KEY_LABELS[key], mine: mineValue, theirs: theirsValue, status });
   }
 
+  const self = mine.handle.toLowerCase() === theirs.handle.toLowerCase();
   return {
     rows,
-    extras: { mine: [...mine.extras], theirs: [...theirs.extras] },
+    extras: { mine: self ? [] : [...mine.extras], theirs: [...theirs.extras] },
     differ,
     shared,
   };

@@ -975,6 +975,15 @@ test.describe("the 3-column diff", () => {
     expect(await page.locator("table.extras-dim").count()).toBe(0);
   });
 
+  test("a self-diff lists each extra once, under the one handle", async ({ page }) => {
+    // Both sides are the same profile: listing each side's extras would print every one twice.
+    await page.goto("/antfu/vs/antfu");
+    const rows = page.locator("table.extras-dim tr");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: "Keyboard = HHKB Pro 2" })).toHaveCount(1);
+    await expect(rows.locator("th")).toHaveText(["antfu", "antfu"]);
+  });
+
   test("301s a renamed viewed-handle to the canonical diff URL (preserves the viewer)", async ({
     request,
   }) => {

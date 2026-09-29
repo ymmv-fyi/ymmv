@@ -360,11 +360,13 @@ describe("compare: ymmv <a> vs <b>", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("a handle against itself is the all-same diff the web shows", async () => {
-    vi.stubGlobal("fetch", serve({ antfu: A }));
-    await compare("antfu", "antfu");
+  it("a handle against itself is the all-same diff the web shows, each extra listed once", async () => {
+    const withExtras = prof("antfu", A.entries, [{ label: "Keyboard", value: "HHKB Pro 2" }]);
+    vi.stubGlobal("fetch", serve({ antfu: withExtras, AntFu: withExtras }));
+    await compare("antfu", "AntFu");
     expect(logs[0]).toContain("how antfu differs from antfu");
     expect(logs[0]).toMatch(/0 differ {3}2 shared/);
+    expect(logs[0]?.match(/Keyboard = HHKB Pro 2/g)).toHaveLength(1);
   });
 });
 
