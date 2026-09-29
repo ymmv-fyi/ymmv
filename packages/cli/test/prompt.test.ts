@@ -269,6 +269,26 @@ describe("readline contract behind the idle prompter", () => {
     }
   });
 
+  it("an input that ends, or a close() from code, leaves the pending question unsettled", async () => {
+    // Why the prompter's close handler still aborts its own question: the terminal going away,
+    // and the close its 'error' handler runs, would otherwise leave the await hanging.
+    for (const how of ["end", "close"]) {
+      const t = fakeTerminal();
+      let settled = false;
+      const pending = t.rl.question("Publish? ").finally(() => {
+        settled = true;
+      });
+      pending.catch(() => {});
+      await tick();
+      if (how === "end") t.input.end();
+      else t.rl.close();
+      await tick();
+      await tick();
+      expect(t.rl.closed).toBe(true);
+      expect(settled).toBe(false);
+    }
+  });
+
   it("a withdrawal after the question was answered writes nothing", async () => {
     // The offer's signal still fires once its wait ends, after an Enter already took it. That must
     // leave no stray line end under the output that follows.

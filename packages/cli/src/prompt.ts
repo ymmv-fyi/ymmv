@@ -215,15 +215,17 @@ export function makePrompter(after: Schedule = schedule): Prompter {
           process.exit(130);
         }
       });
-      // Ctrl+D: readline 'close' leaves a pending question() UNSETTLED (nodejs/node#53497
-      // family) — the process would then exit 0 with no message, reading as success to
-      // `ymmv && next`. Abort so EOF lands on the same PromptAborted path as ^C. An idle close
-      // (EOF while no question is outstanding: before the first, during the POST, or the
-      // sign-in's device flow) needs nothing here: a command that asks nothing more prints its
-      // own outcome, and a later question finds the interface closed, which question() reads as
-      // the same abort. An offer pending at EOF has no `ac` either: ^D rejects it at once, an
-      // input that just ends (the terminal went away) leaves it pending until its withdrawal, and
-      // offer() reads both as false.
+      // A close with a question pending. Ctrl+D on an empty line rejects that question itself
+      // (AbortError, which readLine reads as PromptAborted). A close that is not a keypress
+      // leaves it UNSETTLED, though: an input that just ends (the terminal went away) and the
+      // close() the 'error' handler below runs. Both are pinned in prompt.test.ts. Unsettled,
+      // the process would exit 0 with no message, reading as success to `ymmv && next`, so abort
+      // and land every close on the same PromptAborted path as ^C. An idle close (while no
+      // question is outstanding: before the first, during the POST, or the sign-in's device
+      // flow) needs nothing here: a command that asks nothing more prints its own outcome, and a
+      // later question finds the interface closed, which question() reads as the same abort. An
+      // offer pending at a close has no `ac` either: ^D rejects it at once, any other close
+      // leaves it pending until its withdrawal, and offer() reads both as false.
       rl.on("close", () => {
         ac?.abort();
       });
