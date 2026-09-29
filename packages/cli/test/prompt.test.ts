@@ -10,6 +10,7 @@ import {
   clearIdleInput,
   makePrompter,
   matchChoice,
+  muteOutput,
   PromptAborted,
   promptLine,
   type Schedule,
@@ -204,6 +205,29 @@ describe("readline contract behind the idle prompter", () => {
       );
       t.input.write(CR);
       await pending;
+      t.rl.close();
+    }
+  });
+
+  it("echoes nothing it reads while muted, and draws the next question once unmuted", async () => {
+    // An Enter pressed while a command starts: readline drops the line, but unmuted it still
+    // writes the line end, a blank line above the first question. Muted, nothing reaches the
+    // terminal, and no wrapped rows are counted that the question would move the cursor up over.
+    for (const mute of [false, true]) {
+      const t = fakeTerminal();
+      const unmute = mute ? muteOutput(t.rl) : () => {};
+      t.input.write(`${CR}${"x".repeat(240)}`); // the Enter, then three rows' worth at 80 columns
+      await tick();
+      expect(t.take()).toStrictEqual(mute ? "" : expect.stringMatching(/^\r\nx/));
+      const rows = (t.rl as unknown as { prevRows: number }).prevRows;
+      expect(rows > 0).toBe(!mute);
+      clearIdleInput(t.rl);
+      unmute();
+      const pending = t.rl.question("Publish? ");
+      await tick();
+      expect(t.take()).toContain("Publish? ");
+      t.input.write(`n${CR}`);
+      expect(await pending).toBe("n");
       t.rl.close();
     }
   });
@@ -425,6 +449,32 @@ describe("makePrompter: keys typed before the first question", () => {
     input.write(`n${CR}`);
     expect(await pending).toBe(false);
     prompter.close();
+  });
+
+  it("keys dropped before the first question are never echoed: no blank line above it", async () => {
+    // Open early (delete, publish, login) or made at the question (`ymmv set`'s link offer, where a
+    // Windows console hands held keys over during the settle): an Enter or text readline reads
+    // before the first question shows nowhere, and the question itself does.
+    for (const openEarly of [true, false]) {
+      const { input, output } = nextInterface();
+      const shown = capture(output);
+      const { prompter, settleQuiet } = clockedPrompter();
+      if (openEarly) {
+        prompter.open();
+        input.write(`${CR}abc`);
+        await tick();
+      }
+      const pending = prompter.confirm("Delete ymmv.fyi/me?", false);
+      if (!openEarly) input.write(`${CR}abc`); // arrives during the settle
+      await settleQuiet();
+      const drawn = shown();
+      expect(drawn).not.toContain(CR);
+      expect(drawn).not.toContain("abc");
+      expect(drawn).toContain("\n  Delete ymmv.fyi/me? [y/N] ");
+      input.write(`y${CR}`);
+      expect(await pending).toBe(true);
+      prompter.close();
+    }
   });
 
   it("held keys that arrive after a turn but before stdin goes quiet are dropped, open early or not", async () => {

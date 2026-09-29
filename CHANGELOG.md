@@ -64,6 +64,8 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   before the question appeared could still answer it on Windows, and at the `use https://…?`
   offer of `ymmv set dotfiles` on any system. The first question now appears once the keyboard
   has been quiet for a moment, and drops what was typed before it.
+- **An Enter pressed while `ymmv`, `ymmv delete` or `ymmv login` is working prints nothing.**
+  It was already dropped, but left an extra blank line above the first question.
 
 ## [0.13.0] - 2026-09-25
 

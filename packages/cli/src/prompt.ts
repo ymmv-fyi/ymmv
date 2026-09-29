@@ -9,7 +9,8 @@ import { type Codes, colorEnabled, palette, sanitizeValue } from "./render.js";
 //
 // The input opens at open() or at the first question, whichever comes first; which commands open
 // it early, and why, is index.ts's interactive(). While it is open, readline drops a whole line
-// typed with no question pending, and the first question clears an unfinished one.
+// typed with no question pending, and the first question clears an unfinished one. Nothing it
+// reads before that first question is echoed (see muteOutput).
 //
 // Ctrl+C: readline swallows SIGINT and merely PAUSES unless an 'SIGINT' listener exists (and a
 // bare abort leaves the question() promise unsettled — nodejs/node#53497). So every question runs
@@ -46,6 +47,28 @@ export function clearIdleInput(face: Interface): void {
   state.line = "";
   state.cursor = 0;
   state.prevRows = 0;
+}
+
+/**
+ * Stop `face` writing to the terminal and return what starts it again, exported for the contract
+ * test in prompt.test.ts. Readline echoes every key it reads, a line it then drops included, so an
+ * Enter pressed during a command's wait would print a line end: a stray blank line above the
+ * first question. Nothing readline writes before that question is worth showing (the question
+ * clears what was typed anyway), so an interface stays muted until then. A key typed before the
+ * interface exists is out of reach: a macOS or Linux terminal in line mode echoes it itself, so
+ * `set` (which opens at its question) and the moments before open() still show that Enter. A
+ * Windows console echoes only what something reads. `output` is internal and absent from
+ * @types/node, hence the cast. Readline reads it at every write, and null is the documented
+ * no-output mode of an interface made without one: nothing is written, and with no columns to
+ * wrap at, no rows are counted either.
+ */
+export function muteOutput(face: Interface): () => void {
+  const state = face as unknown as { output: NodeJS.WritableStream | null };
+  const output = state.output;
+  state.output = null;
+  return () => {
+    state.output = output;
+  };
 }
 
 /** Thrown from ask/confirm/choice on Ctrl+C or Ctrl+D at the prompt, or when an earlier Ctrl+D
@@ -191,9 +214,9 @@ function settle(input: NodeJS.ReadableStream, signal: AbortSignal, after: Schedu
 
 export function makePrompter(after: Schedule = schedule): Prompter {
   let rl: Interface | null = null;
-  // No question or offer has read from `rl` yet (see readLine). Set per interface: after close(),
-  // io() makes a fresh one.
-  let unasked = false;
+  // Set while no question or offer has read from `rl` yet (see readLine): it gives readline its
+  // output back. Per interface: after close(), io() makes a fresh one.
+  let unmute: (() => void) | null = null;
   const color = colorEnabled();
   const c: Codes = palette(color);
   // One controller PER QUESTION (created in question(), cleared in its finally): a ^C landing in
@@ -207,7 +230,7 @@ export function makePrompter(after: Schedule = schedule): Prompter {
       // its prompt on a terminal resize. readline's default "> " would then appear under the
       // waiting line, so idle on an empty one; each question sets its own.
       rl = createInterface({ input: stdin, output: stdout, prompt: "" });
-      unasked = true;
+      unmute = muteOutput(rl);
       rl.on("SIGINT", () => {
         if (ac) ac.abort();
         else {
@@ -252,15 +275,18 @@ export function makePrompter(after: Schedule = schedule): Prompter {
     // thread, and an interface this call just made (`ymmv set`'s link offer) starts reading only
     // now, so an Enter pressed while the command started would land right under the prompt. So
     // wait for stdin to go quiet first (settle), then clear: held keys that arrive meanwhile are
-    // dropped (a whole line as idle, an unfinished one by the clear). A question counts as pending
+    // dropped (a whole line as idle, an unfinished one by the clear). Readline's output stays
+    // muted until then, so none of it was echoed (see muteOutput). A question counts as pending
     // during the wait (`ac` is set), so ^C there aborts it as at the prompt; an offer sets none,
     // so ^C exits 130 as in any wait. Only this once — see clearIdleInput for why never before a
     // later question.
-    if (unasked) {
-      unasked = false;
+    if (unmute) {
+      const show = unmute;
+      unmute = null;
       // `input` is readline's own reference to the stream it reads, absent from @types/node.
       await settle((face as unknown as { input: NodeJS.ReadableStream }).input, signal, after);
       clearIdleInput(face);
+      show();
     }
     try {
       return await face.question(query, { signal });
