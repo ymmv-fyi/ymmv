@@ -26,6 +26,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **Enter at a field prompt keeps the saved value.** It used to delete a value of `-`, and to
   rewrite one holding hidden characters such as color codes, so publishing could undo a change
   made from another device in the meantime. Typing `-` clears a field, whatever its value.
+- **Ctrl+C at a question leaves one blank line, not two.** `Aborted. Nothing published.` and
+  `Cancelled. Nothing deleted.` now sit under the question the way they do after answering `n`.
+  The same goes for Ctrl+D, and for `ymmv login`'s `Log in again?`.
 
 ## [0.13.0] - 2026-09-25
 

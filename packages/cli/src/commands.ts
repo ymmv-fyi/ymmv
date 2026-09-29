@@ -353,6 +353,17 @@ async function promptEntries(
   return { chosen, repaired };
 }
 
+/** The line a prompt's abort ends the command with (^C, or ^D: mid-question, or at a question an
+ *  earlier idle ^D left with a closed input), as the standard unit, and exit 130. No newline of its
+ *  own: a cancelled question has already moved to a fresh line (readline's clearLine writes a
+ *  CRLF), and a question that never went out (a closed input, or a ^C in the turn before it is
+ *  written) printed nothing after the last unit, so either way the cursor sits at the start of a
+ *  line and the unit's one blank line is the only one. */
+function abortLine(line: string): void {
+  console.log(message(line));
+  process.exitCode = 130;
+}
+
 /** The card a run with no login shows before the GitHub sign-in, under a placeholder handle: the
  *  handle is whichever GitHub account signs in. True to sign in; false once a no or a ^C has
  *  printed its line (a ^C also sets exit 130). */
@@ -382,9 +393,7 @@ async function askToSignIn(
     console.log(message("Nothing published."));
   } catch (e) {
     if (!(e instanceof PromptAborted)) throw e;
-    // The first newline closes the interrupted prompt line; then the standard unit.
-    console.log(`\n${message("Aborted. Nothing published.")}`);
-    process.exitCode = 130;
+    abortLine("Aborted. Nothing published.");
   }
   return false;
 }
@@ -860,7 +869,7 @@ export async function publish(io: PublishIO): Promise<void> {
         // The one side effect the row question does not show: an "n" outlives the run. Say so
         // once the questions are done, with the way back (which forgets every dismissal, not just
         // these). Only when there is a file for it to live in. A ^C mid-questions skips this: the
-        // prompt line is torn and the abort message owns that moment.
+        // abort line owns that moment.
         const keptNow = dismissed.length - before;
         if (keptNow > 0 && dismissalsPath !== undefined) {
           const c = palette(color);
@@ -897,9 +906,7 @@ export async function publish(io: PublishIO): Promise<void> {
     }
   } catch (e) {
     if (e instanceof PromptAborted) {
-      // The first newline closes the interrupted prompt line; then the standard unit.
-      console.log(`\n${message(aborted())}`);
-      process.exitCode = 130;
+      abortLine(aborted());
       return;
     }
     // Whatever ends the run now (a refusal, a failed re-read) may say "Nothing was published"
@@ -1003,9 +1010,7 @@ export async function runSet(typed: SetTarget, prompter?: Prompter): Promise<voi
         target = { ...typed, value: await offerLinkForm(typed.value, handle, prompter, false) };
       } catch (e) {
         if (e instanceof PromptAborted) {
-          // The first newline closes the interrupted prompt line; then the standard unit.
-          console.log(`\n${message("Cancelled. Nothing set.")}`);
-          process.exitCode = 130;
+          abortLine("Cancelled. Nothing set.");
           return;
         }
         throw e;
@@ -1197,9 +1202,7 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       go = await io.prompter.confirm(`Delete ${target}? This is permanent`, false);
     } catch (e) {
       if (e instanceof PromptAborted) {
-        // The first newline closes the interrupted prompt line; then the standard unit.
-        console.log(`\n${message("Cancelled. Nothing deleted.")}`);
-        process.exitCode = 130;
+        abortLine("Cancelled. Nothing deleted.");
         return;
       }
       throw e;
@@ -1269,8 +1272,8 @@ export async function runLogin(io: InteractiveIO): Promise<void> {
         again = await io.prompter.confirm("Log in again?", false);
       } catch (e) {
         if (!(e instanceof PromptAborted)) throw e;
-        // Closes the interrupted prompt line. The line above already says what stands.
-        console.log("");
+        // No abort line: the one above already says what stands, and the cancelled question
+        // left the cursor at the start of a fresh line (see abortLine).
         process.exitCode = 130;
         return;
       }

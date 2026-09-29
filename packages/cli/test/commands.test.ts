@@ -446,8 +446,8 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ ask: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
-    // ^C variant: a newline closes the interrupted prompt line, then the standard unit.
-    expect(logs).toContain("\n\n  Aborted. Nothing published.");
+    // ^C: the standard unit, nothing before it (readline has already ended the prompt line).
+    expect(logs.at(-1)).toBe("\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -460,7 +460,7 @@ describe("publish", () => {
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({ choice: vi.fn().mockRejectedValue(new PromptAborted()) });
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs).toContain("\n\n  Aborted. Nothing published.");
+    expect(logs.at(-1)).toBe("\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
   });
@@ -500,7 +500,7 @@ describe("publish", () => {
     await publish({ interactive: true, yes: false, prompter });
     // GET happened, but no POST
     expect(fetchFn.mock.calls.every((c) => (c[1] as RequestInit)?.method !== "POST")).toBe(true);
-    // Decline (typed "n"): the standard unit, no extra prompt-closing newline.
+    // Decline (typed "n"): the same unit a ^C prints.
     expect(logs).toContain("\n  Aborted. Nothing published.");
   });
 
@@ -1677,7 +1677,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
       for (const a of answers) choice.mockResolvedValueOnce(a);
       choice.mockRejectedValueOnce(new PromptAborted());
       await publish({ interactive: true, yes: false, prompter: stubPrompter({ choice }) });
-      expect(logs).toContain("\n\n  Aborted. The earlier publish may have completed.");
+      expect(logs.at(-1)).toBe("\n  Aborted. The earlier publish may have completed.");
       expect(logs.join("\n")).not.toContain("Nothing published");
       expect(process.exitCode).toBe(130);
     }
@@ -2988,7 +2988,7 @@ describe("publish: with no stored login, the card comes before the GitHub sign-i
       yes: false,
       prompter: stubPrompter({ choice: vi.fn().mockRejectedValue(new PromptAborted()) }),
     });
-    expect(logs).toContain("\n\n  Aborted. Nothing published.");
+    expect(logs.at(-1)).toBe("\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(login).not.toHaveBeenCalled();
     expect(fetchFn).not.toHaveBeenCalled();
@@ -3443,7 +3443,7 @@ describe("publish: e asks which field", () => {
       choice: vi.fn().mockResolvedValue("e"),
     });
     await publish({ interactive: true, yes: false, prompter });
-    expect(logs.join("\n")).toContain("Aborted. Nothing published.");
+    expect(logs.at(-1)).toBe("\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
@@ -3592,7 +3592,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(choice.mock.calls[0]?.[0]).toBe(OFFER); // the walk aborted AT the offer, before the card
     expect(fetchFn).toHaveBeenCalledTimes(1); // the read only, never a POST
-    expect(logs.at(-1)).toBe("\n\n  Aborted. Nothing published.");
+    expect(logs.at(-1)).toBe("\n  Aborted. Nothing published.");
     expect(process.exitCode).toBe(130);
   });
 
@@ -4206,7 +4206,7 @@ describe("set", () => {
       vi.stubGlobal("fetch", fetchFn);
       await runSet(target, tty(vi.fn().mockRejectedValue(new PromptAborted())));
       expect(fetchFn).not.toHaveBeenCalled();
-      expect(logs).toEqual(["\n\n  Cancelled. Nothing set."]);
+      expect(logs).toEqual(["\n  Cancelled. Nothing set."]);
       expect(process.exitCode).toBe(130);
     });
 
@@ -4745,7 +4745,7 @@ describe("delete", () => {
     await runDelete({ interactive: true, yes: false, prompter });
     expect(fetchFn).not.toHaveBeenCalled();
     expect(deleteTokenIf).not.toHaveBeenCalled();
-    expect(logs).toContain("\n\n  Cancelled. Nothing deleted.");
+    expect(logs).toEqual(["\n  Cancelled. Nothing deleted."]);
     expect(process.exitCode).toBe(130);
   });
 });
@@ -5337,7 +5337,7 @@ describe("runLogin", () => {
     await runLogin({ interactive: true, yes: false, prompter });
     expect(login).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(130);
-    expect(logs).toEqual([STATE, ""]);
+    expect(logs).toEqual([STATE]);
   });
 
   it("YMMV_TOKEN set: warns on stderr before naming the stored login and before the flow", async () => {
