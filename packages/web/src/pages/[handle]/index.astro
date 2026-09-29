@@ -13,15 +13,27 @@ const raw = String(Astro.params.handle ?? "");
 
 // A native (script-failed) diff-form submit lands here as GET /<handle>?you=<x> — honor it
 // server-side so the form still works when its inline script never ran: redirect to the canonical
-// diff URL. Only a valid handle shape redirects (mirrors the form's own guard); anything else
-// falls through and renders the profile. Runs before the D1 read — the redirect needs no data.
-const you = (Astro.url.searchParams.get("you") ?? "").trim().replace(/^@+/, "");
-if (you.length <= 39 && /^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you)) {
+// diff URL. Only a valid handle shape redirects; anything else falls through and renders the
+// profile with the form's hint showing. Runs before the D1 read — the redirect needs no data.
+// The normalization is the form script's (Layout.astro), step for step — the two copies must stay
+// identical: trim, drop leading @s, drop ONE pasted github.com/ or ymmv.fyi/ prefix (optionally
+// http(s)://, any case), drop one trailing slash. e2e runs one input table through both paths.
+const youParam = Astro.url.searchParams.get("you");
+const you = (youParam ?? "")
+  .trim()
+  .replace(/^@+/, "")
+  .replace(/^(?:https?:\/\/)?(?:github\.com|ymmv\.fyi)\//i, "")
+  .replace(/\/$/, "");
+if (isValidHandle(you)) {
   const redirect = Astro.redirect(`/${encodeURIComponent(raw)}/vs/${encodeURIComponent(you)}`, 302);
   // every response carries an explicit edge policy — keep the 302 short-cached like a notfound
   redirect.headers.set("cache-control", readCacheControl("notfound"));
   return redirect;
 }
+
+// a ?you= that failed the check (empty included): the profile renders with the hint. The raw
+// value is never echoed back into the page — the hint says what a handle is, not what was typed.
+const youHint = youParam !== null;
 
 const result = await resolveProfile(env.DB, raw);
 
@@ -72,7 +84,7 @@ const canonicalPath =
 <Layout title={title} description={description} canonicalPath={canonicalPath}>
   {
     result.kind === "live" ? (
-      <Profile profile={result.profile} />
+      <Profile profile={result.profile} youHint={youHint} />
     ) : (
       <NotFound handle={reserved ? undefined : raw} />
     )

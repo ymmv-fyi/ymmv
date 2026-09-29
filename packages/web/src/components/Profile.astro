@@ -22,13 +22,19 @@ interface Props {
   /* more: landing preview only — the count of rows elided from the sample, rendered as an honest
      "+ N more" marker under the readout. Never set on a real profile page. */
   more?: number;
+  /* youHint: the page was reached by a native diff-form submit whose ?you= failed the handle
+     shape check — render the form's hint line already showing, so the no-JS path isn't silent */
+  youHint?: boolean;
 }
-const { profile, example = false, more = 0 } = Astro.props;
+const { profile, example = false, more = 0, youHint = false } = Astro.props;
 const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
 // session revision stamp: date part only (the wire carries a full ISO timestamp)
 const revDate = updated_at?.slice(0, 10);
+// the diff form's one error line: what a handle is, never what was typed (no echo of input)
+const YOU_HINT = "a GitHub handle: letters, digits, single hyphens, up to 39";
+const hintShown = youHint ? YOU_HINT : "";
 ---
 
 <div class="session">
@@ -96,31 +102,40 @@ const revDate = updated_at?.slice(0, 10);
         <form class="diff-cta" action={`/${handle}`} data-diff-vs={handle}>
           <label>
             <span class="prompt">$ </span>diff vs{" "}
+            {/* no maxlength: it would cut a pasted https://github.com/<handle> before the script
+                strips the prefix. The 39 cap lives in validation (script + ?you= handler). */}
             <input
               class="you"
               name="you"
               placeholder="<you>"
-              maxlength="39"
               autocomplete="off"
               autocapitalize="off"
               spellcheck="false"
-              aria-label={`your handle — diff ${handle} against you`}
+              aria-label={`your GitHub handle, to diff ${handle} against you`}
+              aria-describedby={youHint ? "diff-hint" : undefined}
             />
           </label>
           <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
         </form>
+        {/* inside the foot, ahead of the hint: without JS this line stands in for the form, and
+            the hint below it then explains its <you> */}
+        <noscript>
+          {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
+          <style is:inline>
+            .diff-cta {
+              display: none;
+            }
+          </style>
+          <p class="cta">
+            diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
+          </p>
+        </noscript>
+        {/* the form's error line, outside the form so the <noscript> rule that hides the form
+            leaves a server-rendered hint visible. Always in the tree (empty until a miss) so the
+            polite live region is registered before the script fills it; the script reads the
+            copy from data-hint, so the text exists once. */}
+        <p class="diff-hint" id="diff-hint" aria-live="polite" data-hint={YOU_HINT}>{hintShown}</p>
       </div>
-      <noscript>
-        {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
-        <style is:inline>
-          .diff-cta {
-            display: none;
-          }
-        </style>
-        <p class="cta">
-          diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
-        </p>
-      </noscript>
     </>
   )}
 </div>

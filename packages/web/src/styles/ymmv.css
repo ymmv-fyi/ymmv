@@ -573,6 +573,15 @@ a {
   position: absolute;
   inset: -12px;
 }
+/* the form's error line under the prompt: a faint aside, never amber (a miss is neither a link nor
+   a difference). Empty it collapses to nothing, but stays in the tree for the live region. */
+.diff-hint {
+  margin-top: 0.4em;
+  color: var(--faint);
+}
+.diff-hint:empty {
+  margin: 0;
+}
 /* forced-colors strips the accent-underline focus cue on the input — give it a real ring there
    only (normal mode keeps the quiet caret + underline) */
 @media (forced-colors: active) {

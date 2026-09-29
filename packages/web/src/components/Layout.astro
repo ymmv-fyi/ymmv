@@ -249,17 +249,39 @@ const {
         if (!form) return;
         var input = form.querySelector("input");
         if (!input) return;
+        var hint = document.getElementById("diff-hint");
+        // the hint line is a polite live region: filling it announces the rule, and
+        // aria-describedby ties it to the input while it shows. Typing clears both.
+        function showHint(on) {
+          if (!hint) return;
+          hint.textContent = on ? hint.dataset.hint : "";
+          if (on) input.setAttribute("aria-describedby", hint.id);
+          else input.removeAttribute("aria-describedby");
+        }
+        input.addEventListener("input", function () {
+          showHint(false);
+        });
         try {
           var last = localStorage.getItem("ymmv-you");
-          if (last && !input.value) input.value = last;
+          // not under a server-rendered hint (a bad ?you=): a valid handle in the slot would
+          // contradict the line saying the submitted one wasn't
+          if (last && !input.value && !(hint && hint.textContent)) input.value = last;
         } catch (e) {}
         form.addEventListener("submit", function (ev) {
           ev.preventDefault();
-          var you = input.value.trim().replace(/^@+/, "");
+          // The ?you= handler's normalization ([handle]/index.astro), step for step — keep the two
+          // identical: trim, leading @s, one pasted github.com/ or ymmv.fyi/ prefix (optionally
+          // http(s)://, any case), one trailing slash. Pasted profile URLs are the likeliest miss.
+          var you = input.value
+            .trim()
+            .replace(/^@+/, "")
+            .replace(/^(?:https?:\/\/)?(?:github\.com|ymmv\.fyi)\//i, "")
+            .replace(/\/$/, "");
           // Mirror the server's isValidHandle (GitHub handle shape, ≤39). Without this, "." or
           // ".." survive encodeURIComponent and the browser normalizes the dot-segments away
           // (silent self-navigation), and garbage would be persisted + prefilled forever.
           if (!/^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you) || you.length > 39) {
+            showHint(true);
             input.focus();
             return;
           }

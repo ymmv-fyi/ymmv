@@ -3,6 +3,29 @@ import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 // Token colors asserted below (DESIGN.md): dark bg #0E0C09 = rgb(14,12,9),
 // light bg #F6F3EA = rgb(246,243,234), dark accent #FFAB2E = rgb(255,171,46).
 
+// The diff form's error line (Profile.astro), shown on a miss by the script or the ?you= handler.
+const YOU_HINT = "a GitHub handle: letters, digits, single hyphens, up to 39";
+
+// One input table for both copies of the diff form's rule: the inline script (Layout.astro) and
+// the native ?you= handler ([handle]/index.astro). A drift between the two fails one path here.
+// The strip set is deliberately narrow: www. and a path after the handle are misses.
+const YOU_CASES: [input: string, expected: string | null][] = [
+  ["bardisty", "bardisty"],
+  ["  @bardisty ", "bardisty"],
+  ["https://github.com/bardisty", "bardisty"],
+  ["http://github.com/bardisty/", "bardisty"],
+  ["GitHub.com/bardisty", "bardisty"],
+  ["https://ymmv.fyi/bardisty", "bardisty"],
+  ["ymmv.fyi/bardisty/", "bardisty"],
+  ["https://www.github.com/bardisty", null],
+  ["https://github.com/bardisty/ymmv", null],
+  ["github.com/", null],
+  ["not a handle", null],
+  ["..", null],
+  ["a".repeat(40), null],
+  ["", null],
+];
+
 test.describe("profile render", () => {
   test("renders the command line, handle, readout and footer", async ({ page }) => {
     const res = await page.goto("/antfu");
@@ -35,12 +58,102 @@ test.describe("profile render", () => {
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu$/); // empty submit stays put…
     await expect(page.locator(".diff-cta input")).toBeFocused(); // …and refocuses the input
+    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT); // …and says what a handle is
     await page.fill(".diff-cta input", "..");
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu$/); // dot-segments must never navigate
     await page.fill(".diff-cta input", "@bardisty");
     await page.press(".diff-cta input", "Enter");
     await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
+  });
+
+  test("an invalid handle shows the hint, described and announced; typing clears it", async ({
+    page,
+  }) => {
+    await page.goto("/antfu");
+    const input = page.locator(".diff-cta input");
+    const hint = page.locator("#diff-hint");
+    // the live region is in the tree before any miss, so the first fill is announced
+    await expect(hint).toHaveAttribute("aria-live", "polite");
+    await expect(hint).toHaveText("");
+    await expect(input).not.toHaveAttribute("aria-describedby");
+    await input.fill("not a handle");
+    await input.press("Enter");
+    await expect(page).toHaveURL(/\/antfu$/);
+    await expect(hint).toHaveText(YOU_HINT);
+    await expect(hint).toBeVisible();
+    await expect(input).toHaveAttribute("aria-describedby", "diff-hint");
+    await expect(input).toHaveAccessibleDescription(YOU_HINT);
+    // a miss is never remembered: only a valid submit writes the prefill
+    expect(await page.evaluate(() => localStorage.getItem("ymmv-you"))).toBeNull();
+    await input.pressSequentially("x");
+    await expect(hint).toHaveText("");
+    await expect(input).not.toHaveAttribute("aria-describedby");
+  });
+
+  test("keyboard only: Tab to the input, Enter on a bad value, and the hint describes it", async ({
+    page,
+  }) => {
+    await page.goto("/antfu");
+    const input = page.locator(".diff-cta input");
+    for (let i = 0; i < 20 && !(await input.evaluate((el) => el === document.activeElement)); i++) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(input).toBeFocused();
+    await page.keyboard.type("no/such");
+    await page.keyboard.press("Enter");
+    await expect(input).toBeFocused();
+    await expect(input).toHaveAccessibleDescription(YOU_HINT);
+  });
+
+  test("the diff form and the ?you= handler agree on every input", async ({ page, request }) => {
+    for (const [value, expected] of YOU_CASES) {
+      await page.goto("/antfu");
+      await page.fill(".diff-cta input", value);
+      await page.press(".diff-cta input", "Enter");
+      const native = await request.get(`/antfu?you=${encodeURIComponent(value)}`, {
+        maxRedirects: 0,
+      });
+      if (expected) {
+        await expect(page, value).toHaveURL(new RegExp(`/antfu/vs/${expected}$`));
+        expect(native.status(), value).toBe(302);
+        expect(native.headers().location, value).toBe(`/antfu/vs/${expected}`);
+      } else {
+        await expect(page.locator("#diff-hint"), value).toHaveText(YOU_HINT);
+        await expect(page, value).toHaveURL(/\/antfu$/);
+        expect(native.status(), value).toBe(200);
+        const body = await native.text();
+        expect(body, value).toContain(`>${YOU_HINT}</p>`);
+        expect(body, value).toContain('aria-describedby="diff-hint"');
+      }
+    }
+  });
+
+  test("a pasted profile URL is not cut short by the input", async ({ page }) => {
+    // a maxlength of 39 truncated the paste before the script could strip the prefix
+    await page.goto("/antfu");
+    await page.fill(".diff-cta input", "https://github.com/bardisty");
+    await expect(page.locator(".diff-cta input")).toHaveValue("https://github.com/bardisty");
+    await page.press(".diff-cta input", "Enter");
+    await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
+    expect(await page.evaluate(() => localStorage.getItem("ymmv-you"))).toBe("bardisty");
+  });
+
+  test("a server-rendered hint is not contradicted by the remembered handle", async ({ page }) => {
+    await page.goto("/antfu");
+    await page.evaluate(() => localStorage.setItem("ymmv-you", "bardisty"));
+    await page.goto("/antfu?you=not%20a%20handle");
+    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT);
+    await expect(page.locator(".diff-cta input")).toHaveValue("");
+    // a plain visit still prefills
+    await page.goto("/antfu");
+    await expect(page.locator(".diff-cta input")).toHaveValue("bardisty");
+  });
+
+  test("the profile without ?you= renders no hint", async ({ request }) => {
+    const body = await (await request.get("/antfu")).text();
+    expect(body).not.toContain(`${YOU_HINT}</p>`);
+    expect(body).not.toContain('aria-describedby="diff-hint"');
   });
 
   test("both session commands click-copy to the clipboard", async ({ page, context }) => {
@@ -720,6 +833,31 @@ test.describe("install command (progressive copy button)", () => {
     await expect(install.locator("[data-copy-status]")).toHaveText("Copy failed");
     // the failure never fakes the success glyph
     expect(await install.getAttribute("data-copied")).toBeNull();
+  });
+});
+
+test.describe("diff form without JS", () => {
+  test.use({ javaScriptEnabled: false });
+  test("a bad ?you= renders the profile with the hint visible, never echoing the input", async ({
+    page,
+  }) => {
+    const res = await page.goto(`/antfu?you=${encodeURIComponent("zqxzqx<b>")}`);
+    expect(res?.status()).toBe(200);
+    // the <noscript> rule hides the form itself; the hint sits outside it and stays visible
+    await expect(page.locator("#diff-hint")).toBeVisible();
+    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT);
+    // the hint explains the <you> of the noscript line standing in for the form, so it sits below
+    const cta = await page.locator(".term-foot .cta").boundingBox();
+    const hint = await page.locator("#diff-hint").boundingBox();
+    expect(cta && hint && hint.y > cta.y).toBe(true);
+    expect(await res?.text()).not.toContain("zqxzqx");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://ymmv.fyi/antfu",
+    );
+    // a plain visit shows nothing
+    await page.goto("/antfu");
+    await expect(page.locator("#diff-hint")).toHaveText("");
   });
 });
 
