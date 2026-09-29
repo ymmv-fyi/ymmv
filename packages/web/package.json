@@ -22,7 +22,7 @@
     "pretypecheck": "wrangler types",
     "typecheck": "astro check",
     "test": "vitest run",
-    "e2e:serve": "node -e \"const {rmSync}=require('fs');for(const p of ['.wrangler/state','dist'])rmSync(p,{recursive:true,force:true})\" && astro build && wrangler d1 migrations apply ymmv --local --persist-to .wrangler/state && wrangler d1 execute ymmv --local --persist-to .wrangler/state --file=test/e2e/seed.sql && wrangler dev -c dist/server/wrangler.json --port 8788 --persist-to .wrangler/state",
+    "e2e:serve": "node scripts/e2e-reset.mjs && astro build && wrangler d1 migrations apply ymmv --local --persist-to .wrangler/state && wrangler d1 execute ymmv --local --persist-to .wrangler/state --file=test/e2e/seed.sql && wrangler dev -c dist/server/wrangler.json --port 8788 --persist-to .wrangler/state",
     "test:e2e": "playwright test"
   }
 }

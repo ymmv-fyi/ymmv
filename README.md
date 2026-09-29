@@ -138,6 +138,9 @@ pnpm --filter @ymmv/web e2e:serve
 YMMV_API=http://localhost:8788 node packages/cli/dist/cli.js bardisty
 ```
 
+Stop it before `test:e2e`, which serves its own fresh build on the same port and
+refuses to start while anything holds it.
+
 Versions come from tags. Every `package.json` stays at `0.0.0`, and CI stamps
 the real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
 
