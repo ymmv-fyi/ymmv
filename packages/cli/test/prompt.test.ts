@@ -125,7 +125,7 @@ function terminalStreams(columns = 80) {
 // clearIdleInput (what discardTypeahead runs after a wait) removes it; left, it would join the next
 // answer and erase the card. prompter.test.ts mocks readline away; THIS is where those behaviors
 // are pinned against the real interface, each reset case with the uncleared half showing what it
-// prevents.
+// prevents, along with the abort, ^C, ^D and error behavior the prompter's handlers assume.
 describe("readline contract behind the idle prompter", () => {
   /** A readline on in-memory streams that readline drives as a terminal, plus what it wrote. */
   function fakeTerminal(columns = 80) {
@@ -203,6 +203,124 @@ describe("readline contract behind the idle prompter", () => {
       await pending;
       t.rl.close();
     }
+  });
+
+  // What makePrompter's questions, offers and handlers lean on (prompt.ts), all the same on
+  // Node 22 and 26 when pinned. A release that changes one fails here, not in a user's terminal.
+
+  it("a withdrawn question ends its line, rejects, and forgets a partial answer", async () => {
+    // The sign-in's offer is withdrawn by its signal once the wait behind it ends. The terminal
+    // gets a line end, the await an AbortError (PromptAborted, read as "not taken"), and readline
+    // drops what was typed, wrapped rows included, so the next question starts clean.
+    const t = fakeTerminal();
+    const ac = new AbortController();
+    const offered = t.rl.question("Q? ", { signal: ac.signal });
+    await tick();
+    t.input.write("x".repeat(237)); // with the prompt, three full rows at 80 columns
+    await tick();
+    const state = t.rl as unknown as { prevRows: number };
+    expect(state.prevRows).toBeGreaterThan(0);
+    t.take();
+    ac.abort();
+    await expect(offered).rejects.toMatchObject({ name: "AbortError" });
+    expect(t.take()).toBe("\r\n");
+    expect([t.rl.line, t.rl.cursor, state.prevRows]).toStrictEqual(["", 0, 0]);
+    const next = t.rl.question("Publish? ");
+    await tick();
+    t.input.write(`n${CR}`);
+    expect(await next).toBe("n");
+    t.rl.close();
+  });
+
+  it("^C with a SIGINT listener fires it and leaves the question pending", async () => {
+    // The prompter's listener decides: abort the pending question, or exit 130 when idle. Readline
+    // itself must neither settle the question nor pause.
+    const t = fakeTerminal();
+    const sigint = vi.fn();
+    t.rl.on("SIGINT", sigint);
+    let settled = false;
+    const pending = t.rl.question("Publish? ").finally(() => {
+      settled = true;
+    });
+    await tick();
+    t.input.write(String.fromCharCode(3));
+    await tick();
+    await tick();
+    expect(sigint).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    t.input.write(`y${CR}`);
+    expect(await pending).toBe("y");
+    t.rl.close();
+  });
+
+  it("^D on an empty line rejects the pending question", async () => {
+    // With a signal or without: the prompter's close handler aborts its own question too, and
+    // reads either rejection as PromptAborted.
+    for (const withSignal of [false, true]) {
+      const t = fakeTerminal();
+      const opts = withSignal ? { signal: new AbortController().signal } : {};
+      const pending = t.rl.question("Publish? ", opts);
+      await tick();
+      t.input.write(String.fromCharCode(4));
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    }
+  });
+
+  it("a withdrawal after the question was answered writes nothing", async () => {
+    // The offer's signal still fires once its wait ends, after an Enter already took it. That must
+    // leave no stray line end under the output that follows.
+    const t = fakeTerminal();
+    const ac = new AbortController();
+    const offered = t.rl.question("Q? ", { signal: ac.signal });
+    await tick();
+    t.input.write(CR);
+    await offered;
+    t.take();
+    ac.abort();
+    await tick();
+    expect(t.take()).toBe("");
+    t.rl.close();
+  });
+
+  it("an input error is re-emitted as the interface's 'error', which throws with no listener", () => {
+    // Why the prompter listens: EIO from a terminal that went away would otherwise crash the run.
+    const err = new Error("EIO");
+    const heard = fakeTerminal();
+    const onError = vi.fn();
+    heard.rl.on("error", onError);
+    heard.input.emit("error", err);
+    expect(onError).toHaveBeenCalledWith(err);
+    heard.rl.close();
+    const unheard = fakeTerminal();
+    expect(() => unheard.input.emit("error", err)).toThrow(err);
+    unheard.rl.close();
+  });
+
+  it("close() resets raw mode before it counts as closed, so a close from 'error' re-enters", () => {
+    // A tty stream reports a failed setRawMode as an 'error' event, and readline re-emits it from
+    // inside close(). The interface is not closed yet, so an 'error' handler that closes at once
+    // runs close() again, which fails the same way: unbounded, a stack overflow. The prompter
+    // defers its close by a tick for this. The handler here stops after a few rounds, which is
+    // enough to show each close() got past the closed check.
+    const t = fakeTerminal();
+    let failRawReset = false;
+    Object.assign(t.input, {
+      setRawMode(on: boolean) {
+        if (!on && failRawReset) t.input.emit("error", new Error("EIO"));
+      },
+    });
+    const ROUNDS = 5;
+    let rounds = 0;
+    t.rl.on("error", () => {
+      rounds++;
+      if (rounds < ROUNDS) t.rl.close();
+    });
+    failRawReset = true;
+    t.rl.close();
+    expect(rounds).toBe(ROUNDS);
+    // Once closed, a further close() returns early: the prompter's deferred close raises nothing.
+    t.rl.close();
+    expect(rounds).toBe(ROUNDS);
   });
 });
 
