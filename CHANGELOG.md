@@ -15,6 +15,13 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   instead of printing the status and suggesting a retry.
 - **The diff's column heads print handles as they are stored.** `BARDISTY  YOU` is now
   `bardisty  you`, and a handle like `OctoCat` keeps its casing.
+- **`ymmv <handle>` is clearer about a missing or renamed handle.** A handle with no profile
+  prints `no ymmv profile for "x" yet.` and no longer suggests publishing one for them. If you
+  signed in with `ymmv login` and have no profile of your own, it adds `publish yours → run ymmv`.
+  An old handle shows the profile under its new one, with `(old is now new)` on stderr.
+- **`ymmv delete` says it signed you out.** Deleting a profile signs out every login for it.
+  The line now says so, and names what the next publish needs: a sign-in, or a new
+  `YMMV_TOKEN` from `ymmv login`.
 
 ### Removed
 - **`YMMV_API` no longer accepts a plain `http://` server other than localhost.** `127.x` and

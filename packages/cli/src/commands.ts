@@ -923,8 +923,30 @@ export async function view(handle: string): Promise<void> {
   const theirs = await fetchProfileJson(handle);
   const c = colorEnabled();
   if (!theirs) {
-    console.log(notFound(handle, c, BASE));
+    console.log(notFound(handle));
+    // The nudge goes where a found profile would show it: to a login with no profile of its own.
+    // Only a file login's handle is checked, through the public read: its handle was minted at
+    // login, so no token has to prove it. An env credential's handle is unverified until whoami,
+    // which sends the token, and a miss never sends the token; YMMV_TOKEN is a script's login
+    // anyway, where the nudge would be noise. A failed check prints nothing: a miss is no place
+    // for a note about the viewer's own profile.
+    const cred = await loadCredential();
+    if (cred?.source === "file" && cred.handle) {
+      const mine = await fetchProfileJson(cred.handle).catch(() => undefined);
+      if (mine === null) console.log(nudge(c, "publish yours"));
+    }
     return;
+  }
+  // A renamed handle answers with the profile under its current one (fetchProfileJson follows the
+  // Worker's 301). Say so before the card, whose breadcrumb names the other handle. Faint, on
+  // stderr like the notes below: piped stdout stays the card alone.
+  if (theirs.handle.toLowerCase() !== handle.toLowerCase()) {
+    const codes = palette(c);
+    console.error(
+      message(
+        `${codes.faint}(${sanitizeValue(handle)} is now ${sanitizeValue(theirs.handle)})${codes.reset}`,
+      ),
+    );
   }
   // The plain card, optionally with a diff-degradation diagnostic. The note goes to stderr so
   // piped stdout stays deterministic (the card only), and exit stays 0: the requested profile DID
@@ -942,7 +964,8 @@ export async function view(handle: string): Promise<void> {
   // whoami has VERIFIED it: YMMV_HANDLE alone is unverified input, and a mislabeled diff is
   // confidently wrong output. A failed verification (dead token, stale YMMV_HANDLE, old Worker,
   // network) degrades to the plain card with the real reason on stderr, never a guess and never a
-  // hidden failure. The lookup sits AFTER the 404 return above, so a miss never sends the token.
+  // hidden failure. The verification sits AFTER the 404 return above, so a miss never sends the
+  // token.
   let cred = await loadCredential();
   if (cred?.source === "env") {
     try {
@@ -1227,7 +1250,17 @@ export async function runDelete(io: InteractiveIO): Promise<void> {
       kept = true;
     }
   }
-  console.log(message(`Deleted ${target}. Run \`ymmv\` to publish again.`));
+  // The delete signed the account out everywhere, which the next `ymmv` would otherwise spring
+  // on the user: a file login is gone, so it opens a GitHub sign-in; YMMV_TOKEN is dead, so it
+  // fails on the variable until the secret holds a token from a new login.
+  console.log(
+    message(
+      cred.source === "env"
+        ? `Deleted ${target} and signed out everywhere. YMMV_TOKEN no longer works: ` +
+            "publishing again needs a new token from `ymmv login`."
+        : `Deleted ${target} and signed out everywhere. Run \`ymmv\` to sign in and publish again.`,
+    ),
+  );
   if (kept) console.error(localTokenKept());
 }
 

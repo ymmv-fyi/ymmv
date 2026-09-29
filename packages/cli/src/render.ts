@@ -440,17 +440,16 @@ export function renderDiff(
   return lines.join("\n");
 }
 
-/** Logged-in-but-no-profile nudge (the one amber call-to-action, link-like). */
-export function nudge(color: boolean): string {
+/** Logged-in-but-no-profile nudge (the one amber call-to-action, link-like). `lead` is what
+ *  publishing gets the viewer: a diff beside a profile, just a profile of their own after a miss. */
+export function nudge(color: boolean, lead = "publish yours to diff"): string {
   const c = palette(color);
-  return `\n  ${c.amber}publish yours to diff →${c.reset} run ${c.bold}ymmv${c.reset}`;
+  return `\n  ${c.amber}${lead} →${c.reset} run ${c.bold}ymmv${c.reset}`;
 }
 
-/** Friendly "unknown handle" message (the arg is already handle-validated; sanitize defensively).
- *  `base` is the full site URL (BASE) — linked amber like every other link. */
-export function notFound(handle: string, color: boolean, base: string): string {
-  return (
-    `\n  no ymmv profile for "${sanitizeValue(handle)}" yet.\n` +
-    `  publish one at ${link(base, color)} with: npx ymmv-cli@latest`
-  );
+/** The "unknown handle" line, in the web's words with the handle quoted (the arg is already
+ *  handle-validated; sanitize defensively). It points nowhere: the viewer cannot publish someone
+ *  else's profile, and whether to nudge them to publish their own is view()'s call. */
+export function notFound(handle: string): string {
+  return `\n  no ymmv profile for "${sanitizeValue(handle)}" yet.`;
 }

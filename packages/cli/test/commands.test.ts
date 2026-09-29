@@ -127,11 +127,93 @@ afterEach(() => {
 });
 
 describe("view — the 3 branches", () => {
-  it("unknown handle → friendly not-found (no diff)", async () => {
+  it("unknown handle, logged out → the not-found line alone, exit 0", async () => {
     vi.mocked(loadToken).mockResolvedValue(null);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(missing()));
+    const fetchFn = vi.fn().mockResolvedValue(missing());
+    vi.stubGlobal("fetch", fetchFn);
     await view("ghost");
-    expect(logs.join("\n")).toMatch(/no ymmv profile for "ghost"/);
+    // No nudge: logged out, a found profile shows none either.
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.']);
+    expect(errs).toEqual([]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("unknown handle, a file login with no profile → the nudge, from a public read", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing()).mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await view("ghost");
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.', "\n  publish yours → run ymmv"]);
+    // The own check is the public read of the stored handle: no token leaves on a miss.
+    expect(String(fetchFn.mock.calls[1]?.[0])).toMatch(/\/api\/v1\/u\/me$/);
+    expect(JSON.stringify(fetchFn.mock.calls)).not.toMatch(/authorization|Bearer/i);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("unknown handle, a file login WITH a profile → no nudge", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(missing())
+        .mockResolvedValueOnce(jsonRes(prof("me"))),
+    );
+    await view("ghost");
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.']);
+  });
+
+  it("unknown handle, the own check fails → no nudge and no note", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(missing()).mockResolvedValueOnce(fail(503)),
+    );
+    await view("ghost");
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.']);
+    expect(errs).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("unknown handle, a file login with no handle bound → no own check, no nudge", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored({ handle: null }));
+    const fetchFn = vi.fn().mockResolvedValue(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await view("ghost");
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.']);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a renamed handle: the card under the new one, with a faint stderr line saying so", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    // fetchProfileJson follows the Worker's 301, so the answer is the profile under its new handle.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonRes(prof("antfu"))));
+    await view("antfuold");
+    expect(errs).toEqual(["\n  (antfuold is now antfu)"]);
+    expect(logs).toHaveLength(1); // stdout is the card alone
+    expect(logs[0]).toContain("ymmv.fyi/antfu");
+  });
+
+  it("a renamed handle in the diff branch says so too", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(prof("antfu", [{ key: "shell", value: "fish" }])))
+        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "shell", value: "zsh" }]))),
+    );
+    await view("antfuold");
+    expect(errs).toEqual(["\n  (antfuold is now antfu)"]);
+    expect(logs.join("\n")).toMatch(/how antfu differs from you/);
+  });
+
+  it("a handle typed in another case is no rename", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonRes(prof("antfu"))));
+    await view("AntFu");
+    expect(errs).toEqual([]);
   });
 
   it("logged in WITH a profile → renders the diff", async () => {
@@ -4589,6 +4671,10 @@ describe("unset", () => {
 });
 
 describe("delete", () => {
+  /** A file login's success line: the delete signed it out, so the next `ymmv` opens a sign-in. */
+  const FILE_DELETED =
+    "\n  Deleted ymmv.fyi/me and signed out everywhere. Run `ymmv` to sign in and publish again.";
+
   it("non-interactive WITHOUT -y: refuses (no network, no token drop, exit 1)", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn();
@@ -4659,7 +4745,7 @@ describe("delete", () => {
       expect(login).toHaveBeenCalledTimes(1);
       expect(confirm).toHaveBeenCalledWith("Delete ymmv.fyi/me? This is permanent", false);
       expect(errs.join("\n")).not.toContain("Refusing to delete");
-      expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
+      expect(logs).toContain(FILE_DELETED);
       expect(process.exitCode).toBeUndefined();
     });
 
@@ -4684,7 +4770,7 @@ describe("delete", () => {
       await runDelete({ interactive: false, yes: true });
       expect(login).toHaveBeenCalledTimes(1);
       expect(deleteTokenIf).toHaveBeenCalledWith("t");
-      expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
+      expect(logs).toContain(FILE_DELETED);
       expect(process.exitCode).toBeUndefined();
     });
   });
@@ -4694,7 +4780,7 @@ describe("delete", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
     await runDelete({ interactive: false, yes: true });
     expect(deleteTokenIf).toHaveBeenCalledWith("t");
-    expect(logs).toContain("\n  Deleted ymmv.fyi/me. Run `ymmv` to publish again.");
+    expect(logs).toContain(FILE_DELETED);
   });
 
   it("interactive: a 'no' at the confirm cancels without touching anything", async () => {
@@ -4715,7 +4801,7 @@ describe("delete", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonRes({ ok: true })));
     await runDelete({ interactive: false, yes: true });
     const out = logs.join("\n");
-    expect(out).toContain("Deleted your profile.");
+    expect(out).toContain("Deleted your profile and signed out everywhere.");
     expect(out).not.toContain("YMMV_TOKEN");
     expect(deleteTokenIf).toHaveBeenCalledWith("t"); // a FILE credential still drops the dead token
   });
@@ -4729,7 +4815,7 @@ describe("delete", () => {
     );
     await runDelete({ interactive: false, yes: true });
     expect(deleteTokenIf).toHaveBeenCalledTimes(1);
-    expect(logs.join("\n")).toContain("Deleted ymmv.fyi/me.");
+    expect(logs).toEqual([FILE_DELETED]);
     expect(errs).toEqual([
       "\n  (couldn't remove the local token file; that login no longer works)",
     ]);
@@ -4882,7 +4968,11 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     vi.stubGlobal("fetch", fetchFn);
     await runDelete({ interactive: false, yes: true });
     expect(deleteTokenIf).not.toHaveBeenCalled(); // the file may hold a DIFFERENT account's login
-    expect(logs.join("\n")).toContain("Deleted ymmv.fyi/carol.");
+    // Under YMMV_TOKEN the next run fails on the dead variable, never opens a sign-in.
+    expect(logs).toEqual([
+      "\n  Deleted ymmv.fyi/carol and signed out everywhere. YMMV_TOKEN no longer works: " +
+        "publishing again needs a new token from `ymmv login`.",
+    ]);
     expect(initOf(fetchFn, 1).method).toBe("DELETE");
     expect((initOf(fetchFn, 1).headers as Record<string, string>).authorization).toBe(
       "Bearer ymmv_env",
@@ -4907,7 +4997,9 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true }));
     vi.stubGlobal("fetch", fetchFn);
     await runDelete({ interactive: false, yes: true });
-    expect(logs.join("\n")).toContain("Deleted the profile bound to YMMV_TOKEN.");
+    expect(logs.join("\n")).toContain(
+      "Deleted the profile bound to YMMV_TOKEN and signed out everywhere.",
+    );
   });
 
   // The guard on a permanent delete: the secret pair says bob, the token is alice's. Nothing may
@@ -5028,13 +5120,14 @@ describe("env credential (YMMV_TOKEN) command flows", () => {
     expect(fetchFn).toHaveBeenCalledTimes(2); // no POST
   });
 
-  it("view: a target 404 returns before any credential is touched, so the token is never sent", async () => {
-    vi.mocked(loadCredential).mockResolvedValue(envCred(null));
+  it("view: a target 404 never sends the token (no whoami, and no nudge under YMMV_TOKEN)", async () => {
+    vi.mocked(loadCredential).mockResolvedValue(envCred("me"));
     const fetchFn = vi.fn().mockResolvedValueOnce(missing());
     vi.stubGlobal("fetch", fetchFn);
     await view("ghost");
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(loadCredential).not.toHaveBeenCalled();
+    expect(JSON.stringify(fetchFn.mock.calls)).not.toContain("ymmv_env");
+    expect(logs).toEqual(['\n  no ymmv profile for "ghost" yet.']);
   });
 
   it("view: a whoami failure degrades to the plain card with the REAL reason on stderr, exit 0", async () => {

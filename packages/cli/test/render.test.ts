@@ -669,14 +669,12 @@ describe("nudge / notFound", () => {
   it("nudge is the one amber CTA (plain under NO_COLOR)", () => {
     expect(nudge(true)).toContain(AMBER);
     expect(nudge(false)).not.toContain(ESC);
-    expect(nudge(false)).toMatch(/publish yours to diff/);
+    expect(nudge(false)).toBe("\n  publish yours to diff → run ymmv");
+    expect(nudge(false, "publish yours")).toBe("\n  publish yours → run ymmv");
   });
-  it("notFound names the handle and links the site (plain URL when color is off)", () => {
-    const out = notFound("ghost", false, "https://ymmv.fyi");
-    expect(out).toMatch(/no ymmv profile for "ghost"/);
-    expect(out).toContain("publish one at https://ymmv.fyi with: npx ymmv-cli@latest");
-    expect(out).not.toContain(ESC);
-    expect(notFound("ghost", true, "https://ymmv.fyi")).toContain(`${AMBER}ymmv.fyi`);
+  it("notFound names the handle in the web's words, and points nowhere", () => {
+    expect(notFound("ghost")).toBe('\n  no ymmv profile for "ghost" yet.');
+    expect(notFound(`gh${ESC}[31most`)).toBe('\n  no ymmv profile for "ghost" yet.');
   });
 
   it("link label replaces the display text with color, is sanitized, and is color-mode only", () => {
@@ -725,7 +723,7 @@ describe("output units (spacing convention)", () => {
       }),
       renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" }),
       nudge(false),
-      notFound("ghost", false, "https://ymmv.fyi"),
+      notFound("ghost"),
     ];
     for (const unit of units) {
       expect(unit).toMatch(/^\n(?!\n)/); // exactly one leading blank line
