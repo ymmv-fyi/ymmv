@@ -3,7 +3,8 @@
 // + the one-line install. With no handle it's a generic 404.
 // `handle` is the raw (unresolved) URL segment — user-controlled, so it renders auto-escaped and
 // with bidi controls stripped. A segment made only of controls has nothing left to name, so it
-// takes the generic branch.
+// takes the generic branch. A reserved segment (/login, /api) is not a person either: its page
+// passes no handle, so it renders the generic branch too.
 import { sanitizeText } from "../lib/sanitize.ts";
 import InstallCommand from "./InstallCommand.astro";
 
@@ -23,7 +24,7 @@ const shown = handle ? sanitizeText(handle) : "";
       <>
         <h1 class="handle">{shown}</h1>
         <p class="empty-msg">
-          no ymmv profile for <span class="h">{shown}</span> — yet.
+          no ymmv profile for <span class="h">{shown}</span> yet.
         </p>
       </>
     ) : (

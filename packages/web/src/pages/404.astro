@@ -1,5 +1,7 @@
 ---
 // Astro's catch-all 404 (unmatched routes). Astro serves this with a 404 status in SSR.
+// URL-as-title like every other page. [handle] renders this same page (title, no description)
+// for a reserved segment, so /login and /no/such/route are indistinguishable.
 import Layout from "../components/Layout.astro";
 import NotFound from "../components/NotFound.astro";
 import { readCacheControl } from "../lib/profile-read.ts";
@@ -9,6 +11,6 @@ import { readCacheControl } from "../lib/profile-read.ts";
 Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 ---
 
-<Layout title="404 — ymmv.fyi">
+<Layout title="ymmv.fyi/404">
   <NotFound />
 </Layout>

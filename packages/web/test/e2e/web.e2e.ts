@@ -400,7 +400,43 @@ test.describe("routing", () => {
     expect(res?.status()).toBe(404);
     // Not-found carries a SHORT TTL so a freshly published handle isn't edge-cached-missing for long.
     expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
-    await expect(page.locator(".empty-msg")).toContainText("no ymmv profile for");
+    await expect(page.locator(".empty-msg")).toHaveText("no ymmv profile for ghosthandle yet.");
+    await expect(page).toHaveTitle("ymmv.fyi/ghosthandle");
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+      "content",
+      "No ymmv profile for ghosthandle yet. Publish yours with npx ymmv-cli@latest.",
+    );
+  });
+
+  test("a reserved segment renders exactly the catch-all 404, never a person's empty state", async ({
+    page,
+  }) => {
+    // /login, /api and the CLI verbs are no one's handle: they must not read as someone who
+    // hasn't published yet, nor offer "Publish yours". The reference is the catch-all 404.astro.
+    const read = async (path: string) => {
+      const res = await page.goto(path);
+      return {
+        status: res?.status(),
+        cache: res?.headers()["cache-control"],
+        title: await page.title(),
+        description: await page.locator('meta[name="description"]').getAttribute("content"),
+        h1: await page.locator("h1.handle").innerText(),
+        msg: await page.locator(".empty-msg").innerText(),
+      };
+    };
+    const catchAll = await read("/no/such/route");
+    expect(catchAll).toMatchObject({
+      status: 404,
+      title: "ymmv.fyi/404",
+      h1: "404",
+      msg: "no page here.",
+    });
+    expect(catchAll.cache).toContain("s-maxage=10");
+    // isReserved lowercases, so /Login is reserved too; /login/vs/x is the diff page's [handle] side
+    for (const path of ["/login", "/Login", "/api", "/logout", "/delete", "/login/vs/bardisty"]) {
+      expect(await read(path), path).toEqual(catchAll);
+      await expect(page.locator("body"), path).not.toContainText("Publish yours");
+    }
   });
 
   test("the reserved handle 404 never resolves to a profile, on HTML or JSON", async ({
@@ -420,6 +456,7 @@ test.describe("routing", () => {
     expect(html?.headers()["cache-control"]).toContain("s-maxage=10");
     // The generic not-found page, never the session readout a live profile renders.
     await expect(page.locator("p.empty-msg")).toContainText("no page here.");
+    await expect(page).toHaveTitle("ymmv.fyi/404");
     await expect(page.locator(".readout")).toHaveCount(0);
     await expect(page.locator("body")).not.toContainText("Neovim");
 
@@ -821,7 +858,7 @@ test.describe("the 3-column diff", () => {
     expect(res?.status()).toBe(404);
     // A genuine miss keeps the short not-found TTL; only a thrown render is the no-store 500.
     expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
-    await expect(page.locator(".empty-msg")).toContainText("no ymmv profile for");
+    await expect(page.locator(".empty-msg")).toHaveText("no ymmv profile for ghosthandle yet.");
   });
 
   test("a diff whose render throws is a 500 no-store, never a cached 404", async ({ request }) => {
