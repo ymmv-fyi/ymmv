@@ -10,6 +10,7 @@ import {
   type LaunchedChild,
   type LaunchOptions,
   onPath,
+  resolveProgram,
 } from "../src/browser.js";
 
 // The browser offer's platform layer: which programs, spawned how. Every test injects spawn,
@@ -258,6 +259,125 @@ describe("findLauncher: which programs, per platform", () => {
   });
 });
 
+describe("findLauncher: $BROWSER", () => {
+  // VS Code Remote-SSH and Codespaces set $BROWSER to a helper that opens the URL on the user's own
+  // machine. It names the opener, ahead of the SSH gate and the platform's own; the clipboard stays
+  // this machine's, and over SSH there is none worth writing.
+  const HELPER = "/home/me/.vscode-server/bin/abc/bin/helpers/browser.sh";
+  const TOOLS = { ...LINUX_TOOLS, firefox: "/usr/bin/firefox", [HELPER]: HELPER };
+  const ssh = (env: NodeJS.ProcessEnv) => ({ SSH_CONNECTION: "1", ...env });
+
+  it("the first entry only, a bare name through the lookup, and the URL appended", async () => {
+    const which = onPathOf(TOOLS);
+    expect(
+      await programs({ platform: "linux", env: ssh({ BROWSER: "firefox:xdg-open" }), which }),
+    ).toEqual({ open: ["/usr/bin/firefox", [URL_]], copy: null });
+    expect(
+      await programs({ platform: "linux", env: ssh({ BROWSER: `  ${HELPER}  --reuse ` }), which }),
+    ).toEqual({ open: [HELPER, ["--reuse", URL_]], copy: null });
+  });
+
+  it("%s takes the URL in place, inside a word too, and nothing is appended", async () => {
+    const which = onPathOf(TOOLS);
+    const env = ssh({ BROWSER: "firefox --new-window %s --url=%s" });
+    expect(await programs({ platform: "linux", env, which })).toEqual({
+      open: ["/usr/bin/firefox", ["--new-window", URL_, `--url=${URL_}`]],
+      copy: null,
+    });
+  });
+
+  it.each(["SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT"])(
+    "%s set: $BROWSER still opens, and the offer promises no copy",
+    async (name) => {
+      for (const platform of ["linux", "darwin"] as const) {
+        const env = { [name]: "1", DISPLAY: ":0", BROWSER: HELPER };
+        expect(await programs({ platform, env, which: onPathOf(TOOLS) })).toEqual({
+          open: [HELPER, [URL_]],
+          copy: null,
+        });
+      }
+    },
+  );
+
+  it("locally it replaces the platform's opener and keeps this machine's clipboard", async () => {
+    const which = onPathOf(TOOLS);
+    expect(await programs({ platform: "darwin", env: { BROWSER: "firefox" }, which })).toEqual({
+      open: ["/usr/bin/firefox", [URL_]],
+      copy: ["/usr/bin/pbcopy", []],
+    });
+    const x = { DISPLAY: ":0", BROWSER: "firefox" };
+    expect(await programs({ platform: "linux", env: x, which })).toEqual({
+      open: ["/usr/bin/firefox", [URL_]],
+      copy: ["/usr/bin/xclip", ["-selection", "clipboard"]],
+    });
+    const wsl = { WSL_DISTRO_NAME: "Ubuntu", BROWSER: "firefox" };
+    expect(await programs({ platform: "linux", env: wsl, which })).toEqual({
+      open: ["/usr/bin/firefox", [URL_]],
+      copy: ["/mnt/c/Windows/System32/clip.exe", []],
+    });
+    // No display is no obstacle: the opener it names is its own business.
+    expect(await programs({ platform: "linux", env: { BROWSER: "firefox" }, which })).toEqual({
+      open: ["/usr/bin/firefox", [URL_]],
+      copy: null,
+    });
+  });
+
+  it.each([
+    ["an empty entry", ":firefox"],
+    ["blank", "   "],
+    ["a %s program: the URL would be argv[0]", "%s"],
+    ["a %s program with arguments", "%s --new-window"],
+    ["a %s inside the program word", "/usr/bin/%s"],
+    ["a relative path: it resolves against the current directory", "./browser.sh"],
+    ["a relative path without a dot", "bin/firefox"],
+    ["a name the lookup cannot find", "nosuchbrowser"],
+    // Detached with no terminal, it would show nothing and still read as opened.
+    ["a text-mode browser", "w3m"],
+    ["a text-mode browser by path, with %s", "/usr/bin/lynx -accept_all_cookies %s"],
+    ["Debian's text-mode slot", "www-browser"],
+  ])("refused, %s: no offer over SSH, the platform opener locally", async (_what, value) => {
+    const found = { "./browser.sh": "/x", "bin/firefox": "/x", w3m: "/usr/bin/w3m" };
+    const which = vi.fn(onPathOf({ ...TOOLS, ...found, "www-browser": "/usr/bin/www-browser" }));
+    expect(
+      await findLauncher({ platform: "linux", env: ssh({ DISPLAY: ":0", BROWSER: value }), which }),
+    ).toBeNull();
+    expect(
+      await programs({ platform: "linux", env: { DISPLAY: ":0", BROWSER: value }, which }),
+    ).toMatchObject({ open: ["/usr/bin/xdg-open", [URL_]] });
+    // A relative path never reaches the lookup at all.
+    expect(which).not.toHaveBeenCalledWith("./browser.sh");
+    expect(which).not.toHaveBeenCalledWith("bin/firefox");
+  });
+
+  it("win32 ignores it: `:` also follows a drive letter, and VS Code's helper there is a .cmd only a shell runs", async () => {
+    const which = vi.fn(onPathOf(TOOLS));
+    for (const BROWSER of ["firefox", "C:\\Tools\\browser.exe %s"]) {
+      expect(await findLauncher({ platform: "win32", env: ssh({ BROWSER }), which })).toBeNull();
+      expect(
+        await programs({ platform: "win32", env: { SystemRoot: "C:\\Windows", BROWSER }, which }),
+      ).toMatchObject({ open: ["C:\\Windows\\System32\\rundll32.exe", expect.anything()] });
+    }
+    expect(which).not.toHaveBeenCalled();
+  });
+
+  it("runs argv-only: shell syntax in it reaches the program as literal arguments", async () => {
+    const child = new FakeChild();
+    const spawn = spawnReturning(child);
+    const launcher = await findLauncher({
+      platform: "linux",
+      env: ssh({ BROWSER: "firefox $(id) ;rm|x %s" }),
+      which: onPathOf(TOOLS),
+      spawn,
+    });
+    const opening = launcher?.open(URL_);
+    child.emit("exit", 0);
+    expect(await opening).toBe(true);
+    const [path, args, opts] = spawn.mock.calls[0] ?? [];
+    expect([path, args]).toEqual(["/usr/bin/firefox", ["$(id)", ";rm|x", URL_]]);
+    expect(opts).not.toHaveProperty("shell");
+  });
+});
+
 describe("findLauncher: a deadline on finding the programs", () => {
   it("a PATH lookup that hangs (a dead network mount) gives no launcher after 1s, not a stalled sign-in", async () => {
     vi.useFakeTimers();
@@ -495,5 +615,30 @@ describe("onPath", () => {
     const rel = relative(process.cwd(), bin);
     expect(isAbsolute(rel)).toBe(false);
     expect(await onPath("tsup", { PATH: rel })).toBeNull();
+  });
+
+  it("a bare $BROWSER name resolves through absolute PATH entries only", async () => {
+    const bin = join(fileURLToPath(new URL(".", import.meta.url)), "..", "node_modules", ".bin");
+    const rel = relative(process.cwd(), bin);
+    const env = (PATH: string) => ({ SSH_CONNECTION: "1", BROWSER: "tsup %s", PATH });
+    expect(await findLauncher({ platform: "linux", env: env(rel) })).toBeNull();
+    const child = new FakeChild();
+    const spawn = spawnReturning(child);
+    const launcher = await findLauncher({ platform: "linux", env: env(bin), spawn });
+    const opening = launcher?.open(URL_);
+    child.emit("exit", 0);
+    await opening;
+    expect(spawn.mock.calls[0]?.slice(0, 2)).toEqual([join(bin, "tsup"), [URL_]]);
+  });
+
+  it("resolveProgram: an absolute path is itself when it is an executable file, else nothing", async () => {
+    dir = await mkdtemp(join(tmpdir(), "ymmv-onpath-"));
+    const tool = join(dir, "browser.sh");
+    await writeFile(tool, "#!/bin/sh\n");
+    await chmod(tool, 0o755);
+    expect(await resolveProgram(tool, {})).toBe(tool);
+    expect(await resolveProgram(dir, {})).toBeNull(); // a directory cannot be spawned
+    expect(await resolveProgram(join(dir, "missing"), { PATH: dir })).toBeNull();
+    expect(await resolveProgram("browser.sh", { PATH: dir })).toBe(tool); // a bare name: onPath
   });
 });

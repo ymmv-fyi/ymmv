@@ -283,9 +283,9 @@ export interface LoginDeps extends PollDeps {
  * Full login: device flow → mint a ymmv token → store it (0600, scoped to the API base).
  * `deps` is for tests (inject sleep/now/fetch); production passes only the prompter.
  *
- * With a prompter and a browser on this machine (not over SSH, an opener found), the device flow
- * offers to open github.com under the waiting line (see pollWithOffer). Without either, it prints
- * exactly the two lines it always has.
+ * With a prompter and a browser it can open (an opener on this machine, or over SSH only one that
+ * $BROWSER names: see findLauncher), the device flow offers to open github.com under the waiting
+ * line (see pollWithOffer). Without either, it prints exactly the two lines it always has.
  *
  * Asks nothing about a stored login and says nothing about YMMV_TOKEN: both are the standalone
  * command's (runLogin). Every other caller (publish's 401/409 heal, ensureLogin) reaches here only

@@ -4,6 +4,14 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 
 ## [Unreleased]
 
+### Added
+- **Signing in over SSH can open GitHub through `$BROWSER`.** In VS Code Remote-SSH, Codespaces
+  and other remote terminals that set `$BROWSER`, the sign-in now asks
+  `Press Enter to open github.com in your browser.` Enter opens the sign-in page on the machine
+  you sit at, and the code is typed there as before. On a local terminal, `$BROWSER` picks the
+  browser the sign-in opens. A text-mode browser such as lynx or w3m is passed over, and
+  Windows ignores `$BROWSER`.
+
 ### Changed
 - **`www.ymmv.fyi` and `http://ymmv.fyi` are refused as `YMMV_API`.** The CLI names
   `https://ymmv.fyi` and stops before sending anything. It used to fail after the request, with

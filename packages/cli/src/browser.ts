@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, win32 } from "node:path";
+import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
 
 // The sign-in's browser offer (#78): which program opens a URL and which puts text on the
 // clipboard, and how each one runs. Every spawn is argv-only, never a shell: cmd.exe would read
@@ -54,7 +54,8 @@ type LaunchSpawn = (
   options: LaunchOptions,
 ) => LaunchedChild;
 
-/** The absolute path a program name resolves to on PATH, or null. */
+/** The absolute path a program resolves to, or null: a bare name through PATH, an absolute path
+ *  as itself when it is an executable file (resolveProgram). */
 type Which = (name: string) => Promise<string | null>;
 
 export interface LaunchDeps {
@@ -65,7 +66,7 @@ export interface LaunchDeps {
 }
 
 /** The two things the offer does after Enter. Both resolve to whether they worked; neither
- *  rejects. `copy` is null when this machine has no clipboard program to run. */
+ *  rejects. `copy` is null when this machine has no clipboard program to run, and over SSH. */
 export interface Launcher {
   open(url: string): Promise<boolean>;
   copy: ((text: string) => Promise<boolean>) | null;
@@ -76,23 +77,66 @@ interface Program {
   args: readonly string[];
 }
 
+/** Whether `path` is a file this user may execute. A directory passes the X_OK check too, and
+ *  would then fail to spawn. */
+async function isExecutableFile(path: string): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isFile()) return false;
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A program name on PATH, as an absolute path. Relative entries (`.`, an empty one) are skipped:
  *  they resolve against the current directory, the plant the absolute paths exist to avoid. */
 export async function onPath(name: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   for (const dir of (env.PATH ?? "").split(delimiter)) {
     if (!isAbsolute(dir)) continue;
     const candidate = join(dir, name);
-    try {
-      // A directory passes the X_OK check too, and would then fail to spawn.
-      if ((await stat(candidate)).isFile()) {
-        await access(candidate, constants.X_OK);
-        return candidate;
-      }
-    } catch {
-      // not here, or not executable: try the next entry
-    }
+    if (await isExecutableFile(candidate)) return candidate;
   }
   return null;
+}
+
+/** findLauncher's default lookup: an absolute path (a $BROWSER helper) is itself when it is an
+ *  executable file, and a bare name goes through onPath. */
+export async function resolveProgram(name: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+  if (isAbsolute(name)) return (await isExecutableFile(name)) ? name : null;
+  return onPath(name, env);
+}
+
+/** Browsers that draw in the terminal, often a server's $BROWSER. The opener runs detached with no
+ *  terminal, so one of these shows nothing and still reads as opened: refused, the platform's own
+ *  opener takes over, and over SSH there is no offer. `www-browser` is Debian's text-mode slot. */
+const TEXT_BROWSERS = new Set([
+  "lynx",
+  "w3m",
+  "links",
+  "links2",
+  "elinks",
+  "browsh",
+  "www-browser",
+]);
+
+/**
+ * The opener $BROWSER names, or null when it names none this CLI will run. VS Code Remote-SSH and
+ * Codespaces point it at a helper that opens the URL on the machine the user sits at, which is
+ * what makes the offer worth making over SSH. By convention it is a `:`-separated list of commands
+ * whose `%s` stands for the URL: only the first entry is used, split on whitespace into argv and
+ * run without a shell. Quoting is not supported, so a program path with a space in it cannot be
+ * named, and a quoted word stays one argument with its quotes. Refused, as not naming a program:
+ * an empty entry, a `%s` in the program itself (the URL would become argv[0]), a relative path
+ * (it would resolve against the current directory), and a text-mode browser (TEXT_BROWSERS).
+ */
+async function browserProgram(value: string, which: Which): Promise<Program | null> {
+  const [name, ...args] = (value.split(":")[0] ?? "").split(/\s+/).filter((t) => t !== "");
+  if (name === undefined || name.includes("%s")) return null;
+  if (name.includes("/") && !posix.isAbsolute(name)) return null;
+  if (TEXT_BROWSERS.has(posix.basename(name))) return null;
+  const path = await which(name);
+  return path === null ? null : { path, args };
 }
 
 /** The first of `candidates` (name, then fixed args) found on PATH. */
@@ -112,6 +156,16 @@ async function pickPrograms(
   env: NodeJS.ProcessEnv,
   which: Which,
 ): Promise<{ open: Program; copy: Program | null } | null> {
+  // $BROWSER comes first, over the SSH gate and the platform's own opener, except on Windows: its
+  // list separator is also a drive letter's colon, and the helper VS Code sets there is a .cmd,
+  // which only a shell runs.
+  const browser =
+    platform !== "win32" && env.BROWSER ? await browserProgram(env.BROWSER, which) : null;
+  // Over SSH the browser is on the other end: only $BROWSER reaches it, and there is no clipboard
+  // here worth writing, so the offer promises no copy.
+  if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) {
+    return browser ? { open: browser, copy: null } : null;
+  }
   if (platform === "win32") {
     // Only a root with its drive (or a UNC share) keeps the path fixed: a relative one would
     // resolve from the cwd, and a driveless `\Windows` from the cwd's drive.
@@ -126,7 +180,7 @@ async function pickPrograms(
   }
   if (platform === "darwin") {
     return {
-      open: { path: "/usr/bin/open", args: [] },
+      open: browser ?? { path: "/usr/bin/open", args: [] },
       copy: { path: "/usr/bin/pbcopy", args: [] },
     };
   }
@@ -135,10 +189,12 @@ async function pickPrograms(
   // that is not signed in to GitHub. clip.exe writes the Windows clipboard that browser pastes
   // from, and trying it first spares two full PATH walks over the slow /mnt/c entries.
   const wsl = Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP);
-  const open = await firstOnPath(which, [
-    ...(wsl ? ([["rundll32.exe", "url.dll,FileProtocolHandler"], ["wslview"]] as const) : []),
-    ...(env.DISPLAY || env.WAYLAND_DISPLAY ? ([["xdg-open"]] as const) : []),
-  ]);
+  const open =
+    browser ??
+    (await firstOnPath(which, [
+      ...(wsl ? ([["rundll32.exe", "url.dll,FileProtocolHandler"], ["wslview"]] as const) : []),
+      ...(env.DISPLAY || env.WAYLAND_DISPLAY ? ([["xdg-open"]] as const) : []),
+    ]));
   if (!open) return null;
   const copy = await firstOnPath(which, [
     ...(wsl ? ([["clip.exe"]] as const) : []),
@@ -150,9 +206,14 @@ async function pickPrograms(
 
 function runOpener(doSpawn: LaunchSpawn, program: Program, url: string): Promise<boolean> {
   return new Promise((resolve) => {
+    // A $BROWSER entry's `%s` takes the URL in place; otherwise it goes last. The fixed openers
+    // carry no `%s`.
+    const args = program.args.some((a) => a.includes("%s"))
+      ? program.args.map((a) => a.replaceAll("%s", url))
+      : [...program.args, url];
     let child: LaunchedChild;
     try {
-      child = doSpawn(program.path, [...program.args, url], {
+      child = doSpawn(program.path, args, {
         stdio: "ignore",
         detached: true,
         cwd: homedir(),
@@ -228,11 +289,10 @@ function runCopier(doSpawn: LaunchSpawn, program: Program, text: string): Promis
  *  finding out takes longer than DISCOVERY_DEADLINE_MS (the sign-in then prints as it always has). */
 export async function findLauncher(deps: LaunchDeps = {}): Promise<Launcher | null> {
   const env = deps.env ?? process.env;
-  if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) return null;
   const picking = pickPrograms(
     deps.platform ?? process.platform,
     env,
-    deps.which ?? ((name) => onPath(name, env)),
+    deps.which ?? ((name) => resolveProgram(name, env)),
   );
   const programs = await new Promise<Awaited<typeof picking>>((resolve) => {
     const timer = setTimeout(() => resolve(null), DISCOVERY_DEADLINE_MS);

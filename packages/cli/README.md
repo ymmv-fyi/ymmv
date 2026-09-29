@@ -35,8 +35,9 @@ The first run goes like this:
 
 1. It shows what it detected on your machine.
 2. You sign in with GitHub, once per machine. On a local terminal, Enter
-   copies the code and opens the sign-in page in your browser. Your GitHub
-   username becomes your handle.
+   copies the code and opens the sign-in page in your browser. Over SSH, Enter
+   opens it through `$BROWSER` when that is set, as VS Code Remote-SSH and
+   Codespaces do. Your GitHub username becomes your handle.
 3. It asks for the fields it could not detect (font, theme and dotfiles always).
 4. You confirm, and the page goes live.
 
