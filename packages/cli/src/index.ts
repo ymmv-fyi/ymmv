@@ -1,5 +1,6 @@
 import { revokeYmmvToken } from "./auth-http.js";
 import {
+  compare,
   type InteractiveIO,
   localTokenKept,
   publish,
@@ -40,6 +41,7 @@ ${c.faint}Usage:${c.reset}
   ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
+  ymmv <a> vs <b>           how a's stack differs from b's (no login needed)
   ymmv set <key> <value>    set one curated key
   ymmv set --extra "L=V"    set a free-form extra (-e works too)
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
@@ -231,6 +233,9 @@ async function dispatch(cmd: Command): Promise<void> {
       break;
     case "view":
       await view(cmd.handle);
+      break;
+    case "compare":
+      await compare(cmd.theirs, cmd.mine);
       break;
     case "set":
       // The prompter serves a question (a scheme-less dotfiles value) or a sign-in (its

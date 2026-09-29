@@ -46,8 +46,9 @@ yours:
   3 differ   1 shared
 ```
 
-On the web, type a handle into the `diff vs` box on any profile page, or go
-straight to `ymmv.fyi/<them>/vs/<you>`.
+Any two profiles compare without signing in: `ymmv <a> vs <b>` prints how a
+differs from b. On the web, type a handle into the `diff vs` box on any profile
+page, or go straight to `ymmv.fyi/<a>/vs/<b>`.
 
 ## Updating your page
 
@@ -74,6 +75,7 @@ At the `Publish to ymmv.fyi/<you>?` prompt:
 | ---------------------------------- | -------------------------------------------------------------------- |
 | `ymmv`                             | Detect, confirm, publish. `ymmv publish` is the same command.        |
 | `ymmv <handle>`                    | View a profile, or diff it against yours when you're signed in.      |
+| `ymmv antfu vs bardisty`           | How one profile differs from another. No sign-in needed.             |
 | `ymmv set editor Neovim`           | Change one value.                                                    |
 | `ymmv set --extra "Keyboard=HHKB"` | Add a free-form line of your own. `-e` works too.                    |
 | `ymmv unset editor`                | Remove one value. `ymmv set editor -` does the same.                 |

@@ -377,6 +377,48 @@ describe("resolveArg", () => {
     expect(resolveArg(["antfu", "--json"]).kind).toBe("error");
   });
 
+  it("`<a> vs <b>` and `view <a> vs <b>` → compare, sides as typed", () => {
+    const compare = { kind: "compare", theirs: "antfu", mine: "Bardisty" };
+    expect(resolveArg(["antfu", "vs", "Bardisty"])).toEqual(compare);
+    expect(resolveArg(["view", "antfu", "vs", "Bardisty"])).toEqual(compare);
+  });
+
+  it("a user named vs: `ymmv vs` views them, and `vs vs x` compares them", () => {
+    expect(resolveArg(["vs"])).toEqual({ kind: "view", handle: "vs" });
+    expect(resolveArg(["vs", "vs", "x"])).toEqual({ kind: "compare", theirs: "vs", mine: "x" });
+    expect(resolveArg(["x", "vs", "vs"])).toEqual({ kind: "compare", theirs: "x", mine: "vs" });
+  });
+
+  it("any other tail keeps the handle's own error", () => {
+    const unexpected = {
+      kind: "error",
+      message: 'Unexpected arguments after "antfu". Run `ymmv help`.',
+    };
+    expect(resolveArg(["antfu", "b"])).toEqual(unexpected);
+    expect(resolveArg(["antfu", "vs"])).toEqual(unexpected);
+    expect(resolveArg(["antfu", "versus", "b"])).toEqual(unexpected);
+    expect(resolveArg(["antfu", "VS", "b"])).toEqual(unexpected);
+    expect(resolveArg(["antfu", "vs", "b", "c"])).toEqual(unexpected);
+    expect(resolveArg(["view", "antfu", "vs"])).toEqual({
+      kind: "error",
+      message: "usage: ymmv view <handle>",
+    });
+  });
+
+  it("the second side is checked like the first: shape, then reserved", () => {
+    const esc = String.fromCharCode(27);
+    expect(resolveArg(["antfu", "vs", `b${esc}[31m!`])).toEqual({
+      kind: "error",
+      message: '"b!" is not a valid GitHub handle.',
+    });
+    expect(resolveArg(["antfu", "vs", "login"])).toEqual({
+      kind: "error",
+      message: `"login" is a reserved name; it can't have a profile.`,
+    });
+    // The first side keeps its bare-path checks: a reserved verb still hints the command.
+    expect(resolveArg(["Set", "vs", "b"]).kind).toBe("error");
+  });
+
   it("`version` word works like the flags; trailing tokens error", () => {
     expect(resolveArg(["version"])).toEqual({ kind: "version" });
     expect(resolveArg(["version", "extra"]).kind).toBe("error");

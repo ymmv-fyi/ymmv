@@ -11,6 +11,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   you sit at, and the code is typed there as before. On a local terminal, `$BROWSER` picks the
   browser the sign-in opens. A text-mode browser such as lynx or w3m is passed over, and
   Windows ignores `$BROWSER`.
+- **`ymmv <a> vs <b>` diffs two profiles.** `ymmv antfu vs bardisty` prints how antfu's stack
+  differs from bardisty's, the same readout as `ymmv.fyi/antfu/vs/bardisty`. It needs no sign-in.
+  `ymmv view <a> vs <b>` works too.
 
 ### Changed
 - **`www.ymmv.fyi` and `http://ymmv.fyi` are refused as `YMMV_API`.** The CLI names

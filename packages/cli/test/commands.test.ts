@@ -21,6 +21,7 @@ vi.mock("../src/device-flow.js");
 vi.mock("../src/detect.js");
 
 import {
+  compare,
   fieldName,
   publish,
   resolveField,
@@ -279,6 +280,91 @@ describe("view — the 3 branches", () => {
     expect(out).toMatch(/antfu/);
     expect(out).not.toMatch(/publish yours to diff/);
     expect(out).not.toMatch(/differs from/); // no diff title on a plain view
+  });
+});
+
+describe("compare: ymmv <a> vs <b>", () => {
+  /** A fetch that answers the public read of each handle in `profiles` (null = the Worker's 404),
+   *  and records every request. */
+  function serve(profiles: Record<string, Profile | null>) {
+    return vi.fn(async (url: string | URL) => {
+      const handle = decodeURIComponent(String(url).split("/api/v1/u/")[1] ?? "");
+      const p = profiles[handle];
+      return p ? jsonRes(p) : missing();
+    });
+  }
+  const A = prof("antfu", [
+    { key: "editor", value: "VS Code" },
+    { key: "shell", value: "zsh" },
+  ]);
+  const B = prof("bardisty", [
+    { key: "editor", value: "Zed" },
+    { key: "shell", value: "zsh" },
+  ]);
+
+  it("reads both profiles in public and prints how a differs from b, never touching a login", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    const fetchFn = serve({ antfu: A, bardisty: B });
+    vi.stubGlobal("fetch", fetchFn);
+    await compare("antfu", "bardisty");
+    expect(loadCredential).not.toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(fetchFn.mock.calls)).not.toMatch(/authorization|Bearer/i);
+    expect(logs).toHaveLength(1);
+    // The web's /antfu/vs/bardisty: theirs = antfu (left column), mine = bardisty.
+    expect(logs[0]).toContain("how antfu differs from bardisty");
+    expect(logs[0]).toMatch(/^~ Editor\s+VS Code\s+Zed$/m);
+    expect(logs[0]).toMatch(/^= Shell\s+zsh\s+zsh$/m);
+    expect(errs).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("the column heads are the handles as stored, whatever was typed", async () => {
+    vi.stubGlobal("fetch", serve({ ANTFU: A, BarDisty: B }));
+    await compare("ANTFU", "BarDisty");
+    expect(logs[0]).toContain("how antfu differs from bardisty");
+    expect(errs).toEqual([]); // a case difference is no rename
+  });
+
+  it("a renamed side says so on stderr, before the diff", async () => {
+    vi.stubGlobal("fetch", serve({ antfuold: A, bardisty: B }));
+    await compare("antfuold", "bardisty");
+    expect(errs).toEqual(["\n  (antfuold is now antfu)"]);
+    expect(logs[0]).toContain("how antfu differs from bardisty");
+  });
+
+  it("a missing first side is a miss, like `ymmv a`", async () => {
+    vi.stubGlobal("fetch", serve({ bardisty: B }));
+    await compare("nobody", "bardisty");
+    expect(logs).toEqual(['\n  no ymmv profile for "nobody" yet.']);
+    expect(errs).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("both sides missing names both", async () => {
+    vi.stubGlobal("fetch", serve({}));
+    await compare("nobody", "ghost");
+    expect(logs).toEqual([
+      '\n  no ymmv profile for "nobody" yet.',
+      '\n  no ymmv profile for "ghost" yet.',
+    ]);
+  });
+
+  it("a missing second side shows the first's card, with the reason on stderr", async () => {
+    vi.stubGlobal("fetch", serve({ antfu: A }));
+    await compare("antfu", "nobody");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("ymmv.fyi/antfu");
+    expect(logs[0]).not.toContain("differs from");
+    expect(errs).toEqual(['\n  (no diff: no ymmv profile for "nobody" yet)']);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a handle against itself is the all-same diff the web shows", async () => {
+    vi.stubGlobal("fetch", serve({ antfu: A }));
+    await compare("antfu", "antfu");
+    expect(logs[0]).toContain("how antfu differs from antfu");
+    expect(logs[0]).toMatch(/0 differ {3}2 shared/);
   });
 });
 

@@ -14,7 +14,8 @@ import { sanitizeValue, showsVisibleText } from "./render.js";
 // (login/logout/set/unset/delete/view/help/publish/version/update) dispatch as verbs, and
 // `ymmv view <handle>` is the explicit alias for viewing (every verb word is also a reserved
 // handle, so a verb-colliding profile cannot exist — both view paths reject reserved names
-// locally rather than making a round-trip that misreports "no profile yet"). Verbs reject
+// locally rather than making a round-trip that misreports "no profile yet"). Either view form
+// takes a `vs <handle>` tail to diff two profiles, like the web's /<a>/vs/<b>. Verbs reject
 // unexpected trailing tokens instead of dropping them — `ymmv -y delete` must never read as a
 // consented publish, and `ymmv delete oldname -y` must never read as a consented delete
 // (help is the one deliberate exception, see below). Pure + total: every argv maps to exactly
@@ -32,6 +33,7 @@ export type UnsetTarget = { kind: "curated"; key: CuratedKey } | { kind: "extra"
 export type Command =
   | { kind: "publish"; yes: boolean; resetMarks: boolean }
   | { kind: "view"; handle: string }
+  | { kind: "compare"; theirs: string; mine: string }
   | { kind: "login"; yes: boolean }
   | { kind: "logout" }
   | { kind: "set"; target: SetTarget }
@@ -222,7 +224,8 @@ export function resolveArg(argv: string[]): Command {
       return { kind: "error", message: `"${sanitizeValue(handle)}" is not a valid GitHub handle.` };
     }
     if (isReserved(handle)) return reservedError(handle);
-    if (rest.length > 1) return { kind: "error", message: VIEW_USAGE };
+    if (rest.length > 1)
+      return versusTail(handle, rest.slice(1)) ?? { kind: "error", message: VIEW_USAGE };
     return { kind: "view", handle };
   }
 
@@ -242,10 +245,25 @@ export function resolveArg(argv: string[]): Command {
     };
   }
   if (isReserved(first)) return reservedError(first, true);
+  const versus = versusTail(first, rest);
+  if (versus) return versus;
   if (rest.length > 0) {
     return { kind: "error", message: `Unexpected arguments after "${first}". Run \`ymmv help\`.` };
   }
   return { kind: "view", handle: first };
+}
+
+/** `<a> vs <b>`, the CLI's spelling of the web's /<a>/vs/<b>: a tail of exactly `vs` and one
+ *  more handle, checked the way the first one is. Undefined for any other tail, which keeps the
+ *  caller's own error. `vs` is only a keyword here, so `ymmv vs` still views a user named vs. */
+function versusTail(theirs: string, tail: readonly string[]): Command | undefined {
+  const [word, mine] = tail;
+  if (tail.length !== 2 || word !== "vs" || mine === undefined) return undefined;
+  if (!isValidHandle(mine)) {
+    return { kind: "error", message: `"${sanitizeValue(mine)}" is not a valid GitHub handle.` };
+  }
+  if (isReserved(mine)) return reservedError(mine);
+  return { kind: "compare", theirs, mine };
 }
 
 /** Shape-check first, reserved second: only handle-shaped input reaches this hint. The reserved

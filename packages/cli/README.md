@@ -91,6 +91,7 @@ At the `Publish to ymmv.fyi/<you>?` prompt:
 | `ymmv -y`                          | Publish without prompts. See [Publishing from CI](#publishing-from-ci). |
 | `ymmv --reset-marks`               | Forget your `n` answers to `d`, so every differing row is marked again. |
 | `ymmv <handle>`                    | View a profile, or diff it against yours when you're signed in.         |
+| `ymmv antfu vs bardisty`           | How one profile differs from another. No sign-in needed.                |
 | `ymmv set editor Neovim`           | Change one value.                                                       |
 | `ymmv set --extra "Keyboard=HHKB"` | Add a free-form line of your own. `-e` works too.                       |
 | `ymmv unset editor`                | Remove one value. `ymmv set editor -` does the same.                    |

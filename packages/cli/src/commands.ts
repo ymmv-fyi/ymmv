@@ -1006,17 +1006,7 @@ export async function view(handle: string): Promise<void> {
     }
     return;
   }
-  // A renamed handle answers with the profile under its current one (fetchProfileJson follows the
-  // Worker's 301). Say so before the card, whose breadcrumb names the other handle. Faint, on
-  // stderr like the notes below: piped stdout stays the card alone.
-  if (theirs.handle.toLowerCase() !== handle.toLowerCase()) {
-    const codes = palette(c);
-    console.error(
-      message(
-        `${codes.faint}(${sanitizeValue(handle)} is now ${sanitizeValue(theirs.handle)})${codes.reset}`,
-      ),
-    );
-  }
+  noteRename(handle, theirs);
   // The plain card, optionally with a diff-degradation diagnostic. The note goes to stderr so
   // piped stdout stays deterministic (the card only), and exit stays 0: the requested profile DID
   // render. Faint, never amber: it repeats on every degraded view. A short fragment is wrapped in
@@ -1079,6 +1069,42 @@ export async function view(handle: string): Promise<void> {
     // Viewing your own handle: just show it (no self-diff).
   }
   plainCard();
+}
+
+/** A renamed handle answers with the profile under its current one (fetchProfileJson follows the
+ *  Worker's 301), so a case-insensitive mismatch is the rename. Said before the card or diff,
+ *  whose heads name the other handle; faint on stderr, so piped stdout stays the readout alone. */
+function noteRename(requested: string, profile: Profile): void {
+  if (profile.handle.toLowerCase() === requested.toLowerCase()) return;
+  noteOnStderr(`(${sanitizeValue(requested)} is now ${sanitizeValue(profile.handle)})`);
+}
+
+/** `ymmv <a> vs <b>`: how a differs from b, the same readout as the web's /<a>/vs/<b> (which
+ *  diffs mine = b against theirs = a), under the handles as stored. Two public reads and no
+ *  credential: the viewer is not part of it, so no token is loaded or sent. A missing a is a miss
+ *  like `ymmv a` (the web 404s), naming a missing b as well; a missing b shows a's card, as the
+ *  web does, with the reason on stderr. `ymmv a vs a` is the all-same diff the web shows. */
+export async function compare(theirsHandle: string, mineHandle: string): Promise<void> {
+  const [theirs, mine] = await Promise.all([
+    fetchProfileJson(theirsHandle),
+    fetchProfileJson(mineHandle),
+  ]);
+  const color = colorEnabled();
+  if (!theirs) {
+    console.log(notFound(theirsHandle));
+    if (!mine) console.log(notFound(mineHandle));
+    return;
+  }
+  noteRename(theirsHandle, theirs);
+  if (!mine) {
+    console.log(renderProfile(theirs, { color, site: displayUrl(BASE) }));
+    noteOnStderr(`(no diff: no ymmv profile for "${sanitizeValue(mineHandle)}" yet)`);
+    return;
+  }
+  noteRename(mineHandle, mine);
+  console.log(
+    renderDiff(diff(mine, theirs), { color, theirsLabel: theirs.handle, mineLabel: mine.handle }),
+  );
 }
 
 /** `ymmv set <key> <value>` / `--extra` — read-modify-write one field, then republish (unless
