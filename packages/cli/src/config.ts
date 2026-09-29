@@ -149,3 +149,10 @@ export function credentialEnvProblem(
   }
   return null;
 }
+
+/** Running under CI: `CI` set to anything but "false", the convention GitHub Actions, GitLab and
+ *  most runners follow (and the way to say "not CI" on one that sets it). The one rule behind every
+ *  CI-aware default: the update check stands down, and a no-prompt publish skips detection. */
+export function isCI(env: Record<string, string | undefined>): boolean {
+  return Boolean(env.CI) && env.CI !== "false";
+}

@@ -20,3 +20,6 @@ delete process.env.NO_UPDATE_NOTIFIER;
 // stdout would move the sign-in lines off stdout. Tests that need a terminal set and restore them.
 process.stdout.isTTY = undefined as unknown as true;
 process.stderr.isTTY = undefined as unknown as true;
+// CI runners set CI=true, and a no-prompt publish skips detection under it: the -y tests would take
+// that branch on CI and the detecting one locally. Tests of the CI branch set it themselves.
+delete process.env.CI;

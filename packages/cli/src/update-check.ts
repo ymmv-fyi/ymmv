@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import envPaths from "env-paths";
+import { isCI } from "./config.js";
 import { type Codes, link, palette, useColor } from "./render.js";
 
 // Passive update check. Fired concurrently at the top of main() for eligible commands; the fetch
@@ -277,7 +278,7 @@ export function formatUpdateNotice(
 export function updatesOptedOut(env: Record<string, string | undefined>): boolean {
   if (env.YMMV_NO_UPDATE_CHECK) return true;
   if (env.NO_UPDATE_NOTIFIER) return true;
-  if (env.CI && env.CI !== "false") return true;
+  if (isCI(env)) return true;
   return false;
 }
 

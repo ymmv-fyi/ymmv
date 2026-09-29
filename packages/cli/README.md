@@ -164,7 +164,7 @@ The shape, statuses, caching and CORS rules are in the
 `ymmv login` needs a browser, so sign in on your machine and hand the token to
 CI:
 
-1. Run `ymmv login` locally.
+1. Run `ymmv` locally. It signs you in and publishes your profile.
 2. Copy the `token` value from the token file:
    - Linux: `~/.config/ymmv/token.json`
    - macOS: `~/Library/Preferences/ymmv/token.json`
@@ -172,17 +172,20 @@ CI:
 3. Save it as a CI secret named `YMMV_TOKEN`. Setting `YMMV_HANDLE` to your
    GitHub username is optional. It makes the job fail if the secret ever holds
    another account's token.
-4. Run `npx ymmv-cli@latest -y` in the job.
+4. In the job, run `npx ymmv-cli@latest set <key> <value>` for each value it
+   keeps up to date, such as `set dotfiles https://github.com/you/dotfiles`.
 
 What to expect:
 
-- `ymmv -y` merges your existing profile with what it detects on the machine
-  it runs on. Values you already published always win, but keys you've never
-  set get the CI runner's detected values, like its OS and shell. For targeted
-  updates from CI, use `ymmv set <key> <value>` instead.
-- When the merge matches what's live, `ymmv -y` prints `Nothing to publish.`
-  and exits 0 without writing, so a scheduled job doesn't move your updated
-  date. `ymmv set` does the same for a value the profile already holds.
+- Under CI (`CI` set, as hosted runners do), `ymmv -y` doesn't detect
+  anything, so the runner's OS and shell never reach your page. It checks
+  your saved profile against what's live and prints
+  `(detection off under CI)` under the card. That normally ends in
+  `Nothing to publish.` and exit 0, without a write. With no saved profile it
+  stops with an error and exit 1. To detect on the runner anyway, set
+  `CI=false` for that step.
+- `ymmv set` writes nothing for a value the profile already holds, so a
+  scheduled job doesn't move your updated date.
 - A rejected or revoked `YMMV_TOKEN` fails `ymmv -y`, `ymmv set`,
   `ymmv unset` and `ymmv delete` with an error naming the variable. Nothing
   falls back to an interactive login, and any stored login file on the runner

@@ -34,6 +34,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **Enter at `Which field` goes back to the card.** After `e`, the question now reads
   `Which field (all, or Enter to go back):`. Enter returns to the same card with nothing changed,
   so an `e` typed by mistake costs nothing. `all` walks all 13 fields, which Enter used to do.
+- **`ymmv -y` under CI no longer publishes the runner's environment.** With `CI` set, as hosted
+  runners do, it skips detection and checks your saved profile as it is, which normally leaves
+  `Nothing to publish.`, with `(detection off under CI)` under the card. Keys you never set used
+  to get the runner's OS, shell and AI tool. With no saved profile it stops with exit 1, so
+  publish once from your own machine first. `CI=false` detects again. The README's CI recipe now
+  uses `ymmv set`.
 - **`ymmv delete` says it signed you out.** Deleting a profile signs out every login for it.
   The line now says so, and names what the next publish needs: a sign-in, or a new
   `YMMV_TOKEN` from `ymmv login`.

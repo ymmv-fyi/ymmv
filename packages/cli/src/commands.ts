@@ -23,7 +23,7 @@ import {
   publishProfile,
   verifyEnvCredential,
 } from "./api.js";
-import { BASE } from "./config.js";
+import { BASE, isCI } from "./config.js";
 import { detectStack } from "./detect.js";
 import { login, NO_HANDLE_BOUND } from "./device-flow.js";
 import {
@@ -418,6 +418,8 @@ async function askToSignIn(
  *     │                                          meantime), then on as "interactive" below
  *     ├─ non-TTY + -y  OR  TTY + -y ──► preview card ─┬─ changes something ► POST  (no prompts)
  *     │                                               └─ nothing to change ► say so  exit 0
+ *     │    under CI: no detection, so the saved profile as it is, with "(detection off under
+ *     │    CI)" under the card; no saved profile ► "Nothing to publish: …"  exit 1
  *     └─ interactive
  *          ├─ no existing profile ────► drop detections the write rules refuse, then prompts
  *          │                            for the gaps only, under "Detected N of 13 fields.
@@ -480,13 +482,22 @@ export async function publish(io: PublishIO): Promise<void> {
   // (/etc/os-release — see DetectOpts). Bounded: refuse non-regular files (a FIFO would hang
   // readFileSync) and anything over 64 KiB (a real os-release is <1 KiB) — linuxDistro() catches
   // the throw and falls back to "Linux".
-  const detected = detectStack(process.env, process.platform, {
-    readTextFile: (p) => {
-      const st = statSync(p);
-      if (!st.isFile() || st.size > 64 * 1024) throw new Error("not a readable os-release");
-      return readFileSync(p, "utf8");
-    },
-  });
+  // Not under CI without prompts: a runner's environment (its OS, `bash`, whatever agent ran the
+  // job) is never the user's stack, and with no card to decline it would fill every key the user
+  // never set. That run republishes the saved profile as it is. An interactive run under CI still
+  // detects: its card shows every detected value and waits for a yes. `CI=false` detects again.
+  // The no-prompt branch's own test (inline there, where it narrows io.prompter).
+  const noPrompt = !io.interactive || !io.prompter || io.yes;
+  const ciNoDetect = noPrompt && isCI(process.env);
+  const detected = ciNoDetect
+    ? new Map<CuratedKey, string>()
+    : detectStack(process.env, process.platform, {
+        readTextFile: (p) => {
+          const st = statSync(p);
+          if (!st.isFile() || st.size > 64 * 1024) throw new Error("not a readable os-release");
+          return readFileSync(p, "utf8");
+        },
+      });
   const color = colorEnabled();
   const site = displayUrl(BASE);
   // With no login stored, a person at the terminal sees what detection found before anything is
@@ -659,6 +670,18 @@ export async function publish(io: PublishIO): Promise<void> {
   // -y (TTY or not) and non-TTY: no prompts, no confirm — preview what will publish, then go.
   // (Also fixes TTY `ymmv -y`, which used to walk all 13 prompts despite help's "without prompts".)
   if (!io.interactive || !io.prompter || io.yes) {
+    // Under CI with nothing saved there is nothing to republish, and nothing to publish that the
+    // user chose. Exit 1: a job that means to publish a profile has not.
+    if (ciNoDetect && !existing) {
+      console.error(
+        message(
+          "Nothing to publish: detection is off under CI, and there is no saved profile. " +
+            "Run `ymmv` on your own machine first.",
+        ),
+      );
+      process.exitCode = 1;
+      return;
+    }
     // Detection (an env value is sanitized on its way into the defaults, which still lets an
     // over-cap or zero-width-only one through) and a value saved before a rule existed both skip
     // the argv and prompt pre-flights, and this branch has no re-ask to
@@ -673,9 +696,14 @@ export async function publish(io: PublishIO): Promise<void> {
     }
     // No detection marks here: a scripted run's environment (a CI runner) is rarely the user's
     // stack, so a "(detected: X)" note would describe the wrong machine, with no key to act on
-    // anyway. The change marks do print: they describe the write itself, and a runner's detection
-    // filling a gap is exactly the `+` row a log reader should see.
+    // anyway. The change marks do print: they describe the write itself, and detection filling a
+    // gap (outside CI) is exactly the `+` row a log reader should see.
     showCard(entries, new Map(), pending());
+    // Under CI the log says why a key the user never set stays empty.
+    if (ciNoDetect) {
+      const c = palette(color);
+      console.log(message(`${c.faint}(detection off under CI)${c.reset}`));
+    }
     // After the refusal on purpose: an unchanged profile whose curated value no longer passes a
     // write rule is still worth exit 1. Skipping the write keeps a scheduled `ymmv -y` from moving
     // the updated date every run.

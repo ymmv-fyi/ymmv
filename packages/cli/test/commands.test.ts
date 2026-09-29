@@ -5595,3 +5595,86 @@ describe("runLogin", () => {
     expect(logs).not.toContain(HINT);
   });
 });
+
+// A runner's environment is never the user's stack: without prompts, `CI` turns detection off.
+describe("publish -y under CI", () => {
+  const ZED: Profile["entries"] = [{ key: "editor", value: "Zed" }];
+  const NOTE = "\n  (detection off under CI)";
+  beforeEach(() => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.mocked(detectStack).mockReturnValue(
+      new Map([
+        ["os", "Ubuntu"],
+        ["shell", "bash"],
+      ]),
+    );
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("republishes the saved profile as is, says why, and an unchanged one writes nothing", async () => {
+    vi.stubEnv("CI", "true");
+    const fetchFn = vi.fn().mockResolvedValueOnce(own(prof("me", ZED)));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(detectStack).not.toHaveBeenCalled();
+    const card = logs.find(isCard) ?? "";
+    expect(card).not.toContain("Ubuntu");
+    expect(logs.slice(-2)).toEqual([
+      NOTE,
+      "\n  Nothing changed. Last published 2026-01-01. Nothing to publish.",
+    ]);
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the read, no POST
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a TTY run with -y is the same no-prompt run", async () => {
+    vi.stubEnv("CI", "1");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(own(prof("me", ZED))));
+    await publish({ interactive: true, yes: true, prompter: stubPrompter() });
+    expect(detectStack).not.toHaveBeenCalled();
+    expect(logs).toContain(NOTE);
+  });
+
+  it("with nothing saved, refuses: exit 1, no POST, no card", async () => {
+    vi.stubEnv("CI", "true");
+    const fetchFn = vi.fn().mockResolvedValueOnce(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(errs).toEqual([
+      "\n  Nothing to publish: detection is off under CI, and there is no saved profile. " +
+        "Run `ymmv` on your own machine first.",
+    ]);
+    expect(logs).toEqual([]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each(["false", ""])("CI=%j detects as before", async (value) => {
+    vi.stubEnv("CI", value);
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(own(prof("me", ZED)))
+      .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+    vi.stubGlobal("fetch", fetchFn);
+    await publish({ interactive: false, yes: true });
+    expect(detectStack).toHaveBeenCalledTimes(1);
+    expect(logs).not.toContain(NOTE);
+    expect(posted(fetchFn).entries).toEqual([
+      { key: "editor", value: "Zed" },
+      { key: "os", value: "Ubuntu" },
+      { key: "shell", value: "bash" },
+    ]);
+  });
+
+  it("an interactive run under CI still detects: its card waits for a yes", async () => {
+    vi.stubEnv("CI", "true");
+    const fetchFn = vi.fn().mockResolvedValueOnce(own(prof("me", ZED)));
+    vi.stubGlobal("fetch", fetchFn);
+    const choice = vi.fn().mockResolvedValue("n");
+    await publish({ interactive: true, yes: false, prompter: stubPrompter({ choice }) });
+    expect(detectStack).toHaveBeenCalledTimes(1);
+    expect(logs.find(isCard)).toContain("Ubuntu");
+    expect(logs).not.toContain(NOTE);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});

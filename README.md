@@ -100,7 +100,8 @@ Environment variables and publishing from CI are covered in the
 
 - **Auto-detection.** The CLI reads your OS, shell, prompt, terminal, editor,
   multiplexer, version manager, window manager, browser, and AI tool from the
-  environment. Those values only fill in the preview.
+  environment. Those values only fill in the preview. Under CI, `ymmv -y`
+  detects nothing and publishes only what you saved.
 - **Nothing publishes until you confirm.** Once it's up, `ymmv delete` removes it.
 - **Your page is public, and so is its JSON.** `GET https://ymmv.fyi/api/v1/u/<handle>`
   returns the same stack. The shape, statuses, caching and CORS rules are in
