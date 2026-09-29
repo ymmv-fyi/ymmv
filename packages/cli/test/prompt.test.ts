@@ -12,6 +12,9 @@ import {
   matchChoice,
   PromptAborted,
   promptLine,
+  type Schedule,
+  SETTLE_CAP_MS,
+  SETTLE_QUIET_MS,
 } from "../src/prompt.js";
 
 const ESC = String.fromCharCode(0x1b); // explicit code point, never a raw literal
@@ -324,8 +327,37 @@ describe("readline contract behind the idle prompter", () => {
   });
 });
 
+/** The settle's clock: nothing fires until the test moves it, so no test sleeps in real time. */
+function fakeClock() {
+  let now = 0;
+  const timers = new Set<{ at: number; fn: () => void }>();
+  const after: Schedule = (ms, fn) => {
+    const timer = { at: now + ms, fn };
+    timers.add(timer);
+    return () => {
+      timers.delete(timer);
+    };
+  };
+  return {
+    after,
+    /** Move time forward `ms`, firing what falls due on the way, in order. */
+    advance(ms: number): void {
+      const end = now + ms;
+      for (;;) {
+        const due = [...timers].filter((t) => t.at <= end).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        timers.delete(due);
+        now = due.at;
+        due.fn();
+      }
+      now = end;
+    },
+  };
+}
+
 // Keys typed before the first question: the command's own wait (detection, the profile read) runs
-// with the input open (index.ts), and the first question clears what that wait left.
+// with the input open (index.ts), and the first question clears what that wait left once stdin has
+// gone quiet.
 describe("makePrompter: keys typed before the first question", () => {
   /** The prompter's next interface reads these in-memory streams instead of process.stdin. */
   function nextInterface() {
@@ -336,44 +368,124 @@ describe("makePrompter: keys typed before the first question", () => {
     return streams;
   }
 
+  /** A prompter on a fake clock, and a step that lets pending input arrive, then lets the first
+   *  read's settle end on a quiet stream. */
+  function clockedPrompter() {
+    const clock = fakeClock();
+    const prompter = makePrompter(clock.after);
+    const settleQuiet = async (): Promise<void> => {
+      await tick();
+      clock.advance(SETTLE_QUIET_MS);
+      await tick();
+    };
+    return { clock, prompter, settleQuiet };
+  }
+
+  /** What the output stream has shown since the last take(). */
+  function capture(output: PassThrough) {
+    let written = "";
+    output.on("data", (c: Buffer) => {
+      written += String(c);
+    });
+    return () => {
+      const w = written;
+      written = "";
+      return w;
+    };
+  }
+
   it("open: a line typed while nothing is asked is dropped, so a double Enter leaves the Publish confirm up", async () => {
     const { input } = nextInterface();
-    const prompter = makePrompter();
+    const { prompter, settleQuiet } = clockedPrompter();
     prompter.open();
     input.write(`${CR}${CR}`); // a double Enter during detection
     await tick();
     const pending = prompter.confirm("Publish to ymmv.fyi/me?", true);
-    await tick();
+    await settleQuiet();
     input.write(`n${CR}`);
     expect(await pending).toBe(false);
     prompter.close();
   });
 
-  it("the first question waits a turn, so held keys that reach readline in it are dropped", async () => {
-    // An open interface reads the terminal only from the next tick. A first question asked in the
-    // same tick would open before a held Enter reaches readline, and the Enter would answer it.
-    // The in-memory stream delivers on that next tick; a real terminal can take longer (Windows
-    // reads it on a helper thread), which this cannot model.
-    const { input } = nextInterface();
-    input.write(`${CR}${CR}`); // typed at launch, held while nothing reads
-    const prompter = makePrompter();
+  it("held keys that arrive after a turn but before stdin goes quiet are dropped, open early or not", async () => {
+    // A Windows console hands over held keys on a helper thread, and an interface made at the
+    // question itself (`ymmv set`'s link offer) starts reading only then: either way an Enter
+    // pressed while the command started can arrive after the first turn. One turn was the whole
+    // wait once, and this Enter answered the default-Y offer.
+    for (const openEarly of [true, false]) {
+      const { input, output } = nextInterface();
+      const shown = capture(output);
+      const { clock, prompter } = clockedPrompter();
+      if (openEarly) prompter.open();
+      const pending = prompter.confirm("use https://github.com/me/dots?", true);
+      await tick();
+      await tick();
+      clock.advance(20);
+      input.write(CR); // late, but typed before anything was asked
+      await tick();
+      clock.advance(SETTLE_QUIET_MS - 1);
+      await tick();
+      expect(shown()).not.toContain("dots?"); // the Enter restarted the quiet window
+      clock.advance(1);
+      await tick();
+      expect(shown()).toContain("dots?");
+      input.write(`n${CR}`);
+      expect(await pending).toBe(false);
+      prompter.close();
+    }
+  });
+
+  it("on a quiet terminal the first question waits SETTLE_QUIET_MS, then one Enter answers it", async () => {
+    const { input, output } = nextInterface();
+    const shown = capture(output);
+    const { clock, prompter } = clockedPrompter();
     prompter.open();
-    const pending = prompter.confirm("Sign in with GitHub to claim ymmv.fyi/me?", true);
+    const pending = prompter.confirm("Publish to ymmv.fyi/me?", true);
     await tick();
+    clock.advance(SETTLE_QUIET_MS - 1);
     await tick();
-    input.write(`n${CR}`);
-    expect(await pending).toBe(false);
+    expect(shown()).toBe("");
+    clock.advance(1);
+    await tick();
+    expect(shown()).toContain("Publish to ymmv.fyi/me?");
+    input.write(CR);
+    expect(await pending).toBe(true);
     prompter.close();
   });
 
-  it("^C or ^D held until the first question's turn aborts that question, never exits from under it", async () => {
-    // Read inside the turn, with the question already counted as pending: the question aborts
-    // (the command's own "nothing happened" path) instead of the idle exit.
+  it("keys that never go quiet end the wait at the cap, and later ones reach the question", async () => {
+    // A key held down past SETTLE_CAP_MS types into the question, as it did before the settle:
+    // the cap keeps the prompt from waiting on the user's own keyboard.
+    const { input, output } = nextInterface();
+    const shown = capture(output);
+    const { clock, prompter } = clockedPrompter();
+    prompter.open();
+    const readers = input.listenerCount("data");
+    const pending = prompter.ask("Font");
+    await tick();
+    for (let t = 0; t + 30 < SETTLE_CAP_MS; t += 30) {
+      clock.advance(30);
+      input.write("x"); // each chunk inside the quiet window of the one before
+      await tick();
+    }
+    expect(shown()).not.toContain("Font");
+    clock.advance(SETTLE_CAP_MS);
+    await tick();
+    expect(shown()).toContain("Font");
+    input.write(`Lilex${CR}`);
+    expect(await pending).toBe("Lilex"); // what came before the cap was cleared
+    expect(input.listenerCount("data")).toBe(readers); // the settle's listener is gone
+    prompter.close();
+  });
+
+  it("^C or ^D held until the settle aborts that question at once, never exits from under it", async () => {
+    // The question already counts as pending: it aborts (the command's own "nothing happened"
+    // path) instead of the idle exit, and the settle ends without waiting out its clock.
     for (const key of [3, 4]) {
       const { input } = nextInterface();
       input.write(String.fromCharCode(key));
       const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const prompter = makePrompter();
+      const { prompter } = clockedPrompter();
       try {
         prompter.open();
         await expect(prompter.confirm("Publish to ymmv.fyi/me?", true)).rejects.toBeInstanceOf(
@@ -387,14 +499,37 @@ describe("makePrompter: keys typed before the first question", () => {
     }
   });
 
+  it("^C during an offer's settle exits 130 as in any wait; a withdrawal ends it at once", async () => {
+    const { input } = nextInterface();
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const { prompter } = clockedPrompter();
+    const LINE = "Press Enter to open github.com in your browser.";
+    try {
+      const withdraw = new AbortController();
+      const offered = prompter.offer(LINE, withdraw.signal);
+      await tick();
+      input.write(String.fromCharCode(3));
+      await tick();
+      expect(write).toHaveBeenCalledWith("\n");
+      expect(exit).toHaveBeenCalledWith(130);
+      withdraw.abort(); // the poll settled while the offer still waited for quiet
+      expect(await offered).toBe(false);
+    } finally {
+      prompter.close();
+      exit.mockRestore();
+      write.mockRestore();
+    }
+  });
+
   it("the first question clears an unfinished line typed before it", async () => {
     const { input } = nextInterface();
-    const prompter = makePrompter();
+    const { prompter, settleQuiet } = clockedPrompter();
     prompter.open();
     input.write("abc");
     await tick();
     const pending = prompter.ask("Font");
-    await tick();
+    await settleQuiet();
     input.write(CR);
     // Left, "abc" would be the answer, with the cursor before it for whatever came next.
     expect(await pending).toBe("");
@@ -407,17 +542,16 @@ describe("makePrompter: keys typed before the first question", () => {
     // card publish printed in between. The raw interface is the uncleared half.
     for (const viaPrompter of [false, true]) {
       const { input, output } = viaPrompter ? nextInterface() : terminalStreams();
-      let written = "";
-      output.on("data", (c: Buffer) => {
-        written += String(c);
-      });
+      const shown = capture(output);
       let ask: () => Promise<boolean | string>;
       let close: () => void;
+      let reach: () => Promise<void> = tick;
       if (viaPrompter) {
-        const prompter = makePrompter();
+        const { prompter, settleQuiet } = clockedPrompter();
         prompter.open();
         ask = () => prompter.confirm("Publish to ymmv.fyi/me?", true);
         close = () => prompter.close();
+        reach = settleQuiet;
       } else {
         const rl = createInterface({ input, output, terminal: true, prompt: "" });
         ask = () => rl.question("Publish to ymmv.fyi/me? ");
@@ -425,10 +559,10 @@ describe("makePrompter: keys typed before the first question", () => {
       }
       input.write("x".repeat(240)); // three wrapped rows at 80 columns
       await tick();
-      written = ""; // the echo of the typing, then the card
+      shown(); // the echo of the typing, then the card
       const pending = ask();
-      await tick();
-      expect(written).toStrictEqual(
+      await reach();
+      expect(shown()).toStrictEqual(
         viaPrompter ? expect.not.stringMatching(CURSOR_UP) : expect.stringMatching(CURSOR_UP),
       );
       input.write(CR);
@@ -439,16 +573,16 @@ describe("makePrompter: keys typed before the first question", () => {
 
   it("only the first question clears: a paste still answers two in a row", async () => {
     const { input } = nextInterface();
-    const prompter = makePrompter();
+    const { prompter, settleQuiet } = clockedPrompter();
     prompter.open();
     input.write("zz");
     await tick();
     const first = prompter.ask("Font");
-    await tick();
+    await settleQuiet();
     input.write(`Lilex${CR}Catppuccin`);
     expect(await first).toBe("Lilex");
     const second = prompter.ask("Theme");
-    await tick();
+    await tick(); // no settle: only the first read waits for quiet
     input.write(CR);
     // Cleared again here, the second half of the paste would be lost and Enter would answer "".
     expect(await second).toBe("Catppuccin");
@@ -456,11 +590,11 @@ describe("makePrompter: keys typed before the first question", () => {
   });
 
   it("each interface clears once: after close(), the next one's first question clears again", async () => {
-    const prompter = makePrompter();
+    const { prompter, settleQuiet } = clockedPrompter();
     const { input: before } = nextInterface();
     prompter.open();
     const pending = prompter.ask("Font");
-    await tick();
+    await settleQuiet();
     before.write(`Lilex${CR}`);
     await pending;
     prompter.close();
@@ -469,7 +603,7 @@ describe("makePrompter: keys typed before the first question", () => {
     input.write("y");
     await tick();
     const again = prompter.ask("Theme");
-    await tick();
+    await settleQuiet();
     input.write(CR);
     expect(await again).toBe("");
     prompter.close();
@@ -479,18 +613,16 @@ describe("makePrompter: keys typed before the first question", () => {
     // An offer counts as the interface's first read and clears the same way (pollWithOffer also
     // discards right before its offer). Left, "abc" would be redrawn after the offer's text.
     const { input, output } = nextInterface();
-    let written = "";
-    output.on("data", (c: Buffer) => {
-      written += String(c);
-    });
-    const prompter = makePrompter();
+    const shown = capture(output);
+    const { prompter, settleQuiet } = clockedPrompter();
     prompter.open();
     input.write("abc");
     await tick();
-    written = ""; // the echo of the typing itself
+    shown(); // the echo of the typing itself
     const LINE = "Press Enter to open github.com in your browser.";
     const offered = prompter.offer(LINE, new AbortController().signal);
-    await tick();
+    await settleQuiet();
+    const written = shown();
     expect(written).toContain(LINE);
     expect(written).not.toContain("abc");
     input.write(CR);
@@ -500,15 +632,17 @@ describe("makePrompter: keys typed before the first question", () => {
 
   it("^D typed before the first question: that question is the abort, never a raw readline error", async () => {
     // EOF on an empty line closes the interface with nothing pending. The first question then
-    // clears a closed interface and finds it closed: PromptAborted, the "nothing happened" path.
+    // settles on a stream that sends nothing more, clears a closed interface and finds it closed:
+    // PromptAborted, the "nothing happened" path.
     const { input } = nextInterface();
-    const prompter = makePrompter();
+    const { prompter, settleQuiet } = clockedPrompter();
     prompter.open();
     input.write(String.fromCharCode(4));
     await tick();
-    await expect(prompter.confirm("Publish to ymmv.fyi/me?", true)).rejects.toBeInstanceOf(
-      PromptAborted,
-    );
+    const pending = prompter.confirm("Publish to ymmv.fyi/me?", true);
+    const aborted = expect(pending).rejects.toBeInstanceOf(PromptAborted);
+    await settleQuiet();
+    await aborted;
     prompter.close(); // the interface is already closed: a no-op, never a throw
   });
 

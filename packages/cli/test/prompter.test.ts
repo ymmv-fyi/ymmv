@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
 // Mock readline so the REAL makePrompter machinery (per-question AbortController, SIGINT/close
@@ -6,7 +7,20 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("node:readline/promises", () => ({ createInterface: vi.fn() }));
 
 import { createInterface } from "node:readline/promises";
-import { makePrompter, PromptAborted, PrompterMisuse } from "../src/prompt.js";
+import {
+  PromptAborted,
+  PrompterMisuse,
+  makePrompter as realPrompter,
+  type Schedule,
+} from "../src/prompt.js";
+
+// The first read's settle runs on the next turn here instead of on real timers: these tests are
+// about the prompter's own logic, and prompt.test.ts drives the settle on a fake clock.
+const nextTurn: Schedule = (_ms, fn) => {
+  const t = setImmediate(fn);
+  return () => clearImmediate(t);
+};
+const makePrompter = () => realPrompter(nextTurn);
 
 type Handler = () => void;
 
@@ -37,6 +51,8 @@ function fakeRl() {
       this.closed = true;
     }),
     resume: vi.fn(),
+    // The stream readline reads, which the first read's settle watches for chunks.
+    input: new EventEmitter(),
   };
   // answer() resolves the NEWEST pending question — earlier ones may have died by abort.
   return {

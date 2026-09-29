@@ -36,6 +36,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **Ctrl+C at a question leaves one blank line, not two.** `Aborted. Nothing published.` and
   `Cancelled. Nothing deleted.` now sit under the question the way they do after answering `n`.
   The same goes for Ctrl+D, and for `ymmv login`'s `Log in again?`.
+- **An Enter pressed as a command starts no longer answers its first question.** A key typed
+  before the question appeared could still answer it on Windows, and at the `use https://…?`
+  offer of `ymmv set dotfiles` on any system. The first question now appears once the keyboard
+  has been quiet for a moment, and drops what was typed before it.
 
 ## [0.13.0] - 2026-09-25
 

@@ -141,7 +141,55 @@ export function matchChoice(
   return keys.includes(first) ? first : null;
 }
 
-export function makePrompter(): Prompter {
+/** Runs `fn` after `ms` and returns its cancel: makePrompter's timer seam, so tests drive the
+ *  first read's settle on a fake clock instead of sleeping. */
+export type Schedule = (ms: number, fn: () => void) => () => void;
+
+const schedule: Schedule = (ms, fn) => {
+  const t = setTimeout(fn, ms);
+  return () => clearTimeout(t);
+};
+
+// The settle before an interface's first read (see readLine). Quiet: long enough for the chunks a
+// terminal hands over after holding them, short enough that a prompt on a quiet terminal still
+// appears at once. Cap: a key held down (or a paste) past it types into the question as it would
+// have without the settle; the cap keeps the prompt from waiting on the user's own keyboard.
+export const SETTLE_QUIET_MS = 40;
+export const SETTLE_CAP_MS = 250;
+
+/**
+ * Resolve once `input` has delivered nothing for SETTLE_QUIET_MS, after SETTLE_CAP_MS at most,
+ * or as soon as `signal` aborts (^C, a withdrawn offer: the read that follows settles it). It
+ * watches the stream readline itself reads. A second 'data' listener sees the same chunks and
+ * takes nothing from readline, and one added to a stream readline paused leaves it paused.
+ */
+function settle(input: NodeJS.ReadableStream, signal: AbortSignal, after: Schedule): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((done) => {
+    // An emit runs the listeners it started with: the chunk whose ^C ends the settle still
+    // reaches `restart`, which must not arm a timer after the end.
+    let ended = false;
+    const finish = (): void => {
+      ended = true;
+      cancelQuiet();
+      cancelCap();
+      input.off("data", restart);
+      signal.removeEventListener("abort", finish);
+      done();
+    };
+    const restart = (): void => {
+      if (ended) return;
+      cancelQuiet();
+      cancelQuiet = after(SETTLE_QUIET_MS, finish);
+    };
+    let cancelQuiet = after(SETTLE_QUIET_MS, finish);
+    const cancelCap = after(SETTLE_CAP_MS, finish);
+    input.on("data", restart);
+    signal.addEventListener("abort", finish);
+  });
+}
+
+export function makePrompter(after: Schedule = schedule): Prompter {
   let rl: Interface | null = null;
   // No question or offer has read from `rl` yet (see readLine). Set per interface: after close(),
   // io() makes a fresh one.
@@ -197,15 +245,19 @@ export function makePrompter(): Prompter {
   const readLine = async (query: string, signal: AbortSignal): Promise<string> => {
     const face = io();
     // The first question or offer on this interface: everything typed before it was typed during
-    // a wait, so it is no answer. One event-loop turn first, because an interface reads the
-    // terminal only from the next tick: held keys that reach readline in that turn are dropped
-    // (a whole line as idle, an unfinished one by the clear). That covers an Enter pressed at
-    // launch when the input opened early, on Unix; a Windows console, or an interface this call
-    // just made, can deliver later. Only this once — see clearIdleInput for why never before a
+    // a wait, so it is no answer. An interface reads the terminal only from the next tick, and
+    // keys the terminal held can arrive well after that: a Windows console reads stdin on a helper
+    // thread, and an interface this call just made (`ymmv set`'s link offer) starts reading only
+    // now, so an Enter pressed while the command started would land right under the prompt. So
+    // wait for stdin to go quiet first (settle), then clear: held keys that arrive meanwhile are
+    // dropped (a whole line as idle, an unfinished one by the clear). A question counts as pending
+    // during the wait (`ac` is set), so ^C there aborts it as at the prompt; an offer sets none,
+    // so ^C exits 130 as in any wait. Only this once — see clearIdleInput for why never before a
     // later question.
     if (unasked) {
       unasked = false;
-      await new Promise<void>((r) => setImmediate(r));
+      // `input` is readline's own reference to the stream it reads, absent from @types/node.
+      await settle((face as unknown as { input: NodeJS.ReadableStream }).input, signal, after);
       clearIdleInput(face);
     }
     try {
