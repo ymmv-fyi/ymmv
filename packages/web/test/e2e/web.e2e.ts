@@ -991,6 +991,34 @@ test.describe("the 3-column diff", () => {
     expect(res.headers().location).toBe("/bardisty/vs/antfu");
   });
 
+  test("302s a reserved viewer to the viewed profile: nobody can publish that name", async ({
+    request,
+  }) => {
+    // isReserved lowercases, so /Login is reserved too. `404` is reserved with a live seed row.
+    for (const viewer of ["login", "Login", "404"]) {
+      const res = await request.get(`/antfu/vs/${viewer}`, { maxRedirects: 0 });
+      expect(res.status(), viewer).toBe(302);
+      expect(res.headers().location, viewer).toBe("/antfu");
+      expect(res.headers()["cache-control"], viewer).toContain("s-maxage=10");
+    }
+    // A renamed viewed handle follows its rename first, then lands on the profile: two hops.
+    const renamed = await request.get("/antfuold/vs/login", { maxRedirects: 0 });
+    expect(renamed.status()).toBe(301);
+    expect(renamed.headers().location).toBe("/antfu/vs/login");
+    const landed = await request.get("/antfuold/vs/login");
+    expect(landed.status()).toBe(200);
+    expect(landed.url()).toMatch(/\/antfu$/);
+  });
+
+  test("a valid viewer with no profile still gets the nudge, not the reserved redirect", async ({
+    page,
+  }) => {
+    const res = await page.goto("/antfu/vs/nobody");
+    expect(res?.status()).toBe(200);
+    expect(page.url()).toMatch(/\/antfu\/vs\/nobody$/);
+    await expect(page.locator(".nudge")).toContainText("Publish yours to diff");
+  });
+
   test("404s a diff against an unknown profile", async ({ page }) => {
     const res = await page.goto("/ghosthandle/vs/bardisty");
     expect(res?.status()).toBe(404);

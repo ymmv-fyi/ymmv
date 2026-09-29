@@ -38,6 +38,19 @@ if (theirs.kind === "live" && mine.kind === "renamed") {
     },
   });
 }
+// A reserved viewer segment (/antfu/vs/login) names no one, and no one can publish it, so the
+// "Publish yours to diff" nudge would offer the impossible: show the profile itself instead. After
+// the renames, so /antfuold/vs/login lands on /antfu in two hops. 302, not 301: the reserved list
+// can change, and a browser keeps a 301 for good. Short-cached like the nudge it replaces.
+if (theirs.kind === "live" && mine.kind === "notfound" && isReserved(mineRaw)) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: `/${theirs.profile.handle}`,
+      "cache-control": readCacheControl("notfound"),
+    },
+  });
+}
 
 // The long-lived policy needs BOTH sides live: the nudge state ("no profile for <you> yet")
 // must stay short-cached like a 404, or a viewer who publishes right after seeing it can be
