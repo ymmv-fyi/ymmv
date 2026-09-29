@@ -31,6 +31,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   has nothing visible, `ymmv` used to walk all 13 prompts before the card. It now asks only for
   the fields that fail, under a line such as `Editor can't publish as it is.`, then shows the
   card. Rows it did not ask about keep their `(detected: …)` note, and `d` still offers them.
+- **Enter at `Which field` goes back to the card.** After `e`, the question now reads
+  `Which field (all, or Enter to go back):`. Enter returns to the same card with nothing changed,
+  so an `e` typed by mistake costs nothing. `all` walks all 13 fields, which Enter used to do.
 - **`ymmv delete` says it signed you out.** Deleting a profile signs out every login for it.
   The line now says so, and names what the next publish needs: a sign-in, or a new
   `YMMV_TOKEN` from `ymmv login`.

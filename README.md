@@ -59,8 +59,8 @@ At the `Publish to ymmv.fyi/<you>?` prompt:
 
 - `y` publishes.
 - `n` stops without publishing.
-- `e` edits one field by name. Press Enter at the field question to go through
-  all 13.
+- `e` edits one field by name, or `all` of them. Enter at the field question
+  goes back to the card.
 - `d` shows up when your machine now detects a different tool than the one
   you saved. Say you switched to Neovim. The Editor row then reads
   `(detected: Neovim)`, and `d` asks about each marked row. `y` takes the

@@ -99,6 +99,10 @@ const askedLabels = (ask: { mock: { calls: unknown[][] } }) => ask.mock.calls.ma
 /** The hint (ask's third argument) each ask of `label` carried. */
 const hintsFor = (ask: { mock: { calls: unknown[][] } }, label: string) =>
   ask.mock.calls.filter((c) => c[0] === label).map((c) => c[2]);
+/** An `ask` for a run that opens the whole walk with `e`: "all" at "Which field", `answer` at
+ *  every field prompt (Enter by default). */
+const walkAll = (answer: (label: string) => string = () => "") =>
+  vi.fn(async (label: string) => (label === "Which field" ? "all" : answer(label)));
 
 let logs: string[];
 let errs: string[];
@@ -323,7 +327,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
     const prompter = stubPrompter({
-      ask: vi.fn(async (label: string) => (label === "Theme" ? "Catppuccin" : "")),
+      ask: walkAll((label) => (label === "Theme" ? "Catppuccin" : "")),
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
     });
     await publish({ interactive: true, yes: false, prompter });
@@ -406,7 +410,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes(prof("me", [foreign, { key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async () => "");
+    const ask = walkAll();
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
@@ -492,7 +496,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" })); // POST
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "Zed" : ""));
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y"),
@@ -509,7 +513,7 @@ describe("publish", () => {
       .fn()
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "-" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "-" : ""));
     const prompter = stubPrompter({
       ask,
       choice: vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("n"),
@@ -940,9 +944,7 @@ describe("publish", () => {
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
     // Enter ("") keeps the default; "-" clears.
-    const ask = vi.fn(async (label: string) =>
-      label === "Editor" ? "Neovim" : label === "OS" ? "-" : "",
-    );
+    const ask = walkAll((label) => (label === "Editor" ? "Neovim" : label === "OS" ? "-" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
     const prompter = stubPrompter({ ask, choice });
     await publish({ interactive: true, yes: false, prompter });
@@ -1316,8 +1318,8 @@ describe("publish: Enter in a walk keeps the saved value as stored", () => {
     { key: "shell", value: "zsh" },
   ];
   /** Enter ("") everywhere; `typed` answers prompts by label, and "Which field" takes `field`
-   *  (default Enter, the whole walk). */
-  const enterAll = (typed: Record<string, string> = {}, field = "") =>
+   *  (default `all`, the whole walk). */
+  const enterAll = (typed: Record<string, string> = {}, field = "all") =>
     vi.fn(async (label: string) => (label === "Which field" ? field : (typed[label] ?? "")));
   /** A republish of `entries` that answers e at the first card and y after. With `reload`, the
    *  first POST (call 1) is a 412 whose re-read returns it, and the retry is call 3. */
@@ -1577,6 +1579,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     const typed: Record<string, string> = { Editor: "Zed", Shell: "-", Font: "Lilex" };
     let walks = 0;
     const ask = vi.fn(async (label: string) => {
+      if (label === "Which field") return "all";
       if (label === "Editor") walks += 1; // Editor opens every walk
       return (walks === 2 ? typed[label] : undefined) ?? "";
     });
@@ -1712,7 +1715,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
       .mockResolvedValueOnce(jsonRes({ error: "precondition_failed" }, 412)) // the retry
       .mockResolvedValueOnce(own(landed, '"2026-02-02"'));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "Zed" : ""));
     const choice = vi
       .fn()
       .mockResolvedValueOnce("e")
@@ -1750,6 +1753,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     const typed = ["Zed", "Vim"];
     let walks = 0;
     const ask = vi.fn(async (label: string) => {
+      if (label === "Which field") return "all";
       if (label === "Editor") walks += 1;
       return label === "Editor" ? (typed[walks - 1] ?? "") : "";
     });
@@ -1830,6 +1834,7 @@ describe("publish: the card marks what changes on the live profile, and an uncha
     const typed = ["Zed", "Vim"];
     let walks = 0;
     const ask = vi.fn(async (label: string) => {
+      if (label === "Which field") return "all";
       if (label === "Editor") walks += 1;
       return label === "Editor" ? (typed[walks - 1] ?? "") : "";
     });
@@ -1956,8 +1961,9 @@ describe("publish: the card marks what changes on the live profile, and an uncha
 describe("publish: a changed detection is marked on the card and taken with d", () => {
   const ESC = String.fromCharCode(27);
   const ZWSP = String.fromCharCode(0x200b);
-  /** Enter ("") at every prompt: the walk keeps each default as stored. */
-  const keepAll = () => vi.fn(async () => "");
+  /** Enter ("") at every field prompt, and `all` at "Which field": the walk keeps each default
+   *  as stored. */
+  const keepAll = () => walkAll();
   const choiceCalls = (choice: { mock: { calls: unknown[][] } }) =>
     choice.mock.calls.map((c) => ({ keys: c[1], hint: c[3] }));
   const THREE = { keys: ["y", "n", "e"], hint: "Y/n/e=edit" };
@@ -2093,7 +2099,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "editor", value: "Vim" }])))
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "Zed" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).toContain("(detected: Neovim)");
@@ -2209,7 +2215,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "-" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "-" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[1]).toMatch(/- Editor\s+Vim → —/);
@@ -2577,7 +2583,7 @@ describe("publish: a changed detection is marked on the card and taken with d", 
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Editor" ? "Zed" : ""));
+    const ask = walkAll((label) => (label === "Editor" ? "Zed" : ""));
     const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
     await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
     expect(cards()[0]).toContain("(detected: Neovim)");
@@ -3431,12 +3437,40 @@ describe("publish: e asks which field", () => {
     expect(resolveField("   ")).toBeUndefined();
   });
 
-  it("the question is an ask with the way to the full walk as its hint", async () => {
+  it("the question is an ask whose hint names the full walk and the way back", async () => {
     const { ask } = await run([""], {}, ["e", "y"]);
-    expect(ask.mock.calls[0]).toEqual(["Which field", undefined, "Enter for all"]);
+    expect(ask.mock.calls[0]).toEqual(["Which field", undefined, "all, or Enter to go back"]);
   });
 
-  it.each(["", "all", " ALL "])("%j walks all 13 under the keep/clear line", async (answer) => {
+  it("Enter goes back to the same card: nothing asked, nothing changed, the marks kept", async () => {
+    vi.mocked(detectStack).mockReturnValue(new Map([["editor", "Neovim"]]));
+    const { ask, choice, fetchFn } = await run([""], {}, ["e", "y"]);
+    expect(askedLabels(ask)).toEqual(["Which field"]);
+    const cards = logs.filter(isCard);
+    expect(cards).toHaveLength(2);
+    expect(cards[1]).toBe(cards[0]);
+    expect(cards[1]).toContain("(detected: Neovim)");
+    // Both confirms are the same question: nothing changed, and d is still offered.
+    expect(choice.mock.calls[1]).toEqual(choice.mock.calls[0]);
+    expect(choice.mock.calls[1]?.[1]).toContain("d");
+    expect(posted(fetchFn).entries).toEqual(ZED_ZSH);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("Enter after a field edit keeps the edit", async () => {
+    const { ask, fetchFn } = await run(["font", ""], { Font: "Lilex" }, ["e", "e", "y"]);
+    expect(askedLabels(ask)).toEqual(["Which field", "Font", "Which field"]);
+    expect(posted(fetchFn).entries).toContainEqual({ key: "font", value: "Lilex" });
+  });
+
+  it("Enter after a name that fits no field goes back too", async () => {
+    const { ask, choice } = await run(["zzz", ""], {}, ["e", "n"]);
+    expect(logs).toContain('\n  no field called "zzz"');
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field"]);
+    expect(choice).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["all", " ALL ", "All"])("%j walks all 13 under the keep/clear line", async (answer) => {
     const { ask } = await run([answer], {}, ["e", "y"]);
     expect(askedLabels(ask)).toEqual(["Which field", ...CURATED_KEYS.map((k) => KEY_LABELS[k])]);
     expect(logs).toContain('\n  Enter to keep, "-" to clear');
@@ -3495,7 +3529,7 @@ describe("publish: e asks which field", () => {
   });
 
   it("the echoed answer is sanitized", async () => {
-    const { ask } = await run([`x${String.fromCodePoint(0x1b)}[31my`, ""], {}, ["e", "y"]);
+    const { ask } = await run([`x${String.fromCodePoint(0x1b)}[31my`, "all"], {}, ["e", "y"]);
     expect(logs).toContain('\n  no field called "xy"');
     expect(logs.join("\n")).not.toContain(String.fromCodePoint(0x1b));
     expect(askedLabels(ask)).toEqual([
@@ -3568,8 +3602,9 @@ describe("publish: e asks which field", () => {
 });
 
 describe("publish: a walk prompt with no default shows an example", () => {
-  /** Enter ("") at every prompt: the walk keeps each default as stored. */
-  const keep = () => vi.fn(async () => "");
+  /** Enter ("") at every field prompt, and `all` at "Which field": the walk keeps each default
+   *  as stored. */
+  const keep = () => walkAll();
 
   it("every bare prompt carries its example; a prefilled one explains itself", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
@@ -3600,6 +3635,7 @@ describe("publish: a walk prompt with no default shows an example", () => {
     vi.stubGlobal("fetch", fetchFn);
     let fontAsks = 0;
     const ask = vi.fn(async (label: string) => {
+      if (label === "Which field") return "all";
       if (label !== "Font") return "";
       fontAsks += 1;
       return fontAsks === 1 ? "x".repeat(300) : "Lilex"; // over the cap, then a real answer
@@ -3656,6 +3692,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
     vi.stubGlobal("fetch", fetchFn);
     let walks = 0;
     const ask = vi.fn(async (label: string) => {
+      if (label === "Which field") return "all";
       if (label === "Editor") walks += 1;
       // The first walk types the value; any later one is Enter all the way down.
       return walks === 1 && label === "Dotfiles" ? dotfiles : "";
@@ -3728,7 +3765,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
       )
       .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
     vi.stubGlobal("fetch", fetchFn);
-    const ask = vi.fn(async (label: string) => (label === "Dotfiles" ? "-" : ""));
+    const ask = walkAll((label) => (label === "Dotfiles" ? "-" : ""));
     const answers = ["e", "y"];
     const choice = vi.fn(async (q: string) =>
       q.startsWith("use ") ? "y" : (answers.shift() ?? "y"),
@@ -3749,7 +3786,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
         .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
       vi.stubGlobal("fetch", fetchFn);
       const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValueOnce("y");
-      const ask = vi.fn(async () => "");
+      const ask = walkAll();
       await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
       expect(offers(choice), saved).toEqual([]);
     }
@@ -3765,9 +3802,7 @@ describe("publish: a dotfiles answer typed without a scheme is offered as a link
         .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
       vi.stubGlobal("fetch", fetchFn);
       const choice = vi.fn().mockResolvedValueOnce("e").mockResolvedValue("y");
-      const ask = vi.fn(async (label: string) =>
-        label === "Dotfiles" ? "github.com/me/dots" : "",
-      );
+      const ask = walkAll((label) => (label === "Dotfiles" ? "github.com/me/dots" : ""));
       await publish({ interactive: true, yes: false, prompter: stubPrompter({ ask, choice }) });
       expect(offers(choice), saved).toEqual([]);
       expect(posted(fetchFn).entries).toEqual([{ key: "dotfiles", value: "github.com/me/dots" }]);

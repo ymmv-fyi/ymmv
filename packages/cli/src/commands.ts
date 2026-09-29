@@ -436,10 +436,11 @@ async function askToSignIn(
  *               │              ├─ 412 changed ───► re-read, rebase answers onto it ─► LOOP
  *               │              └─ PublishRefusal ► rethrow (identity drifted)  exit 1
  *               ├─ n ──► "Aborted. Nothing published." ("Left as is." at the anyway prompt)  exit 0
- *               ├─ e ──► "Which field (Enter for all)": a key or label (a prefix will do) asks
- *               │        that one prompt, Enter asks all 13; prefilled with current answers. A
- *               │        marked row's prompt shows "(detected: X)", and Enter there keeps the
- *               │        value for this run ─► LOOP
+ *               ├─ e ──► "Which field (all, or Enter to go back)": a key or label (a prefix will
+ *               │        do) asks that one prompt, `all` asks all 13; prefilled with current
+ *               │        answers. A marked row's prompt shows "(detected: X)", and Enter there
+ *               │        keeps the value for this run ─► LOOP. Enter at "Which field" asks
+ *               │        nothing ─► LOOP (the same card)
  *               ├─ d ──► per marked row "Label  saved → detected" [Y/n]: y takes the detected
  *               │        value, n keeps the saved one and dismisses the mark (remembered
  *               │        across runs; `--reset-marks` forgets) ─► LOOP
@@ -916,14 +917,19 @@ export async function publish(io: PublishIO): Promise<void> {
         }
         continue;
       }
-      // "e": one field, or Enter for the whole walk, prefilled with current answers either way.
-      // A name that fits no field, or more than one, re-asks: guessing would walk the user
-      // through a prompt they did not ask for.
+      // "e": one field, or `all` for the whole walk, prefilled with current answers either way.
+      // Enter goes back to the card with nothing changed: an `e` typed by mistake would otherwise
+      // cost a walk nobody asked for, or the run. The card reprints as the loop top draws it, and
+      // edits, keeps and marks are untouched. A name that fits no field, or more than one,
+      // re-asks: guessing would walk the user through a prompt they did not ask for.
       for (;;) {
+        const answer = (
+          await io.prompter.ask("Which field", undefined, "all, or Enter to go back")
+        ).trim();
+        if (answer === "") break;
         // Matched in the form the note echoes, so a pasted bidi mark cannot make `font` miss.
-        const answer = (await io.prompter.ask("Which field", undefined, "Enter for all")).trim();
         const typed = shownValue(answer);
-        const all = answer === "" || fieldName(typed) === "all";
+        const all = fieldName(typed) === "all";
         const field = all ? undefined : resolveField(typed);
         if (all || typeof field === "string") {
           await prompt(io.prompter, typeof field === "string" ? new Set([field]) : undefined);
