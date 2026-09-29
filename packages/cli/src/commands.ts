@@ -863,9 +863,12 @@ export async function publish(io: PublishIO): Promise<void> {
           }
           // A TRANSIENT failure (5xx, 429, a wire 422, network) must not discard the answers
           // the user just typed — print why and re-enter the loop (card + Y/n/e). Deterministic
-          // failures pass through: PromptAborted (^C during the re-login device flow) keeps its
-          // exit-130 contract, and PublishRefusal means retrying the SAME attempt can never
-          // succeed (identity drifted; a fresh run must rebuild the merge), so exit honestly.
+          // failures pass through. PromptAborted keeps its exit-130 contract: none escapes
+          // publishProfile today (the 401 self-heal's login() only offers the browser, which
+          // reads its own abort as "not taken", and a ^C during its device flow exits 130 from
+          // the prompter), so this guards a re-login that asks a question. PublishRefusal means
+          // retrying the SAME attempt can never succeed (identity drifted; a fresh run must
+          // rebuild the merge), so exit honestly.
           if (e instanceof PromptAborted || e instanceof PublishRefusal) throw e;
           // Honest about what's known: a server-ANSWERED failure (4xx/5xx body) proves nothing
           // was written, but a lost response (NetworkError/timeout) can arrive AFTER the server

@@ -810,15 +810,17 @@ describe("publish", () => {
     expect(logs.join("\n")).not.toContain("Nothing published");
   });
 
-  it("^C during the mid-publish re-login device flow exits 130, not the retry loop", async () => {
-    // The loop's PromptAborted rethrow must cover an abort ESCAPING publishProfile (the ^C lands
-    // in login() during the 401 self-heal), not just one at the confirm choice.
+  it("a PromptAborted escaping publishProfile exits 130, not the retry loop", async () => {
+    // Pins the loop's rethrow, not a path a user can reach today: the 401 self-heal's login()
+    // only offers the browser, which reads its own abort as "not taken", and a ^C during its
+    // device flow exits 130 from the prompter. A re-login that asks a question must still land
+    // here, never in the retry loop.
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.mocked(login).mockRejectedValue(new PromptAborted());
     const fetchFn = vi
       .fn()
       .mockResolvedValueOnce(missing()) // GET existing
-      .mockResolvedValueOnce(new Response("{}", { status: 401 })); // POST → self-heal → login ^C
+      .mockResolvedValueOnce(new Response("{}", { status: 401 })); // POST → self-heal → abort
     vi.stubGlobal("fetch", fetchFn);
     const choice = vi.fn().mockResolvedValue("y");
     const prompter = stubPrompter({ ask: vi.fn(async () => ""), choice });
