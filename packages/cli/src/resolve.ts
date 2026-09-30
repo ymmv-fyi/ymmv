@@ -17,10 +17,11 @@ import { sanitizeValue, showsVisibleText } from "./render.js";
 // locally rather than making a round-trip that misreports "no profile yet"). Either view form
 // takes a `vs <handle>` tail to diff two profiles, like the web's /<a>/vs/<b>. Verbs reject
 // unexpected trailing tokens instead of dropping them — `ymmv -y delete` must never read as a
-// consented publish, and `ymmv delete oldname -y` must never read as a consented delete
-// (help is the one deliberate exception, see below). Pure + total: every argv maps to exactly
-// one Command (including `error`), so dispatch in index.ts is a flat switch and the whole table
-// is unit-testable without any IO.
+// consented publish, and `ymmv delete oldname -y` must never read as a consented delete.
+// A whole-token -h/--help anywhere after a verb (or after a bare handle) outranks every other
+// token and prints that verb's usage, so `ymmv set editor --help` and `ymmv delete -y --help`
+// never run. Pure + total: every argv maps to exactly one Command (including `error`), so
+// dispatch in index.ts is a flat switch and the whole table is unit-testable without any IO.
 
 /** What `ymmv set` targets — a curated key/value or a free-form extra. */
 export type SetTarget =
@@ -201,10 +202,14 @@ export function resolveArg(argv: string[]): Command {
 
   // Global help/version. `ymmv help` and a leading -h/--help print the general block, and so
   // does an unknown `ymmv help <topic>`, so trailing tokens stay non-breaking. `ymmv help <verb>`
-  // and `<verb> --help` print that verb's usage. Version is strict like every other verb.
+  // and a -h/--help token anywhere after a verb print that verb's usage, before any verb parser
+  // runs: `set editor --help` would otherwise publish "--help", and `delete -y --help` must not
+  // read as consent. Only a whole token counts, so `set --extra "Flags=-h"` still stores -h; the
+  // cost is that a bare "--help" value is unrepresentable, the same trade "-" makes for clear.
+  // Version is strict like every other verb.
   if (first === "-h" || first === "--help") return { kind: "help" };
   if (first === "help") return isVerb(rest[0]) ? verbHelp(rest[0]) : { kind: "help" };
-  if (isVerb(first) && isHelpFlag(rest[0])) return verbHelp(first);
+  if (isVerb(first) && rest.some(isHelpFlag)) return verbHelp(first);
   if (first === "-V" || first === "-v" || first === "--version" || first === "version") {
     return rest.length === 0 ? { kind: "version" } : { kind: "error", message: VERB_USAGE.version };
   }
@@ -270,6 +275,9 @@ export function resolveArg(argv: string[]): Command {
     };
   }
   if (isReserved(first)) return reservedError(first, true);
+  // The bare handle IS view, so a late help flag gets view's usage, like `view <handle> --help`.
+  // Checked after the shape and reserved checks: `ymmv Set editor --help` keeps its verb hint.
+  if (rest.some(isHelpFlag)) return verbHelp("view");
   const versus = versusTail(first, rest);
   if (versus) return versus;
   if (rest.length > 0) {

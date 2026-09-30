@@ -488,6 +488,79 @@ describe("resolveArg", () => {
     },
   );
 
+  it.each(["login", "logout", "update", "publish", "delete", "set", "unset", "view", "version"])(
+    "%s prints its usage for a help flag anywhere after the verb",
+    (verb) => {
+      const expected = resolveArg(["help", verb]);
+      for (const tail of [
+        ["x", "--help"],
+        ["-y", "-h"],
+        ["--extra", "K=V", "--help"],
+        ["x", "-h", "y"],
+      ]) {
+        expect(resolveArg([verb, ...tail])).toEqual(expected);
+      }
+    },
+  );
+
+  it("a late help flag wins over the argv it would otherwise complete or reject", () => {
+    const help = (verb: string) => resolveArg(["help", verb]);
+    // would have published "--help" / "vim --help" / an extra valued "Moonlander --help"
+    expect(resolveArg(["set", "editor", "--help"])).toEqual(help("set"));
+    expect(resolveArg(["set", "editor", "vim", "--help"])).toEqual(help("set"));
+    expect(resolveArg(["set", "--extra", "Keyboard=Moonlander", "--help"])).toEqual(help("set"));
+    expect(resolveArg(["set", "editor", "-h"])).toEqual(help("set"));
+    // consent never slips through beside a help flag
+    expect(resolveArg(["delete", "-y", "--help"])).toEqual(help("delete"));
+    expect(resolveArg(["publish", "-y", "-h"])).toEqual(help("publish"));
+    expect(resolveArg(["login", "-y", "--help"])).toEqual(help("login"));
+    expect(resolveArg(["unset", "editor", "--help"])).toEqual(help("unset"));
+    expect(resolveArg(["unset", "--extra", "--help"])).toEqual(help("unset"));
+    expect(resolveArg(["view", "antfu", "--help"])).toEqual(help("view"));
+  });
+
+  it("the bare-handle view takes a late help flag as view's usage", () => {
+    expect(resolveArg(["antfu", "--help"])).toEqual(resolveArg(["help", "view"]));
+    expect(resolveArg(["antfu", "vs", "bardisty", "-h"])).toEqual(resolveArg(["help", "view"]));
+    // the shape and reserved checks still answer first
+    expect(resolveArg(["Set", "editor", "--help"])).toEqual({
+      kind: "error",
+      message: `"Set" is a reserved name; it can't have a profile. Did you mean: ymmv set?`,
+    });
+    expect(resolveArg(["a!b", "--help"]).kind).toBe("error");
+  });
+
+  it("flag-first argv keeps its own error when a help flag trails it", () => {
+    expect(resolveArg(["-y", "--help"]).kind).toBe("error");
+    expect(resolveArg(["--reset-marks", "--help"]).kind).toBe("error");
+    expect(resolveArg(["--version", "--help"]).kind).toBe("error");
+  });
+
+  it("only a whole -h/--help token is help; one inside a value stays data", () => {
+    expect(resolveArg(["set", "--extra", "Flags=-h"])).toEqual({
+      kind: "set",
+      target: { kind: "extra", label: "Flags", value: "-h" },
+    });
+    expect(resolveArg(["set", "editor", "vim-h"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value: "vim-h" },
+    });
+    expect(resolveArg(["set", "editor", "--helpful"])).toEqual({
+      kind: "set",
+      target: { kind: "curated", key: "editor", value: "--helpful" },
+    });
+    // An extra labeled "--help" (the token is "--help=x", not a help flag) can still be set,
+    // and cleared through the "-" value; `unset --extra --help` prints help instead.
+    expect(resolveArg(["set", "--extra", "--help=x"])).toEqual({
+      kind: "set",
+      target: { kind: "extra", label: "--help", value: "x" },
+    });
+    expect(resolveArg(["set", "--extra", "--help=-"])).toEqual({
+      kind: "unset",
+      target: { kind: "extra", label: "--help" },
+    });
+  });
+
   it("version help describes the command instead of printing its version", () => {
     expect(resolveArg(["version", "--help"])).toEqual({
       kind: "help",
@@ -502,6 +575,10 @@ describe("resolveArg", () => {
       message: 'usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"',
     });
     expect(resolveArg(["delete", "oldname", "-y"]).kind).toBe("error");
+    expect(resolveArg(["unset", "editor", "vim"])).toEqual({
+      kind: "error",
+      message: "usage: ymmv unset editor",
+    });
   });
 
   it("`--reset-marks` → an interactive publish that forgets dismissed marks; never with -y", () => {
