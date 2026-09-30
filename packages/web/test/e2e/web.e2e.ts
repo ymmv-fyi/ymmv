@@ -923,6 +923,35 @@ test.describe("the 3-column diff", () => {
     );
   });
 
+  test("a phone keeps the longest one-word label on one line, level with its values", async ({
+    page,
+  }) => {
+    // 375 is the iPhone SE/mini width where "Multiplexer" used to break mid-word and drop a line
+    // below its own values; 320 is the WCAG reflow width
+    for (const width of [320, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/antfu/vs/bardisty");
+      // measure the self-hosted mono, not the metric-matched fallback it swaps in for
+      await page.evaluate(() => document.fonts.ready);
+      const row = page.locator("table.diff tbody tr").filter({ hasText: "Multiplexer" });
+      const layout = await row.evaluate((tr) => {
+        const k = tr.querySelector("th.k") as HTMLElement;
+        const text = [...k.childNodes].find(
+          (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim(),
+        );
+        const range = document.createRange();
+        range.selectNodeContents(text as Node);
+        const value = tr.querySelector("td.theirs span") as HTMLElement;
+        return {
+          lines: range.getClientRects().length,
+          topDelta: range.getBoundingClientRect().top - value.getBoundingClientRect().top,
+        };
+      });
+      expect(layout.lines, `at ${width}px`).toBe(1);
+      expect(Math.abs(layout.topDelta), `at ${width}px`).toBeLessThan(1);
+    }
+  });
+
   test("the command follows the pair's order and copies the stored handles", async ({ page }) => {
     await page.goto("/bardisty/vs/antfu");
     const cmd = page.locator(".session > .cmdline .install");

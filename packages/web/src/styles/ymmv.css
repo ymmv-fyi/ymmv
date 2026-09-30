@@ -619,21 +619,6 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* phones: a 26% label column breaks "Multiplexer" mid-word — give the labels enough for the
-   longest one-word label PLUS the dot's 15px first-line indent, and tighten the gutters.
-   36% of a 334px column − 1ch gutter − 15px dot ≈ 11.5ch: "Multiplexer" (11ch) keeps one line. */
-@media (max-width: 430px) {
-  .diff thead td {
-    width: 36%;
-  }
-  .diff thead th {
-    width: 32%;
-  }
-  table.diff td,
-  table.diff th {
-    padding-right: 1ch;
-  }
-}
 table.diff td,
 table.diff th {
   padding: 0 2ch 0 0;
@@ -643,6 +628,25 @@ table.diff th {
 table.diff td:last-child,
 table.diff th:last-child {
   padding-right: 0;
+}
+/* phones: a percentage label column breaks "Multiplexer" (11ch, the longest one-word label)
+   mid-word at the narrow end, and the break drops the word a line below its values. Size the
+   column to the word instead: 11ch + a 1ch gutter + the dot's 15px first-line indent, plus 0.5ch
+   of slack (the column is border-box, and .k's 15px padding-left is what the dot's -15px
+   text-indent spends on line 1). Only the label's gutter tightens: the two values keep 2ch
+   between them, since at 1ch two differing values ("Berkeley Mono JetBrains Mono") read as one
+   phrase. The values split what's left, which gives their text more room than the old 36/32/32
+   split from about 365px up and less below it (≈ 8ch at 320, where it was 9ch). */
+@media (max-width: 430px) {
+  .diff thead td {
+    width: calc(12.5ch + 15px);
+  }
+  .diff thead th {
+    width: auto;
+  }
+  table.diff .k {
+    padding-right: 1ch;
+  }
 }
 .diff .k {
   font-weight: 400;
