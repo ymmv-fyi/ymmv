@@ -40,7 +40,7 @@ export type Command =
   | { kind: "unset"; target: UnsetTarget }
   | { kind: "delete"; yes: boolean }
   | { kind: "update" }
-  | { kind: "help" }
+  | { kind: "help"; usage?: string }
   | { kind: "version" }
   | { kind: "error"; message: string };
 
@@ -50,8 +50,37 @@ const UNSET_EXTRA = 'ymmv unset --extra "Label"';
 const SET_USAGE = `usage: ymmv set <key> <value>  |  ${SET_EXTRA}`;
 const EXTRA_USAGE = `usage: ${SET_EXTRA}`;
 const UNSET_USAGE = `usage: ymmv unset <key>  |  ${UNSET_EXTRA}`;
-const VIEW_USAGE = "usage: ymmv view <handle>";
+const VIEW_USAGE = "usage: ymmv view <handle> [vs <handle>]";
+const LOGIN_USAGE = "usage: ymmv login [-y]";
 const PUBLISH_USAGE = "usage: ymmv publish [-y | --reset-marks]";
+// Each verb's usage line, written once — `ymmv help <verb>`, `<verb> --help` and the verb's
+// general usage error all print it (argument-specific errors, like set's, keep their own text).
+const VERB_USAGE = {
+  login: LOGIN_USAGE,
+  logout: "usage: ymmv logout",
+  update: "usage: ymmv update",
+  publish: PUBLISH_USAGE,
+  delete: "usage: ymmv delete [-y] (deletes your own profile; takes no handle)",
+  set: SET_USAGE,
+  unset: UNSET_USAGE,
+  view: VIEW_USAGE,
+  version: "usage: ymmv version",
+} as const;
+type Verb = keyof typeof VERB_USAGE;
+
+function isHelpFlag(token: string | undefined): boolean {
+  return token === "-h" || token === "--help";
+}
+
+function isVerb(token: string | undefined): token is Verb {
+  return token !== undefined && Object.hasOwn(VERB_USAGE, token);
+}
+
+function verbHelp(verb: Verb): Command {
+  const keys =
+    verb === "set" || verb === "unset" ? `\nValid keys: ${CURATED_KEYS.join(", ")}.` : "";
+  return { kind: "help", usage: VERB_USAGE[verb] + keys };
+}
 
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
  *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). */
@@ -66,7 +95,7 @@ function invalidKeyError(head: string, hint: string): Command {
 
 /** Verbs that take nothing: any trailing token is a usage error, never silently dropped. */
 function noArgs(verb: "logout" | "update", rest: string[]): Command {
-  return rest.length === 0 ? { kind: verb } : { kind: "error", message: `usage: ymmv ${verb}` };
+  return rest.length === 0 ? { kind: verb } : { kind: "error", message: VERB_USAGE[verb] };
 }
 
 /** Verbs whose only extra token may be -y/--yes — consent stays scoped to this one command,
@@ -170,14 +199,14 @@ export function resolveArg(argv: string[]): Command {
   const first = argv[0];
   const rest = argv.slice(1);
 
-  // Global help/version. Help deliberately ignores trailing tokens: printing help is harmless
-  // by construction, and a future git-style `ymmv help <command>` must stay non-breaking.
-  // Version is strict like every other verb.
-  if (first === "-h" || first === "--help" || first === "help") return { kind: "help" };
+  // Global help/version. `ymmv help` and a leading -h/--help print the general block, and so
+  // does an unknown `ymmv help <topic>`, so trailing tokens stay non-breaking. `ymmv help <verb>`
+  // and `<verb> --help` print that verb's usage. Version is strict like every other verb.
+  if (first === "-h" || first === "--help") return { kind: "help" };
+  if (first === "help") return isVerb(rest[0]) ? verbHelp(rest[0]) : { kind: "help" };
+  if (isVerb(first) && isHelpFlag(rest[0])) return verbHelp(first);
   if (first === "-V" || first === "-v" || first === "--version" || first === "version") {
-    return rest.length === 0
-      ? { kind: "version" }
-      : { kind: "error", message: "usage: ymmv version" };
+    return rest.length === 0 ? { kind: "version" } : { kind: "error", message: VERB_USAGE.version };
   }
 
   // Bare `ymmv` (optionally `-y`) → publish, the default magic. A flag-first tail is refused:
@@ -200,18 +229,14 @@ export function resolveArg(argv: string[]): Command {
   }
   if (first === "--reset-marks") return publishFlags(argv);
 
-  // Reserved verbs.
+  // Reserved verbs. Help has already been handled above.
   if (first === "logout" || first === "update") return noArgs(first, rest);
   if (first === "login") {
-    return yesOnly("usage: ymmv login [-y]", rest, (yes) => ({ kind: "login", yes }));
+    return yesOnly(LOGIN_USAGE, rest, (yes) => ({ kind: "login", yes }));
   }
   if (first === "publish") return publishFlags(rest);
   if (first === "delete") {
-    return yesOnly(
-      "usage: ymmv delete [-y] (deletes your own profile; takes no handle)",
-      rest,
-      (yes) => ({ kind: "delete", yes }),
-    );
+    return yesOnly(VERB_USAGE.delete, rest, (yes) => ({ kind: "delete", yes }));
   }
   if (first === "set") return parseSet(rest);
   if (first === "unset") return parseUnset(rest);

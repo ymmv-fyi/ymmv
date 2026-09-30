@@ -35,7 +35,7 @@ vi.mock("../src/prompt.js", async (importOriginal) => {
   return { ...actual, makePrompter: vi.fn(actual.makePrompter) };
 });
 
-import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import { CURATED_KEYS, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import {
   deleteProfile,
   ensureLogin,
@@ -199,6 +199,45 @@ describe("YMMV_API startup validation", () => {
     expect(errs.join("\n")).not.toContain("YMMV_API");
     expect(logs.join("\n")).toContain("Not logged in");
   });
+});
+
+describe("per-verb help", () => {
+  it.each(["set", "unset"])(
+    "%s --help formats usage and keys without running a command",
+    async (verb) => {
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await main([verb, "--help"]);
+      const usage =
+        verb === "set"
+          ? 'usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"'
+          : 'usage: ymmv unset <key>  |  ymmv unset --extra "Label"';
+      expect(logs).toEqual([`\n  ${usage}\n  Valid keys: ${CURATED_KEYS.join(", ")}.`]);
+      expect(errs).toEqual([]);
+      expect(process.exitCode).toBeUndefined();
+      expect(runSet).not.toHaveBeenCalled();
+      expect(runUnset).not.toHaveBeenCalled();
+      expect(loadCredential).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["login", "delete", "publish", "version"])(
+    "%s --help has no command side effects",
+    async (verb) => {
+      const fetchFn = vi.fn();
+      vi.stubGlobal("fetch", fetchFn);
+      await main([verb, "--help"]);
+      expect(logs[0]).toMatch(new RegExp(`^\\n  usage: ymmv ${verb}`));
+      expect(errs).toEqual([]);
+      expect(process.exitCode).toBeUndefined();
+      expect(runLogin).not.toHaveBeenCalled();
+      expect(runDelete).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expect(loadCredential).not.toHaveBeenCalled();
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("ymmv logout", () => {

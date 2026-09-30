@@ -2,6 +2,13 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **Help works after every command.** `ymmv <command> --help`, `-h`, and `ymmv help <command>`
+  print that command's usage and exit successfully without running it. Help for `set` and `unset`
+  also lists the valid keys.
+
 ## [0.14.0] - 2026-09-29
 
 ### Added

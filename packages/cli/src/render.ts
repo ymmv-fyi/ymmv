@@ -24,8 +24,9 @@ import {
 // blank lines (console.log terminates the line). The render* builders return whole units; every
 // other print wraps in message(). The bin entry (cli.ts) prints the single closing blank line
 // before the shell prompt — to stdout on success, to stderr on a non-zero exit so failed runs
-// leave stdout byte-clean for pipes. Exceptions: `ymmv help` and `--version` stay flush-left
-// (reference surfaces, read by pipes as much as by people; help is byte-pinned by its snapshot).
+// leave stdout byte-clean for pipes. Exceptions: the general `ymmv help` and `--version` stay
+// flush-left (reference surfaces, read by pipes as much as by people; help is byte-pinned by its
+// snapshot). Per-verb help (`ymmv set --help`) is an ordinary unit.
 //
 // All control bytes are built from char codes (never typed literally) so the source stays pure ASCII.
 

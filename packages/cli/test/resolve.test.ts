@@ -1,4 +1,4 @@
-import { MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
+import { CURATED_KEYS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { resolveArg } from "../src/resolve.js";
 
@@ -401,7 +401,7 @@ describe("resolveArg", () => {
     expect(resolveArg(["antfu", "vs", "b", "c"])).toEqual(unexpected);
     expect(resolveArg(["view", "antfu", "vs"])).toEqual({
       kind: "error",
-      message: "usage: ymmv view <handle>",
+      message: "usage: ymmv view <handle> [vs <handle>]",
     });
   });
 
@@ -443,6 +443,65 @@ describe("resolveArg", () => {
       resetMarks: false,
     });
     expect(resolveArg(["publish", "x"]).kind).toBe("error");
+  });
+
+  it("`help` still prints general help for an unknown topic (trailing tokens stay non-breaking)", () => {
+    expect(resolveArg(["help", "extra"])).toEqual({ kind: "help" });
+  });
+
+  it("`help <verb>` and `<verb> --help` print that verb's usage and stay help (exit 0)", () => {
+    const setUsage = `usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"\nValid keys: ${CURATED_KEYS.join(", ")}.`;
+    const viewUsage = "usage: ymmv view <handle> [vs <handle>]";
+    const deleteUsage = "usage: ymmv delete [-y] (deletes your own profile; takes no handle)";
+    expect(resolveArg(["help", "set"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["set", "--help"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["set", "-h"])).toEqual({ kind: "help", usage: setUsage });
+    expect(resolveArg(["view", "--help"])).toEqual({ kind: "help", usage: viewUsage });
+    expect(resolveArg(["delete", "--help"])).toEqual({ kind: "help", usage: deleteUsage });
+    expect(resolveArg(["help", "delete"])).toEqual({ kind: "help", usage: deleteUsage });
+    expect(resolveArg(["login", "--help"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv login [-y]",
+    });
+    expect(resolveArg(["publish", "-h"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv publish [-y | --reset-marks]",
+    });
+    expect(resolveArg(["unset", "--help"])).toEqual({
+      kind: "help",
+      usage: `usage: ymmv unset <key>  |  ymmv unset --extra "Label"\nValid keys: ${CURATED_KEYS.join(", ")}.`,
+    });
+    expect(resolveArg(["update", "--help"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv update",
+    });
+    expect(resolveArg(["logout", "-h"])).toEqual({ kind: "help", usage: "usage: ymmv logout" });
+  });
+
+  it.each(["login", "logout", "update", "publish", "delete", "set", "unset", "view", "version"])(
+    "%s supports both help flags and help <verb>",
+    (verb) => {
+      const expected = resolveArg(["help", verb]);
+      expect(expected.kind).toBe("help");
+      expect(resolveArg([verb, "--help"])).toEqual(expected);
+      expect(resolveArg([verb, "-h"])).toEqual(expected);
+    },
+  );
+
+  it("version help describes the command instead of printing its version", () => {
+    expect(resolveArg(["version", "--help"])).toEqual({
+      kind: "help",
+      usage: "usage: ymmv version",
+    });
+    expect(resolveArg(["help", "__proto__"])).toEqual({ kind: "help" });
+  });
+
+  it("a real argv error still returns usage as an error (exit 1), not help", () => {
+    expect(resolveArg(["set"])).toEqual({
+      kind: "error",
+      message: 'usage: ymmv set <key> <value>  |  ymmv set --extra "Label=Value"',
+    });
+    expect(resolveArg(["delete", "oldname", "-y"]).kind).toBe("error");
   });
 
   it("`--reset-marks` → an interactive publish that forgets dismissed marks; never with -y", () => {
