@@ -238,6 +238,32 @@ describe("per-verb help", () => {
       expect(fetchFn).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    [["set", "editor", "--help"], "set"],
+    [["set", "editor", "vim", "-h"], "set"],
+    [["set", "--extra", "K=V", "-h"], "set"],
+    [["unset", "--extra", "--help"], "unset"],
+    [["delete", "-y", "--help"], "delete"],
+    [["publish", "-y", "-h"], "publish"],
+    [["login", "-y", "--help"], "login"],
+    [["antfu", "vs", "bardisty", "--help"], "view"],
+  ])("%j prints %s usage and runs nothing", async (argv, verb) => {
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    await main(argv);
+    expect(logs[0]).toMatch(new RegExp(`^\\n  usage: ymmv ${verb}`));
+    expect(errs).toEqual([]);
+    expect(process.exitCode).toBeUndefined();
+    expect(runSet).not.toHaveBeenCalled();
+    expect(runUnset).not.toHaveBeenCalled();
+    expect(runLogin).not.toHaveBeenCalled();
+    expect(runDelete).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+    expect(loadCredential).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 });
 
 describe("ymmv logout", () => {
