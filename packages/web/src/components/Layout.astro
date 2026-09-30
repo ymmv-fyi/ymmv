@@ -178,7 +178,8 @@ const {
         } catch (e) {}
       })();
     </script>
-    {/* Click-to-copy for the install CTA(s). Progressive enhancement: only wires up (and reveals
+    {/* Click-to-copy for every command block: the landing's install CTA, the profile's view
+        command and the diff's compare command. Progressive enhancement: only wires up (and reveals
         the copy affordance) when the Clipboard API is available; otherwise the command stays
         plain readable/selectable text. One delegated handler covers every [data-copy] block. */}
     <script is:inline>
@@ -190,9 +191,10 @@ const {
           // Promote the plain span to an ARIA button now that copying actually works, so a
           // keyboard/AT user only reaches an operable control when the clipboard path is live
           // (no dead button with JS off). The action wording in the label is required a11y copy.
+          // "command", not "install command": the profile and diff commands install nothing.
           el.setAttribute("role", "button");
           el.setAttribute("tabindex", "0");
-          el.setAttribute("aria-label", "Copy install command: " + el.dataset.copy);
+          el.setAttribute("aria-label", "Copy command: " + el.dataset.copy);
           el.dataset.copyReady = "";
           var status = el.querySelector("[data-copy-status]");
           var timer;
