@@ -169,7 +169,7 @@ the identity.
   identity + runtime third-party fonts).
 - **Diff session** (`table.diff` inside `.session` — decided 2026-08-24 from the `/proto/diff`
   prototype run, direction "Session", chosen over its own riffs): the diff wears the profile's
-  transcript voice. The command that produced it opens the page (`$ npx ymmv-cli@latest <theirs>`,
+  transcript voice. The command that produced it opens the page (`$ npx ymmv-cli@latest <theirs> vs <mine>`,
   the copy control), the "how X differs from Y" heading sits in the session register (14px, amber
   fork glyph — the fork IS the diff), and the readout keeps real `<table>` bones restyled bare:
   no plate, no hairline rows, no caps ledger — lowercase handle column heads in `--faint`,

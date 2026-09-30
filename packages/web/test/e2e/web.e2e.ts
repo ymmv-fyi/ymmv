@@ -903,8 +903,10 @@ test.describe("the 3-column diff", () => {
     await expect(page).toHaveTitle("ymmv.fyi/antfu/vs/bardisty"); // URL-as-title, pinned exactly
     // the Session decision (2026-08-24): no live document wears a plate — the diff is bare too
     await expect(page.locator(".sheet")).toHaveCount(0);
-    // and it opens with the command that produced it
-    await expect(page.locator(".cmdline").first()).toContainText("npx ymmv-cli@latest antfu");
+    // and it opens with the command that produced it: the CLI's `<a> vs <b>`, theirs first
+    const cmd = page.locator(".session > .cmdline .install");
+    await expect(cmd).toHaveText("$ npx ymmv-cli@latest antfu vs bardisty");
+    await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest antfu vs bardisty");
     await expect(page.locator("h1.url a").first()).toHaveAttribute("href", "/antfu");
     await expect(page.locator("h1.url a").nth(1)).toHaveAttribute("href", "/bardisty");
     await expect(page.locator(".foot a")).toHaveAttribute("href", "/bardisty/vs/antfu");
@@ -919,6 +921,16 @@ test.describe("the 3-column diff", () => {
       "title",
       "https://github.com/antfu/dotfiles-but-with-a-very-long-path/blob/main/config",
     );
+  });
+
+  test("the command follows the pair's order and copies the stored handles", async ({ page }) => {
+    await page.goto("/bardisty/vs/antfu");
+    const cmd = page.locator(".session > .cmdline .install");
+    await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest bardisty vs antfu");
+    // the viewer segment resolves case-insensitively without a redirect: the copied command
+    // carries the stored handle, never the raw URL segment
+    await page.goto("/antfu/vs/BarDisty");
+    await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest antfu vs bardisty");
   });
 
   test("a scheme-only dotfiles difference renders both values raw, never as equal strings", async ({
@@ -1026,6 +1038,11 @@ test.describe("the 3-column diff", () => {
     expect(res?.status()).toBe(200);
     expect(page.url()).toMatch(/\/antfu\/vs\/nobody$/);
     await expect(page.locator(".nudge")).toContainText("Publish yours to diff");
+    // the nudge is the profile page: `antfu vs nobody` would fail, so no `vs` in its command
+    await expect(page.locator(".session > .cmdline .install")).toHaveAttribute(
+      "data-copy",
+      "npx ymmv-cli@latest antfu",
+    );
   });
 
   test("404s a diff against an unknown profile", async ({ page }) => {

@@ -34,15 +34,21 @@ interface Props {
 const { result, theirs, mine, example = false } = Astro.props;
 const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length > 0;
 const HeadingTag = example ? "p" : "h1";
+// The CLI spelling of this exact page: `ymmv <a> vs <b>` compares { theirs: a, mine: b }
+// (cli resolve.ts versusTail), the same direction as /<a>/vs/<b>, so theirs stays first. Both
+// sides are stored handles (Diff renders only when both profiles are live), never a raw URL
+// segment, and a GitHub-shaped handle needs no shell quoting. The example line types the same
+// command so the two branches can't drift apart.
+const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
 ---
 
 <div class="session">
   {/* the command that produced this comparison — on live pages it is also the copy control */}
   <p class="cmdline">
     {example ? (
-      <><span class="prompt">$ </span><b>npx ymmv-cli@latest {theirs}</b></>
+      <><span class="prompt">$ </span><b>{command}</b></>
     ) : (
-      <InstallCommand command={`npx ymmv-cli@latest ${theirs}`} />
+      <InstallCommand command={command} />
     )}
   </p>
 
