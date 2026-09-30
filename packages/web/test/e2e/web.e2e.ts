@@ -765,7 +765,7 @@ test.describe("install command (progressive copy button)", () => {
     const install = page.locator(".session > .cmdline .install");
     await expect(install).toHaveAttribute("role", "button");
     await expect(install).toHaveAttribute("tabindex", "0");
-    await expect(install).toHaveAttribute("aria-label", /Copy install command: npx ymmv-cli/);
+    await expect(install).toHaveAttribute("aria-label", "Copy command: npx ymmv-cli@latest antfu");
     await install.focus();
     await page.keyboard.press("Enter");
     // wait for the visible success state first — the async writeText races a one-shot readText
@@ -907,6 +907,11 @@ test.describe("the 3-column diff", () => {
     const cmd = page.locator(".session > .cmdline .install");
     await expect(cmd).toHaveText("$ npx ymmv-cli@latest antfu vs bardisty");
     await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest antfu vs bardisty");
+    // the copy control names what it copies; this command compares, it installs nothing
+    await expect(cmd).toHaveAttribute(
+      "aria-label",
+      "Copy command: npx ymmv-cli@latest antfu vs bardisty",
+    );
     await expect(page.locator("h1.url a").first()).toHaveAttribute("href", "/antfu");
     await expect(page.locator("h1.url a").nth(1)).toHaveAttribute("href", "/bardisty");
     await expect(page.locator(".foot a")).toHaveAttribute("href", "/bardisty/vs/antfu");
