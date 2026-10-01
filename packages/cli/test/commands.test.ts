@@ -3553,6 +3553,32 @@ describe("publish: e asks which field", () => {
     },
   );
 
+  it.each([
+    ["wm", "window-manager"],
+    ["vm", "version-manager"],
+    ["mux", "multiplexer"],
+    ["AI tools", "ai-tool"],
+    ["tool", "ai-tool"],
+    ["a", "ai-tool"],
+  ] as const)("%j asks that one field", async (answer, key) => {
+    const label = KEY_LABELS[key];
+    const { ask, fetchFn } = await run([answer], { [label]: "typed" }, ["e", "y"]);
+    expect(askedLabels(ask)).toEqual(["Which field", label]);
+    expect(posted(fetchFn).entries).toContainEqual({ key, value: "typed" });
+  });
+
+  it("`manager` fits both managers: it names them and asks again", async () => {
+    const { ask } = await run(["manager", "wm"], {}, ["e", "y"]);
+    expect(logs).toContain('\n  "manager" matches Window Manager, Version Manager');
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field", "Window Manager"]);
+  });
+
+  it("`al` is not `all`: it names no field and asks again", async () => {
+    const { ask } = await run(["al", ""], {}, ["e", "n"]);
+    expect(logs).toContain('\n  no field called "al"');
+    expect(askedLabels(ask)).toEqual(["Which field", "Which field"]);
+  });
+
   it("a name that fits no field says so and asks again", async () => {
     const { ask } = await run(["keyboard", "font"], { Font: "Lilex" }, ["e", "y"]);
     expect(logs).toContain('\n  no field called "keyboard"');

@@ -930,7 +930,10 @@ export async function publish(io: PublishIO): Promise<void> {
       // Enter goes back to the card with nothing changed: an `e` typed by mistake would otherwise
       // cost a walk nobody asked for, or the run. The card reprints as the loop top draws it, and
       // edits, keeps and marks are untouched. A name that fits no field, or more than one,
-      // re-asks: guessing would walk the user through a prompt they did not ask for.
+      // re-asks: guessing would walk the user through a prompt they did not ask for. `all` is a
+      // keyword, not a name: it has to be typed whole, so `a` stays AI Tool (every other field
+      // answers to its first letter or shares it) and `al` is no field at all. Reading `al` as
+      // `all` would turn a slip into a 13-prompt walk.
       for (;;) {
         const answer = (
           await io.prompter.ask("Which field", undefined, "all, or Enter to go back")
