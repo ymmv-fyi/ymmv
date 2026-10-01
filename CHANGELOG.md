@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.15.0] - 2026-10-01
 
 ### Changed
 - **`ymmv set` and `ymmv unset` take a key in any case, with spaces or underscores.** `Editor`,
@@ -564,6 +564,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.15.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.0
 [0.14.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.14.1
 [0.14.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.14.0
 [0.13.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.13.0
