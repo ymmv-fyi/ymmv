@@ -1,6 +1,6 @@
-import { CURATED_KEYS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
+import { CURATED_KEYS, KEY_LABELS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { resolveArg } from "../src/resolve.js";
+import { fieldName, resolveArg, resolveField } from "../src/resolve.js";
 
 // The argument resolution table: bare-handle primary, reserved verbs, `view` fallback.
 describe("resolveArg", () => {
@@ -146,6 +146,69 @@ describe("resolveArg", () => {
     expect(hair.kind).toBe("error");
     if (hair.kind === "error") {
       expect(hair.message).not.toContain("Did you mean");
+    }
+  });
+
+  it("`set` and `unset` take only a whole name: a prefix is a suggestion, never a write", () => {
+    // Unquoted `ymmv set Window Manager yabai`: taking the prefix would save "Manager yabai".
+    const unquoted = resolveArg(["set", "Window", "Manager", "yabai"]);
+    expect(unquoted.kind).toBe("error");
+    if (unquoted.kind === "error") {
+      expect(unquoted.message).toContain(
+        '"Window" is not a curated key. Did you mean "window-manager"?',
+      );
+    }
+    // "ai" answers the "Which field" prompt, where a wrong guess costs one prompt, not a row.
+    for (const verb of ["set", "unset"]) {
+      const cmd = resolveArg([verb, "ai", ...(verb === "set" ? ["Claude"] : [])]);
+      expect(cmd.kind, verb).toBe("error");
+      if (cmd.kind === "error") expect(cmd.message).toContain('Did you mean "ai-tool"?');
+    }
+  });
+
+  it("a prefix that fits two keys suggests both, and the key list still follows", () => {
+    const cmd = resolveArg(["set", "t", "x"]);
+    expect(cmd.kind).toBe("error");
+    if (cmd.kind === "error") {
+      expect(cmd.message).toBe(
+        `"t" is not a curated key. Did you mean "terminal" or "theme"? Valid keys: ${CURATED_KEYS.join(", ")}.\nFor anything else, use: ymmv set --extra "Label=Value".`,
+      );
+    }
+  });
+
+  it("the edit-distance fallback never offers the two-letter `os`, nor anything for two letters", () => {
+    for (const head of ["oss", "ox", "xy", "zsh"]) {
+      const cmd = resolveArg(["set", head, "x"]);
+      expect(cmd.kind, head).toBe("error");
+      if (cmd.kind === "error") expect(cmd.message, head).not.toContain("Did you mean");
+    }
+  });
+
+  it("a key typed like a flag is refused, with the key it folds to as the suggestion", () => {
+    for (const argv of [
+      ["set", "--theme", "Nord"],
+      ["set", "-os", "-"],
+      ["unset", "--theme"],
+    ]) {
+      const cmd = resolveArg(argv);
+      expect(cmd.kind, argv.join(" ")).toBe("error");
+      if (cmd.kind === "error") {
+        const key = argv[1]?.replace(/^-+/, "");
+        expect(cmd.message, argv.join(" ")).toContain(
+          `"${argv[1]}" is not a curated key. Did you mean "${key}"?`,
+        );
+      }
+    }
+  });
+
+  it("a key with an escape sequence in it is echoed without the \x1b byte", () => {
+    for (const verb of ["set", "unset"]) {
+      const cmd = resolveArg([verb, "\x1b[31meditr", "x"]);
+      expect(cmd.kind, verb).toBe("error");
+      if (cmd.kind === "error") {
+        expect(cmd.message, verb).not.toContain("\x1b");
+        expect(cmd.message, verb).toContain("is not a curated key.");
+      }
     }
   });
 
@@ -808,5 +871,43 @@ describe("resolveArg", () => {
     const cmd = resolveArg(["view", "bad_handle"]);
     expect(cmd.kind).toBe("error");
     if (cmd.kind === "error") expect(cmd.message).toMatch(/not a valid GitHub handle/);
+  });
+});
+
+// The one matcher behind `set`, `unset` and the "Which field" prompt.
+describe("resolveField", () => {
+  it("every key and every label names its own field", () => {
+    for (const key of CURATED_KEYS) {
+      expect(resolveField(key)).toBe(key);
+      expect(resolveField(KEY_LABELS[key])).toBe(key);
+      expect(resolveField(`  ${KEY_LABELS[key].toUpperCase()} `)).toBe(key);
+    }
+  });
+
+  // The exact pass only earns its place once one name prefixes another. None does today, so this
+  // is the tripwire: a new key or label that breaks the assumption fails here, where the comment
+  // says what to do, instead of silently turning a whole name into "ambiguous, re-ask".
+  it("no curated name is a proper prefix of another", () => {
+    const names = CURATED_KEYS.flatMap((k) => [k, KEY_LABELS[k]].map(fieldName));
+    for (const name of names) {
+      expect(
+        names.filter((other) => other !== name && other.startsWith(name)),
+        name,
+      ).toEqual([]);
+    }
+  });
+
+  it("an exact name beats a prefix, a shared prefix returns every fit", () => {
+    expect(resolveField("os")).toBe("os");
+    expect(resolveField("ai")).toBe("ai-tool");
+    expect(resolveField("version manager")).toBe("version-manager");
+    expect(resolveField("t")).toEqual(["terminal", "theme"]);
+    // A half-typed hyphenated key: the hyphen folds to a space that must not survive.
+    expect(resolveField("os-")).toBe("os");
+    expect(resolveField("theme-")).toBe("theme");
+    expect(resolveField("-editor")).toBe("editor");
+    expect(resolveField("window-")).toBe("window-manager");
+    expect(resolveField("keyboard")).toBeUndefined();
+    expect(resolveField("   ")).toBeUndefined();
   });
 });

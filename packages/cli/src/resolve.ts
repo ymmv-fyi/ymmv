@@ -2,9 +2,9 @@ import {
   CLI_VERBS,
   CURATED_KEYS,
   type CuratedKey,
-  isCuratedKey,
   isReserved,
   isValidHandle,
+  KEY_LABELS,
   MAX_LABEL,
   MAX_VALUE,
 } from "@ymmv/shared";
@@ -83,15 +83,38 @@ function verbHelp(verb: Verb): Command {
   return { kind: "help", usage: VERB_USAGE[verb] + keys };
 }
 
-/**
- * Normalize a key candidate: lowercase, spaces and underscores to hyphens.
- * Accepts "Editor", "window_manager", "window manager", and every KEY_LABELS form.
- */
-export function normalizeKey(input: string): string {
-  return input
-    .trim()
+/** How a field name compares: case aside, with a hyphen, an underscore and a space all one
+ *  separator ("Window manager" and `window_manager` both name `window-manager`). Trimmed last as
+ *  well as first: a half-typed `os-` folds to `os `, and the trailing space would then match
+ *  nothing. `set`, `unset` and the "Which field" prompt all compare through this one fold, so a
+ *  spelling one of them takes is a spelling the others take. */
+export const fieldName = (s: string): string =>
+  s
     .toLowerCase()
-    .replace(/[\s_]+/g, "-");
+    .replace(/[-_\s]+/g, " ")
+    .trim();
+
+const fieldNames = (key: CuratedKey): string[] => [fieldName(key), fieldName(KEY_LABELS[key])];
+
+/** The curated key a name spells out in full, by key or by label. This is all a write takes:
+ *  `set` and `unset` turn anything looser (a prefix, a near miss) into a suggestion, because a
+ *  guessed key stores or removes the wrong row. Unquoted `ymmv set Window Manager yabai` would
+ *  otherwise save "Manager yabai" as the window manager. */
+function namedField(name: string): CuratedKey | undefined {
+  const typed = fieldName(name);
+  return CURATED_KEYS.find((key) => fieldNames(key).includes(typed));
+}
+
+/** The curated key an answer to "Which field" names, by key or by label: an exact name wins, else
+ *  a prefix ("win" is Window manager). Several keys back means the prefix fits them all ("t" is
+ *  Terminal and Theme), none means nothing matched; either way the caller re-asks. */
+export function resolveField(answer: string): CuratedKey | readonly CuratedKey[] | undefined {
+  const typed = fieldName(answer);
+  if (typed === "") return undefined;
+  const exact = namedField(typed);
+  if (exact !== undefined) return exact;
+  const hits = CURATED_KEYS.filter((key) => fieldNames(key).some((n) => n.startsWith(typed)));
+  return hits.length === 1 ? hits[0] : hits.length === 0 ? undefined : hits;
 }
 
 function editDistance(a: string, b: string): number {
@@ -116,63 +139,37 @@ function editDistance(a: string, b: string): number {
   return prev[b.length] ?? b.length;
 }
 
-/**
- * Suggest a curated key for a typo or prefix.
- *
- * Checks:
- * 1. Hyphen-stripped match: e.g. "aitool" -> "ai-tool", "windowmanager" -> "window-manager".
- * 2. Prefix match for inputs of at least 3 characters: e.g. "wind" -> "window-manager", "term" -> "terminal".
- * 3. Small edit distance against curated keys (max distance 1 for short strings, max 2 for longer).
- *
- * Keeps threshold tight so very short abbreviations like "wm" stay a plain miss.
- */
-export function suggestCuratedKey(head: string): CuratedKey | undefined {
-  const norm = normalizeKey(head);
-  if (!norm) return undefined;
-
-  // 1. Hyphen-stripped match: "aitool" -> "ai-tool", "versionmanager" -> "version-manager"
-  const unhyphenated = norm.replace(/-/g, "");
-  if (unhyphenated.length >= 3) {
-    for (const key of CURATED_KEYS) {
-      if (unhyphenated === key.replace(/-/g, "")) {
-        return key;
-      }
-    }
-  }
-
-  // 2. Prefix match (require at least 3 characters, e.g. "term", "edit", "wind")
-  if (norm.length >= 3) {
-    const prefixMatches = CURATED_KEYS.filter((key) => key.startsWith(norm));
-    if (prefixMatches.length === 1) {
-      return prefixMatches[0];
-    }
-  }
-
-  // 3. Small edit distance
-  let bestKey: CuratedKey | undefined;
-  let bestDist = Infinity;
-
+/** The keys to offer for a name `set` or `unset` refused. What the "Which field" prompt would
+ *  take comes first, both keys when a prefix fits two ("t"): the user picks, the CLI never does.
+ *  Failing that, the one key within a small edit distance ("teminal", "aitool"). Fewer than three
+ *  characters is too little to measure, and the two-letter `os` is left out because any
+ *  three-letter word is close to it. */
+function suggestKeys(head: string): readonly CuratedKey[] {
+  const field = resolveField(head);
+  if (field !== undefined) return typeof field === "string" ? [field] : field;
+  const typed = fieldName(head);
+  if (typed.length < 3) return [];
+  let best: CuratedKey | undefined;
+  let bestDist = typed.length <= 4 ? 2 : 3;
   for (const key of CURATED_KEYS) {
-    const dist = editDistance(norm, key);
-    if (norm.length >= 3) {
-      const maxAllowed = norm.length <= 4 ? 1 : 2;
-      if (dist <= maxAllowed && (key.length >= 4 || dist === 0)) {
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestKey = key;
-        }
-      }
+    if (key.length < 4) continue;
+    const dist = editDistance(typed, fieldName(key));
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = key;
     }
   }
-
-  return bestKey;
+  return best === undefined ? [] : [best];
 }
 
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
- *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). */
+ *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). The
+ *  suggestion is built from curated keys alone, so it needs no stripping. */
 function invalidKeyError(head: string, hint: string): Command {
-  const suggestion = suggestCuratedKey(head);
-  const didYouMean = suggestion ? ` Did you mean "${suggestion}"?` : "";
+  const keys = suggestKeys(head).map((key) => `"${key}"`);
+  const last = keys.pop();
+  const others = keys.length > 0 ? `${keys.join(", ")} or ` : "";
+  const didYouMean = last === undefined ? "" : ` Did you mean ${others}${last}?`;
   return {
     kind: "error",
     message:
@@ -228,6 +225,13 @@ function valueInvisibleError(): Command {
   return { kind: "error", message: "That value has no visible text." };
 }
 
+/** The key `set` or `unset` acts on. A name typed like a flag is never one: the fold drops a
+ *  leading hyphen, so `--theme` would otherwise name the theme, and a flag this CLI does not have
+ *  must stay an error. */
+function writeKey(head: string): CuratedKey | undefined {
+  return head.startsWith("-") ? undefined : namedField(head);
+}
+
 function parseSet(rest: string[]): Command {
   const head = rest[0];
   if (head === "--extra" || head === "-e") {
@@ -250,8 +254,8 @@ function parseSet(rest: string[]): Command {
     return { kind: "set", target: { kind: "extra", label, value } };
   }
   if (!head) return { kind: "error", message: SET_USAGE };
-  const key = normalizeKey(head);
-  if (!isCuratedKey(key)) return invalidKeyError(head, SET_EXTRA);
+  const key = writeKey(head);
+  if (key === undefined) return invalidKeyError(head, SET_EXTRA);
   const value = rest.slice(1).join(" ").trim();
   if (!value) return { kind: "error", message: `usage: ymmv set ${key} <value>` };
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
@@ -277,8 +281,8 @@ function parseUnset(rest: string[]): Command {
     return { kind: "unset", target: { kind: "extra", label } };
   }
   if (!head) return { kind: "error", message: UNSET_USAGE };
-  const key = normalizeKey(head);
-  if (!isCuratedKey(key)) return invalidKeyError(head, UNSET_EXTRA);
+  const key = writeKey(head);
+  if (key === undefined) return invalidKeyError(head, UNSET_EXTRA);
   // A trailing value almost certainly means the user meant `set`; silently unsetting would be a
   // destructive surprise.
   if (rest.length > 1) return { kind: "error", message: `usage: ymmv unset ${key}` };

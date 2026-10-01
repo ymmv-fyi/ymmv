@@ -22,9 +22,7 @@ vi.mock("../src/detect.js");
 
 import {
   compare,
-  fieldName,
   publish,
-  resolveField,
   runDelete,
   runLogin,
   runSet,
@@ -3491,41 +3489,6 @@ describe("publish: e asks which field", () => {
     return { ask, choice, fetchFn };
   }
   const lastCard = () => logs.filter(isCard).at(-1) ?? "";
-
-  it("resolveField: every key and every label names its own field", () => {
-    for (const key of CURATED_KEYS) {
-      expect(resolveField(key)).toBe(key);
-      expect(resolveField(KEY_LABELS[key])).toBe(key);
-      expect(resolveField(`  ${KEY_LABELS[key].toUpperCase()} `)).toBe(key);
-    }
-  });
-
-  // The exact pass only earns its place once one name prefixes another. None does today, so this
-  // is the tripwire: a new key or label that breaks the assumption fails here, where the comment
-  // says what to do, instead of silently turning a whole name into "ambiguous, re-ask".
-  it("resolveField: no curated name is a proper prefix of another", () => {
-    const names = CURATED_KEYS.flatMap((k) => [k, KEY_LABELS[k]].map(fieldName));
-    for (const name of names) {
-      expect(
-        names.filter((other) => other !== name && other.startsWith(name)),
-        name,
-      ).toEqual([]);
-    }
-  });
-
-  it("resolveField: an exact name beats a prefix, a shared prefix returns every fit", () => {
-    expect(resolveField("os")).toBe("os");
-    expect(resolveField("ai")).toBe("ai-tool");
-    expect(resolveField("version manager")).toBe("version-manager");
-    expect(resolveField("t")).toEqual(["terminal", "theme"]);
-    // A half-typed hyphenated key: the hyphen folds to a space that must not survive.
-    expect(resolveField("os-")).toBe("os");
-    expect(resolveField("theme-")).toBe("theme");
-    expect(resolveField("-editor")).toBe("editor");
-    expect(resolveField("window-")).toBe("window-manager");
-    expect(resolveField("keyboard")).toBeUndefined();
-    expect(resolveField("   ")).toBeUndefined();
-  });
 
   it("the question is an ask whose hint names the full walk and the way back", async () => {
     const { ask } = await run([""], {}, ["e", "y"]);

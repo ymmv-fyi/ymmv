@@ -61,7 +61,7 @@ import {
   showsVisibleText,
   takeLine,
 } from "./render.js";
-import type { SetTarget, UnsetTarget } from "./resolve.js";
+import { fieldName, resolveField, type SetTarget, type UnsetTarget } from "./resolve.js";
 import { type Credential, deleteTokenIf, loadCredential, loadToken } from "./token-store.js";
 
 // The command layer: orchestrates the pure pieces (detect/diff/render/merge) with the network +
@@ -237,28 +237,6 @@ export const KEY_EXAMPLES: Record<Exclude<CuratedKey, "dotfiles">, readonly [str
 /** The faint parenthetical for a walk prompt with no default. */
 export function walkHint(key: CuratedKey): string {
   return key === "dotfiles" ? "a URL" : `e.g. ${KEY_EXAMPLES[key].join(", ")}`;
-}
-
-/** How a field name compares: case and the key's hyphen aside ("Window manager" names
- *  `window-manager`). Trimmed last as well as first: a half-typed `os-` folds to `os `, and
- *  the trailing space would then match nothing. */
-export const fieldName = (s: string): string =>
-  s
-    .toLowerCase()
-    .replace(/[-\s]+/g, " ")
-    .trim();
-
-/** The curated key an answer to "Which field" names, by key or by label: an exact name wins, else
- *  a prefix ("win" is Window manager). Several keys back means the prefix fits them all ("t" is
- *  Terminal and Theme), none means nothing matched; either way the caller re-asks. */
-export function resolveField(answer: string): CuratedKey | readonly CuratedKey[] | undefined {
-  const typed = fieldName(answer);
-  if (typed === "") return undefined;
-  const names = (key: CuratedKey): string[] => [fieldName(key), fieldName(KEY_LABELS[key])];
-  const exact = CURATED_KEYS.find((key) => names(key).includes(typed));
-  if (exact !== undefined) return exact;
-  const hits = CURATED_KEYS.filter((key) => names(key).some((n) => n.startsWith(typed)));
-  return hits.length === 1 ? hits[0] : hits.length === 0 ? undefined : hits;
 }
 
 /** A dotfiles value typed without a scheme never links, on the page or in the card: offer its
