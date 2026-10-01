@@ -99,11 +99,11 @@ describe("resolveArg", () => {
   it("`set <key> -` with a normalized key unsets the curated key", () => {
     expect(resolveArg(["set", "Editor", "-"])).toEqual({
       kind: "unset",
-      target: { kind: "curated", key: "editor" },
+      target: { kind: "curated", key: "editor", typed: "Editor" },
     });
     expect(resolveArg(["set", "Window Manager", "-"])).toEqual({
       kind: "unset",
-      target: { kind: "curated", key: "window-manager" },
+      target: { kind: "curated", key: "window-manager", typed: "Window Manager" },
     });
   });
 
@@ -391,13 +391,18 @@ describe("resolveArg", () => {
   it("`unset <normalized-key>` accepts uppercase, underscores, and spaces", () => {
     expect(resolveArg(["unset", "Editor"])).toEqual({
       kind: "unset",
-      target: { kind: "curated", key: "editor" },
+      target: { kind: "curated", key: "editor", typed: "Editor" },
     });
     expect(resolveArg(["unset", "window_manager"])).toEqual({
       kind: "unset",
-      target: { kind: "curated", key: "window-manager" },
+      target: { kind: "curated", key: "window-manager", typed: "window_manager" },
     });
     expect(resolveArg(["unset", "Window Manager"])).toEqual({
+      kind: "unset",
+      target: { kind: "curated", key: "window-manager", typed: "Window Manager" },
+    });
+    // The exact key carries no `typed`: it is the one spelling that can only mean the field.
+    expect(resolveArg(["unset", "window-manager"])).toEqual({
       kind: "unset",
       target: { kind: "curated", key: "window-manager" },
     });

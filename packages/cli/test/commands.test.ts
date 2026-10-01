@@ -35,6 +35,7 @@ import { login } from "../src/device-flow.js";
 import { NetworkError } from "../src/http.js";
 import { PromptAborted, type Prompter } from "../src/prompt.js";
 import { link } from "../src/render.js";
+import { resolveArg } from "../src/resolve.js";
 import { deleteTokenIf, loadCredential, loadToken, type StoredToken } from "../src/token-store.js";
 
 function prof(
@@ -4522,6 +4523,97 @@ describe("unset", () => {
     expect(body.entries).toEqual([{ key: "editor", value: "Vim" }]);
     expect(logs).toContain('\n  Removed Shell (was "zsh"). → https://ymmv.fyi/me');
     expect(logs.join("\n")).not.toMatch(/Published/);
+  });
+
+  describe("a curated field and an extra with the same name", () => {
+    const BOTH = () =>
+      prof("me", [{ key: "theme", value: "Gruvbox" }], [{ label: "Theme", value: "Old theme" }]);
+    const REFUSAL =
+      '\n  Your profile has an extra labeled "Theme" as well as the Theme field. Nothing was removed.' +
+      "\n  To remove the field: ymmv unset theme" +
+      '\n  To remove the extra: ymmv unset --extra "Theme"';
+    /** Runs what `argv` resolves to against `profile`: the unset path, whichever verb spelled it. */
+    async function unset(argv: string[], profile: Profile) {
+      vi.mocked(loadToken).mockResolvedValue(stored());
+      const fetchFn = vi
+        .fn()
+        .mockResolvedValueOnce(jsonRes(profile))
+        .mockResolvedValueOnce(jsonRes({ ok: true, handle: "me" }));
+      vi.stubGlobal("fetch", fetchFn);
+      const cmd = resolveArg(argv);
+      if (cmd.kind !== "unset") throw new Error(`${argv.join(" ")} resolved to ${cmd.kind}`);
+      await runUnset(cmd.target);
+      return fetchFn;
+    }
+
+    it.each([[["unset", "Theme"]], [["unset", "THEME"]], [["set", "Theme", "-"]]])(
+      "%j is refused with both commands, and nothing is removed",
+      async (argv) => {
+        const fetchFn = await unset(argv, BOTH());
+        expect(noPost(fetchFn)).toBe(true);
+        expect(errs).toEqual([REFUSAL]);
+        expect(logs).toEqual([]);
+        expect(process.exitCode).toBe(1);
+      },
+    );
+
+    it.each([[["unset", "theme"]], [["set", "theme", "-"]]])(
+      "%j, the exact key, removes the field and keeps the extra",
+      async (argv) => {
+        const fetchFn = await unset(argv, BOTH());
+        const body = posted(fetchFn);
+        expect(body.entries).toEqual([]);
+        expect(body.extras).toEqual([{ label: "Theme", value: "Old theme" }]);
+        expect(logs).toContain('\n  Removed Theme (was "Gruvbox"). → https://ymmv.fyi/me');
+        expect(errs).toEqual([]);
+        expect(process.exitCode).toBeUndefined();
+      },
+    );
+
+    it("the label with no such extra removes the field, as the key does", async () => {
+      const fetchFn = await unset(
+        ["unset", "Theme"],
+        prof("me", [{ key: "theme", value: "Nord" }], [{ label: "Keyboard", value: "HHKB" }]),
+      );
+      expect(posted(fetchFn).entries).toEqual([]);
+      expect(logs).toContain('\n  Removed Theme (was "Nord"). → https://ymmv.fyi/me');
+    });
+
+    it("is refused when only the extra is set: `Theme is not set.` would hide the row meant", async () => {
+      const fetchFn = await unset(
+        ["unset", "Theme"],
+        prof("me", [], [{ label: "Theme", value: "Old theme" }]),
+      );
+      expect(noPost(fetchFn)).toBe(true);
+      expect(errs).toEqual([REFUSAL]);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("finds the extra through the same fold as the key", async () => {
+      const fetchFn = await unset(
+        ["unset", "Window Manager"],
+        prof(
+          "me",
+          [{ key: "window-manager", value: "yabai" }],
+          [{ label: "window_manager", value: "i3" }],
+        ),
+      );
+      expect(noPost(fetchFn)).toBe(true);
+      expect(errs.join("")).toContain("To remove the field: ymmv unset window-manager");
+      expect(errs.join("")).toContain('To remove the extra: ymmv unset --extra "window_manager"');
+    });
+
+    it("a stored label that is not safe to paste stays out of the command", async () => {
+      // A newline is whitespace to the fold and a second command to a shell.
+      const fetchFn = await unset(
+        ["unset", "Window Manager"],
+        prof("me", [], [{ label: "Window\nManager", value: "i3" }]),
+      );
+      expect(noPost(fetchFn)).toBe(true);
+      expect(errs.join("")).toContain('To remove the extra: ymmv unset --extra "Label"');
+      // The echo is stripped too: the blank lead-in and three lines, with no fourth from the label.
+      expect(errs.join("").split("\n")).toHaveLength(4);
+    });
   });
 
   it("extra: drops it from the POSTed extras, message shows the stored casing", async () => {

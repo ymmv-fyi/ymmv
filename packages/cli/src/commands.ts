@@ -1199,6 +1199,29 @@ function extraHint(existing: Profile, label: string): string {
   return `\n(unset takes just the label: ymmv unset --extra "${shown}")`;
 }
 
+/** The refusal for a curated unset typed as anything but the exact key (`ymmv unset Theme`,
+ *  `ymmv set Theme -`) on a profile that also holds an extra labeled like that field. Pre-0.5
+ *  profiles kept Theme, Prompt and others as extras, `set --extra "Theme=..."` still makes one,
+ *  and publish's note about the duplicate points at `ymmv unset --extra "Theme"`. Removing the
+ *  curated field here would be the reverse of that cleanup, behind a `Removed Theme` line that
+ *  reads as success, so name both commands and remove nothing. Refused whether or not the field
+ *  is set: `Theme is not set.` would hide the row the user meant. The exact key
+ *  (`ymmv unset theme`) is never refused. The extra's label comes off the wire, so it is stripped
+ *  for the echo and rides in the command only when it is safe to paste. */
+function sameNameRefusal(existing: Profile, target: UnsetTarget): string | undefined {
+  if (target.kind !== "curated" || target.typed === undefined) return undefined;
+  const name = fieldName(target.key);
+  const extra = existing.extras.find((x) => fieldName(x.label) === name);
+  if (extra === undefined) return undefined;
+  const label = extra.label.trim();
+  return (
+    `Your profile has an extra labeled "${sanitizeValue(label)}" as well as the ` +
+    `${KEY_LABELS[target.key]} field. Nothing was removed.\n` +
+    `To remove the field: ymmv unset ${target.key}\n` +
+    `To remove the extra: ymmv unset --extra "${PASTE_SAFE_LABEL.test(label) ? label : "Label"}"`
+  );
+}
+
 /** `ymmv unset <key>` / `--extra <label>` — read, remove one field, republish; no-op skips the POST.
  *  `prompter` (index.ts passes one only with a terminal on both ends) is for the sign-in alone:
  *  unset asks nothing itself. */
@@ -1214,6 +1237,12 @@ export async function runUnset(target: UnsetTarget, prompter?: Prompter): Promis
   if (!existing) {
     // Removing from nothing is a harmless no-op — and never POST an empty first profile here.
     console.log(message("No profile yet. Run `ymmv` to publish one."));
+    return;
+  }
+  const sameName = sameNameRefusal(existing, target);
+  if (sameName !== undefined) {
+    console.error(message(sameName));
+    process.exitCode = 1;
     return;
   }
   const { entries, extras, removed } = applyUnset(existing, target);

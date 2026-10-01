@@ -28,8 +28,13 @@ export type SetTarget =
   | { kind: "curated"; key: CuratedKey; value: string }
   | { kind: "extra"; label: string; value: string };
 
-/** What `ymmv unset` targets — a curated key or a free-form extra's label. */
-export type UnsetTarget = { kind: "curated"; key: CuratedKey } | { kind: "extra"; label: string };
+/** What `ymmv unset` targets — a curated key or a free-form extra's label. `typed` is the name
+ *  as the user wrote it, present only when that was not the key itself (`Theme`, `window_manager`).
+ *  Only runUnset has the stored profile, and it needs to know: a profile can hold an extra labeled
+ *  like a curated field, and a name that is not the exact key could mean either row. */
+export type UnsetTarget =
+  | { kind: "curated"; key: CuratedKey; typed?: string }
+  | { kind: "extra"; label: string };
 
 export type Command =
   | { kind: "publish"; yes: boolean; resetMarks: boolean }
@@ -162,6 +167,14 @@ function suggestKeys(head: string): readonly CuratedKey[] {
   return best === undefined ? [] : [best];
 }
 
+/** The curated unset that both `unset <key>` and `set <key> -` resolve to. */
+function curatedUnset(key: CuratedKey, head: string): Command {
+  return {
+    kind: "unset",
+    target: head === key ? { kind: "curated", key } : { kind: "curated", key, typed: head },
+  };
+}
+
 /** One source of truth for the not-a-curated-key error; each verb supplies its own extras hint.
  *  `head` is raw argv, so strip escapes before echoing (same rule as the handle branches). The
  *  suggestion is built from curated keys alone, so it needs no stripping. */
@@ -260,7 +273,7 @@ function parseSet(rest: string[]): Command {
   if (!value) return { kind: "error", message: `usage: ymmv set ${key} <value>` };
   // Same "-" clears convention as promptEntries; only an exactly-"-" trimmed value triggers it,
   // so multi-token values like "- foo" or "Fira-Code" stay literal sets.
-  if (value === "-") return { kind: "unset", target: { kind: "curated", key } };
+  if (value === "-") return curatedUnset(key, head);
   if (!showsVisibleText(value)) return valueInvisibleError();
   if (value.length > MAX_VALUE) return valueCapError(value);
   return { kind: "set", target: { kind: "curated", key, value } };
@@ -286,7 +299,7 @@ function parseUnset(rest: string[]): Command {
   // A trailing value almost certainly means the user meant `set`; silently unsetting would be a
   // destructive surprise.
   if (rest.length > 1) return { kind: "error", message: `usage: ymmv unset ${key}` };
-  return { kind: "unset", target: { kind: "curated", key } };
+  return curatedUnset(key, head);
 }
 
 export function resolveArg(argv: string[]): Command {
