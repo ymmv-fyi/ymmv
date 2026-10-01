@@ -75,8 +75,8 @@ At the `Publish to ymmv.fyi/<you>?` prompt:
 - `n` stops without publishing.
 - `e` asks `Which field (all, or Enter to go back):`. Type a key or a label,
   or just enough of one to pick a single field. `font` edits the font, `win`
-  the window manager. `all` goes through all 13, and Enter goes back to the
-  card with nothing changed.
+  the window manager. `wm`, `vm`, `mux` and `ai tools` work too. `all` goes
+  through all 13, and Enter goes back to the card with nothing changed.
 - `d` shows up when your machine now detects a different tool than the one
   you saved. Say you switched to Neovim. The Editor row then reads
   `(detected: Neovim)`, and `d` asks about each marked row. `y` takes the

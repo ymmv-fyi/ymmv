@@ -1,6 +1,6 @@
 import { CURATED_KEYS, KEY_LABELS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { fieldName, resolveArg, resolveField } from "../src/resolve.js";
+import { FIELD_ALIASES, fieldName, resolveArg, resolveField } from "../src/resolve.js";
 
 // The argument resolution table: bare-handle primary, reserved verbs, `view` fallback.
 describe("resolveArg", () => {
@@ -134,18 +134,40 @@ describe("resolveArg", () => {
     }
   });
 
-  it("`set <non-curated-key>` keeps short or unrelated inputs as a plain miss (no suggestion)", () => {
-    const wm = resolveArg(["set", "wm", "yabai"]);
-    expect(wm.kind).toBe("error");
-    if (wm.kind === "error") {
-      expect(wm.message).toContain('"wm" is not a curated key.');
-      expect(wm.message).not.toContain("Did you mean");
-    }
-
+  it("`set <non-curated-key>` keeps an unrelated input as a plain miss (no suggestion)", () => {
     const hair = resolveArg(["set", "hairstyle", "mohawk"]);
     expect(hair.kind).toBe("error");
     if (hair.kind === "error") {
       expect(hair.message).not.toContain("Did you mean");
+    }
+  });
+
+  it("an alias is a suggestion on a write, never the write itself", () => {
+    // `ymmv set vm UTM` may be about a virtual machine, which is an extra.
+    for (const [alias, key] of [
+      ["wm", "window-manager"],
+      ["vm", "version-manager"],
+      ["mux", "multiplexer"],
+      ["ai tools", "ai-tool"],
+    ]) {
+      for (const argv of [
+        ["set", alias, "x"],
+        ["set", alias, "-"],
+        ["unset", alias],
+      ]) {
+        const cmd = resolveArg(argv);
+        expect(cmd.kind, argv.join(" ")).toBe("error");
+        if (cmd.kind === "error") {
+          expect(cmd.message, argv.join(" ")).toContain(
+            `"${alias}" is not a curated key. Did you mean "${key}"?`,
+          );
+        }
+      }
+    }
+    const manager = resolveArg(["set", "manager", "yabai"]);
+    expect(manager.kind).toBe("error");
+    if (manager.kind === "error") {
+      expect(manager.message).toContain('Did you mean "window-manager" or "version-manager"?');
     }
   });
 
@@ -889,17 +911,81 @@ describe("resolveField", () => {
     }
   });
 
-  // The exact pass only earns its place once one name prefixes another. None does today, so this
-  // is the tripwire: a new key or label that breaks the assumption fails here, where the comment
-  // says what to do, instead of silently turning a whole name into "ambiguous, re-ask".
+  // resolveField and the write path compare against the key alone. That covers the label only
+  // while each label folds to its key: one that stops doing so fails here, and the label has to
+  // be matched as a name of its own again.
+  it("every label folds to its key", () => {
+    for (const key of CURATED_KEYS) expect(fieldName(KEY_LABELS[key]), key).toBe(fieldName(key));
+  });
+
+  // The whole-name pass changes no answer for a name while no name prefixes another. This is the
+  // tripwire: a new key that breaks it fails here, instead of silently depending on that pass to
+  // keep a whole name from reading as "ambiguous, re-ask".
   it("no curated name is a proper prefix of another", () => {
-    const names = CURATED_KEYS.flatMap((k) => [k, KEY_LABELS[k]].map(fieldName));
+    const names = CURATED_KEYS.map(fieldName);
     for (const name of names) {
       expect(
         names.filter((other) => other !== name && other.startsWith(name)),
         name,
       ).toEqual([]);
     }
+  });
+
+  // An alias matches whole and wins over a prefix, so one that is the start of another key's name
+  // would take that answer away from it (and the start of its own key's name is a prefix already:
+  // it needs no alias). One shared by two keys would go to whichever key comes first. Aliases may
+  // prefix each other: none matches by prefix.
+  it("no alias is a name, the start of a name, `all`, or another key's alias", () => {
+    const aliases = CURATED_KEYS.flatMap((key) => FIELD_ALIASES[key] ?? []);
+    expect(new Set(aliases).size).toBe(aliases.length);
+    for (const alias of aliases) {
+      expect(fieldName(alias), alias).toBe(alias);
+      expect(alias, alias).not.toBe("all");
+      expect(
+        CURATED_KEYS.filter((key) => fieldName(key).startsWith(alias)),
+        alias,
+      ).toEqual([]);
+    }
+  });
+
+  it("every prefix of a name resolves to the names that start with it, aliases or not", () => {
+    for (const key of CURATED_KEYS) {
+      const name = fieldName(key);
+      for (let end = 1; end <= name.length; end++) {
+        const prefix = name.slice(0, end);
+        // "ai " folds to "ai": the fold is what gets compared.
+        const fits = CURATED_KEYS.filter((k) => fieldName(k).startsWith(fieldName(prefix)));
+        expect(resolveField(prefix), prefix).toEqual(fits.length === 1 ? fits[0] : fits);
+      }
+    }
+  });
+
+  it("an alias names its field, in any case and with any separator", () => {
+    expect(resolveField("wm")).toBe("window-manager");
+    expect(resolveField(" WM ")).toBe("window-manager");
+    expect(resolveField("vm")).toBe("version-manager");
+    expect(resolveField("mux")).toBe("multiplexer");
+    expect(resolveField("ai tools")).toBe("ai-tool");
+    expect(resolveField("AI-Tools")).toBe("ai-tool");
+    expect(resolveField("ai_tools")).toBe("ai-tool");
+    // Whole only: an alias is not a prefix to extend or cut short.
+    expect(resolveField("wmx")).toBeUndefined();
+    expect(resolveField("mu")).toBe("multiplexer");
+  });
+
+  it("the start of a later word names the field, or every field it fits", () => {
+    expect(resolveField("manager")).toEqual(["window-manager", "version-manager"]);
+    expect(resolveField("man")).toEqual(["window-manager", "version-manager"]);
+    expect(resolveField("tool")).toBe("ai-tool");
+    // A name that starts with the answer outranks a later word: "m" stays Multiplexer.
+    expect(resolveField("m")).toBe("multiplexer");
+    expect(resolveField("anager")).toBeUndefined();
+  });
+
+  it("`a` is AI Tool, `al` is nothing, and `all` is the prompt's keyword, not a field", () => {
+    expect(resolveField("a")).toBe("ai-tool");
+    expect(resolveField("al")).toBeUndefined();
+    expect(resolveField("all")).toBeUndefined();
   });
 
   it("an exact name beats a prefix, a shared prefix returns every fit", () => {

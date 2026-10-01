@@ -4,7 +4,6 @@ import {
   type CuratedKey,
   isReserved,
   isValidHandle,
-  KEY_LABELS,
   MAX_LABEL,
   MAX_VALUE,
 } from "@ymmv/shared";
@@ -99,26 +98,51 @@ export const fieldName = (s: string): string =>
     .replace(/[-_\s]+/g, " ")
     .trim();
 
-const fieldNames = (key: CuratedKey): string[] => [fieldName(key), fieldName(KEY_LABELS[key])];
+/** Short names for a field, each already in fieldName's form. The "Which field" prompt takes
+ *  them, and `set` and `unset` offer them back as a suggestion. They match whole, never as a
+ *  prefix, so an alias cannot change what a prefix of a real name resolves to. `ai` needs no
+ *  entry: it is a prefix of "ai tool". CLI-only, so not in @ymmv/shared: the web never parses a
+ *  key name. A test keeps each alias clear of the other keys' names and aliases. */
+export const FIELD_ALIASES: Partial<Record<CuratedKey, readonly string[]>> = {
+  "window-manager": ["wm"],
+  multiplexer: ["mux"],
+  "version-manager": ["vm"],
+  "ai-tool": ["ai tools"],
+};
 
-/** The curated key a name spells out in full, by key or by label. This is all a write takes:
- *  `set` and `unset` turn anything looser (a prefix, a near miss) into a suggestion, because a
+/** The curated key a name spells out in full, by key or by label: every label folds to its key
+ *  (a test pins that), so one comparison covers both. This is all a write takes: `set` and
+ *  `unset` turn anything looser (a prefix, an alias, a near miss) into a suggestion, because a
  *  guessed key stores or removes the wrong row. Unquoted `ymmv set Window Manager yabai` would
- *  otherwise save "Manager yabai" as the window manager. */
+ *  otherwise save "Manager yabai" as the window manager, and `ymmv set vm UTM` may be about a
+ *  virtual machine. */
 function namedField(name: string): CuratedKey | undefined {
   const typed = fieldName(name);
-  return CURATED_KEYS.find((key) => fieldNames(key).includes(typed));
+  return CURATED_KEYS.find((key) => fieldName(key) === typed);
 }
 
-/** The curated key an answer to "Which field" names, by key or by label: an exact name wins, else
- *  a prefix ("win" is Window manager). Several keys back means the prefix fits them all ("t" is
- *  Terminal and Theme), none means nothing matched; either way the caller re-asks. */
+/** The curated key an answer to "Which field" names. A whole name or alias wins. For names that
+ *  pass changes nothing (no name is a prefix of another, which a test pins); it is what makes an
+ *  alias match. Else a prefix of a name ("win" is Window Manager), else the start of one of its
+ *  later words ("tool" is AI Tool). Several keys back means the answer fits them all ("t" is
+ *  Terminal and Theme, "manager" is both managers), none means nothing matched; either way the
+ *  caller re-asks. */
 export function resolveField(answer: string): CuratedKey | readonly CuratedKey[] | undefined {
   const typed = fieldName(answer);
   if (typed === "") return undefined;
-  const exact = namedField(typed);
-  if (exact !== undefined) return exact;
-  const hits = CURATED_KEYS.filter((key) => fieldNames(key).some((n) => n.startsWith(typed)));
+  const whole =
+    namedField(typed) ?? CURATED_KEYS.find((key) => FIELD_ALIASES[key]?.includes(typed));
+  if (whole !== undefined) return whole;
+  const starts = CURATED_KEYS.filter((key) => fieldName(key).startsWith(typed));
+  // Only when no name starts with the answer, so every prefix keeps the field it had.
+  const hits =
+    starts.length > 0
+      ? starts
+      : CURATED_KEYS.filter((key) =>
+          fieldName(key)
+            .split(" ")
+            .some((word) => word.startsWith(typed)),
+        );
   return hits.length === 1 ? hits[0] : hits.length === 0 ? undefined : hits;
 }
 
@@ -145,8 +169,9 @@ function editDistance(a: string, b: string): number {
 }
 
 /** The keys to offer for a name `set` or `unset` refused. What the "Which field" prompt would
- *  take comes first, both keys when a prefix fits two ("t"): the user picks, the CLI never does.
- *  Failing that, the one key within a small edit distance ("teminal", "aitool"). Fewer than three
+ *  take comes first (a prefix, an alias, a later word), both keys when it fits two ("t",
+ *  "manager"): the user picks, the CLI never does. Failing that, the nearest key within a small
+ *  edit distance ("teminal", "aitool"), the first in key order on a tie. Fewer than three
  *  characters is too little to measure, and the two-letter `os` is left out because any
  *  three-letter word is close to it. */
 function suggestKeys(head: string): readonly CuratedKey[] {
