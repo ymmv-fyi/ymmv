@@ -607,14 +607,38 @@ a {
   color: var(--faint);
   padding-bottom: 0.4em;
 }
+/* The label column's width, read by BOTH tables on the diff page: the diff's label column and the
+   extras' handle column below it. One property, so the extras' values can't drift off the diff's
+   value edge again (they sat 17 to 45px left of it on phones while each table had its own width).
+   26% is the readout's split. Below 540px it is narrower than "Multiplexer" (11ch, the longest
+   one-word label) needs, and the word broke mid-word a line below its values, so the column gets
+   a length there instead. Measured in Chromium with the self-hosted mono: 1ch = 8.39px and the
+   word is 92.4px wide; the label cell's content box is this width minus the dot's 15px indent and
+   the 2ch gutter, so 13.2ch + 15px (125.9px) leaves the word 0.2ch of slack. 26% comes to 125.8px
+   at 540px, so the column doesn't jump at the breakpoint and nothing moves from 540 up.
+   It has to be a breakpoint: Chromium treats max(26%, <length>) on a fixed-layout column as auto,
+   which makes all three columns equal thirds. */
+.diff,
+.extras-dim {
+  --label-col: 26%;
+}
+@media (max-width: 539px) {
+  .diff,
+  .extras-dim {
+    --label-col: calc(13.2ch + 15px);
+  }
+}
 /* Under table-layout:fixed, column widths come from the FIRST row — these thead cells — so the
-   26/37/37 split must live here (tbody .k/.theirs/.yours widths alone are ignored by fixed layout).
+   split must live here (tbody .k/.theirs/.yours widths alone are ignored by fixed layout). Only
+   the label column is sized; the two value columns are auto and share what's left equally, which
+   is 37/37 wherever the label column is 26%. Two fixed 37% columns beside a wider label column
+   would add up to more than 100% and push the table past the page.
    Long handles ellipsize instead of wrapping char-by-char; the full handle stays in the h1 + title. */
 .diff thead td {
-  width: 26%;
+  width: var(--label-col);
 }
 .diff thead th {
-  width: 37%;
+  width: auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -638,11 +662,9 @@ table.diff th:last-child {
    phrase. The values split what's left, which gives their text more room than the old 36/32/32
    split from about 365px up and less below it (≈ 8ch at 320, where it was 9ch). */
 @media (max-width: 430px) {
-  .diff thead td {
-    width: calc(12.5ch + 15px);
-  }
-  .diff thead th {
-    width: auto;
+  .diff,
+  .extras-dim {
+    --label-col: calc(12.5ch + 15px);
   }
   table.diff .k {
     padding-right: 1ch;
@@ -697,8 +719,8 @@ table.diff th:last-child {
   visibility: hidden;
 }
 /* extras under the diff — informational only: free-form labels don't diff, so they render
-   dimmed, uncounted, and never amber. Session dress: handle column aligned with the readout's
-   26% label column, no rules, no caps. */
+   dimmed, uncounted, and never amber. Session dress: the handle column is the diff's label column
+   (--label-col), so the values start on the diff's value edge at every width; no rules, no caps. */
 .x-h {
   font-family: var(--font-mono);
   font-size: inherit;
@@ -719,7 +741,7 @@ table.extras-dim th {
   overflow-wrap: anywhere;
 }
 .extras-dim .k {
-  width: 26%;
+  width: var(--label-col);
   font-weight: 400;
   text-align: left;
   color: var(--faint);

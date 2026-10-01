@@ -128,14 +128,15 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
         <h2 class="x-h">extras (not compared)</h2>
         {/* Same value treatment as the profile page (UntrustedValue: safeHref link + full-URL
             title + bidi stripping). <bdi> isolates each run so a genuinely RTL label or value
-            still can't visually reorder the "label = value" line. */}
+            still can't visually reorder the "label = value" line. breakAfterSlash lets a
+            link wrap between path segments: the value column is narrow on a phone. */}
         <table class="extras-dim">
           <tbody>
             {result.extras.theirs.map((x) => (
               <tr>
                 <th scope="row" class="k">{theirs}</th>
                 <td class="v">
-                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi />
+                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi breakAfterSlash />
                 </td>
               </tr>
             ))}
@@ -143,7 +144,7 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
               <tr>
                 <th scope="row" class="k">{mine}</th>
                 <td class="v">
-                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi />
+                  <bdi>{sanitizeText(x.label)}</bdi> = <UntrustedValue value={x.value} bdi breakAfterSlash />
                 </td>
               </tr>
             ))}

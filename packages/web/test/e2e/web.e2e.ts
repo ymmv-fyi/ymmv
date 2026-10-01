@@ -928,12 +928,13 @@ test.describe("the 3-column diff", () => {
     );
   });
 
-  test("a phone keeps the longest one-word label on one line, level with its values", async ({
+  test("a narrow screen keeps the longest one-word label on one line, level with its values", async ({
     page,
   }) => {
     // 375 is the iPhone SE/mini width where "Multiplexer" used to break mid-word and drop a line
-    // below its own values; 320 is the WCAG reflow width
-    for (const width of [320, 375]) {
+    // below its own values; 320 is the WCAG reflow width. 431 and 480 sit above the phone
+    // breakpoint, where a 26% label column is still narrower than the word (it clears it at 540).
+    for (const width of [320, 375, 431, 480]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/antfu/vs/bardisty");
       // measure the self-hosted mono, not the metric-matched fallback it swaps in for
@@ -954,6 +955,82 @@ test.describe("the 3-column diff", () => {
       });
       expect(layout.lines, `at ${width}px`).toBe(1);
       expect(Math.abs(layout.topDelta), `at ${width}px`).toBeLessThan(1);
+    }
+  });
+
+  test("the label column never pushes the diff past the page", async ({ page }) => {
+    // 431 to 539 is where the label column is a length, not 26%: sized value columns beside it
+    // would add up to more than the table and scroll the page sideways
+    for (const width of [431, 480, 533]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/antfu/vs/bardisty");
+      await page.evaluate(() => document.fonts.ready);
+      const box = await page.evaluate(() => {
+        const table = document.querySelector("table.diff") as HTMLElement;
+        return {
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          table: table.getBoundingClientRect().width,
+          parent: (table.parentElement as HTMLElement).getBoundingClientRect().width,
+        };
+      });
+      expect(box.overflow, `at ${width}px`).toBeLessThanOrEqual(0);
+      expect(box.table, `at ${width}px`).toBeLessThanOrEqual(box.parent + 0.5);
+    }
+  });
+
+  test("extras values start on the diff's value edge at every width", async ({ page }) => {
+    // rendered text edges, not CSS widths: the diff's label cell carries the dot's indent and the
+    // extras' handle cell doesn't
+    for (const width of [320, 375, 480, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/antfu/vs/bardisty");
+      await page.evaluate(() => document.fonts.ready);
+      const edges = await page.evaluate(() => {
+        const textLeft = (el: Element) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return Math.min(...[...range.getClientRects()].map((r) => r.left));
+        };
+        return {
+          diff: textLeft(document.querySelector("table.diff tbody td.theirs") as Element),
+          extras: textLeft(document.querySelector("table.extras-dim td.v") as Element),
+        };
+      });
+      expect(Math.abs(edges.diff - edges.extras), `at ${width}px`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("extras wrap between words and path segments on a phone, never inside one", async ({
+    page,
+  }) => {
+    const words = ["github.com", "antfu", "dotfiles", "HHKB", "Pro", "bardisty"];
+    for (const width of [320, 360]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/antfu/vs/bardisty");
+      await page.evaluate(() => document.fonts.ready);
+      // a word broken across lines has more than one client rect
+      const broken = await page.locator("table.extras-dim").evaluate((table, list) => {
+        const found: string[] = [];
+        const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const text = node.textContent ?? "";
+          for (const word of list) {
+            for (let at = text.indexOf(word); at !== -1; at = text.indexOf(word, at + 1)) {
+              const range = document.createRange();
+              range.setStart(node, at);
+              range.setEnd(node, at + word.length);
+              if (range.getClientRects().length > 1) found.push(word);
+            }
+          }
+        }
+        return found;
+      }, words);
+      expect(broken, `at ${width}px`).toEqual([]);
+      // the break points are <wbr>s: the link's text is still the one unbroken string
+      await expect(
+        page.locator('table.extras-dim a[href="https://github.com/antfu/dotfiles"]'),
+      ).toHaveText("github.com/antfu/dotfiles");
     }
   });
 
@@ -1117,6 +1194,8 @@ test.describe("long values + safety", () => {
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1); // no horizontal scrollbar => it wrapped
+    // the slash break points are the diff extras' alone: a profile link stays one plain string
+    expect(await page.locator("wbr").count()).toBe(0);
   });
 
   test("external profile links carry rel=noreferrer (no Referer leak to the destination)", async ({
