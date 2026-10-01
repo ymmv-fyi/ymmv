@@ -2,6 +2,19 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Changed
+- **`ymmv set` and `ymmv unset` take a key in any case, with spaces or underscores.** `Editor`,
+  `"Window Manager"` and `window_manager` all work. A near miss saves nothing and gets a
+  suggestion before the list of keys: `aitool` and `ai` get `Did you mean "ai-tool"?`, and `t`
+  gets `Did you mean "terminal" or "theme"?`. If your profile has an extra labeled like a field,
+  `ymmv unset Theme` removes nothing and prints the command for each: `ymmv unset theme` for the
+  field, `ymmv unset --extra "Theme"` for the extra.
+- **`Which field` takes more names.** `wm`, `vm`, `mux` and `ai tools` pick their field, and so
+  does `window_manager`. `tool` picks AI Tool. `manager` fits both Window Manager and Version
+  Manager, so it names them and asks again.
+
 ## [0.14.1] - 2026-09-30
 
 ### Fixed

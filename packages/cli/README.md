@@ -104,6 +104,10 @@ At the `Publish to ymmv.fyi/<you>?` prompt:
 
 Some of these have more to them:
 
+- `ymmv set` and `ymmv unset` take a key in any case, with spaces or
+  underscores: `ymmv set "Window Manager" yabai` and `ymmv unset ai_tool`
+  both work. A name that isn't a key saves nothing. When it's close to one,
+  the error asks `Did you mean "ai-tool"?`.
 - `ymmv set dotfiles github.com/you/dotfiles` offers the `https://` form,
   since only a full URL turns into a link on your page. The publish prompts
   offer the same. Without a terminal, or under `YMMV_TOKEN`, it stores the
