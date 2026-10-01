@@ -12,6 +12,13 @@
 //
 // `bdi`: wrap the text in <bdi> so a genuinely RTL value still isolates from its neighbours (the
 // diff extras "label = value" line).
+//
+// `breakAfterSlash`: put a <wbr> after each run of "/" in a link's display text (a run, so the
+// "//" of a kept "http://" scheme is never split). Chromium offers no break
+// at a slash, so in a narrow column `overflow-wrap: anywhere` cuts "github.com/antfu/dotfiles"
+// mid-word; with the <wbr> it wraps between path segments, and a segment longer than the column
+// still breaks. A <wbr> is not text: textContent, the copied string and what a screen reader
+// reads are unchanged. Opt-in (the diff extras pass it) so the profile page renders as before.
 import { displayUrl } from "@ymmv/shared";
 import { urlTitle } from "../lib/display-value.ts";
 import { safeHref } from "../lib/safe-href.ts";
@@ -20,17 +27,24 @@ import { sanitizeText } from "../lib/sanitize.ts";
 interface Props {
   value: string;
   bdi?: boolean;
+  breakAfterSlash?: boolean;
 }
-const { value, bdi = false } = Astro.props;
+const { value, bdi = false, breakAfterSlash = false } = Astro.props;
 const href = safeHref(value);
 const text = sanitizeText(href ? displayUrl(value) : value);
 const title = href ? urlTitle(value) : undefined;
+// Only a link's display text is segmented: every other value keeps the one-string render.
+const [head, ...segments] = href && breakAfterSlash ? text.split(/(?<=\/)(?=[^/])/) : [text];
 ---
 
 {
   href ? (
     <a href={href} rel="nofollow ugc noopener noreferrer" target="_blank" title={title}>
-      {bdi ? <bdi>{text}</bdi> : text}
+      {bdi ? (
+        <bdi>{head}{segments.map((segment) => <><wbr />{segment}</>)}</bdi>
+      ) : (
+        <>{head}{segments.map((segment) => <><wbr />{segment}</>)}</>
+      )}
     </a>
   ) : bdi ? (
     <bdi>{text}</bdi>
