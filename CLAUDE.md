@@ -46,8 +46,9 @@ Workers + D1.
 - **CHANGELOG is the CLI release log, not the web's.** `CHANGELOG.md` stages the
   tag-driven `ymmv-cli` train: the `[Unreleased]` section accumulates CLI changes
   until a maintainer cuts a `vX.Y.Z` tag - that is what "unreleased" means here.
-  **Pure Worker/web changes get NO entry** - the web deploys by hand (not by tag; see
-  the manual deploy runbook), so it is live the moment it ships and there is no
+  **Pure Worker/web changes get NO entry** - the web deploys on its own, by a
+  `release.yml` dispatch from main (not by tag; see `packages/web/DEPLOY.md`), so
+  it is live the moment it ships and there is no
   "unreleased" web state to stage. Log a Worker change ONLY when it rides along with a
   CLI change in the **same tagged release** (e.g. a `@ymmv/shared` wire-format bump
   that touches both surfaces). Landing/UI/copy reworks are never a CHANGELOG entry.
@@ -74,7 +75,9 @@ Workers + D1.
 - Platform: Cloudflare Workers (wrangler), Worker `ymmv-production`
 - Production URL: https://ymmv.fyi
 - Deploy workflow: `.github/workflows/release.yml` (`deploy-worker`), fires on a
-  `vX.Y.Z` tag only. **Merging to main deploys nothing.**
+  `vX.Y.Z` tag, or on a dispatch from `main` with `environment=production` and
+  `dry_run=false` (a web-only deploy: no npm publish). **Merging to main deploys
+  nothing.**
 - Deploy status command: `gh run list --workflow release.yml --limit 1`
 - Merge method: rebase
 - Project type: web app + API (Worker) and npm CLI (`ymmv-cli`)
@@ -82,10 +85,12 @@ Workers + D1.
 
 ### Custom deploy hooks
 - Pre-merge: none (CI gates the PR)
-- Deploy trigger: web-only change = manual runbook `packages/web/DEPLOY.md`
-  (maintainer, needs Cloudflare creds); CLI or CLI+Worker = maintainer pushes a
-  `vX.Y.Z` tag
-- Deploy status: tag = the `release.yml` run; manual = wrangler output names
-  `ymmv-production` + the `ymmv.fyi` / `www.ymmv.fyi` custom domains
+- Deploy trigger: web-only change = maintainer runs
+  `gh workflow run release.yml --ref main -f environment=production -f dry_run=false`
+  (`packages/web/DEPLOY.md`, which also keeps the by-hand fallback); CLI or
+  CLI+Worker = maintainer pushes a `vX.Y.Z` tag
+- Deploy status: tag or dispatch = the `release.yml` run; by-hand fallback =
+  wrangler output names `ymmv-production` + the `ymmv.fyi` / `www.ymmv.fyi`
+  custom domains
 - Health check: https://ymmv.fyi (200) and https://ymmv.fyi/api/v1/u/bardisty
   (200, JSON)

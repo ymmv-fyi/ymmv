@@ -184,4 +184,16 @@ describe("release.yml publishes the CLI only after the Worker deploys", () => {
     expect(needs, "publish-cli must declare needs: (flow or block form)").not.toHaveLength(0);
     expect(needs).toContain("deploy-worker");
   });
+
+  it("only a tag push publishes to npm or cuts a GitHub Release", () => {
+    // A dispatch from main really deploys production (the web-only deploy), so these two
+    // conditions are all that keep one off npm and out of the releases.
+    const publish = wf.match(/- name: Publish to npm[^\n]*\n\s+if: (.+)/)?.[1];
+    expect(publish, "the npm publish step must carry an if:").toBeTruthy();
+    expect(publish).toContain("github.event_name == 'push'");
+    const job = wf.match(/^ {2}github-release:\n((?:(?: {4}.*)?\n)*)/m)?.[1];
+    const release = job?.match(/^ {4}if: (.+)$/m)?.[1];
+    expect(release, "the github-release job must carry an if:").toBeTruthy();
+    expect(release).toContain("github.event_name == 'push'");
+  });
 });
