@@ -147,10 +147,12 @@ refuses to start while anything holds it.
 `pnpm demo` re-records `docs/demo.gif` from `docs/demo/demo.tape`. It runs the
 tape against a local Worker with a demo account, so it needs no sign-in and sends
 nothing to ymmv.fyi. It needs [VHS](https://github.com/charmbracelet/vhs) 0.10.0,
-ttyd and ffmpeg, on Linux, WSL or macOS. Maintainers re-record the gif when they
-cut a release, so leave it out of a pull request. If you ran `pnpm demo`, restore
-it with `git restore --source=HEAD --staged --worktree docs/demo.gif`. A change to
-the first publish's questions fails `packages/cli/test/demo-tape.test.ts` until
+ttyd and ffmpeg, on Linux, WSL or macOS. The gif is drawn in IBM Plex Mono from
+`docs/demo/fonts`: Linux and WSL also need fontconfig, and on macOS install those
+fonts first. Maintainers re-record the gif when they cut a release, so leave it
+out of a pull request. If you ran `pnpm demo`, restore it with
+`git restore --source=HEAD --staged --worktree docs/demo.gif`. A change to the
+first publish's questions fails `packages/cli/test/demo-tape.test.ts` until
 the tape's `Wait` lines match.
 
 Versions come from tags. Every `package.json` stays at `0.0.0`, and CI stamps

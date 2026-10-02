@@ -62,11 +62,12 @@ Workers + D1.
   loads the gif from `main`, so it has to match the published CLI. The cut runs
   `pnpm demo` when the CLI or `docs/demo` changed since the last tag. It records
   against a local Worker, with no sign-in and nothing sent to ymmv.fyi, and
-  needs VHS 0.10.0, ttyd and ffmpeg. A feature PR that changes the first
-  publish's questions, or what the demo stack detects, updates the `Wait` lines
-  in `docs/demo/demo.tape` or the environment in `docs/demo/shell.sh`.
-  `packages/cli/test/demo-tape.test.ts` fails until they match. A PR that ran
-  `pnpm demo` to check restores the gif before it ships:
+  needs VHS 0.10.0, ttyd, ffmpeg and the fonts in `docs/demo/fonts` (found
+  through fontconfig on Linux and WSL, installed by hand on macOS). A feature PR
+  that changes the first publish's questions, or what the demo stack detects,
+  updates the `Wait` lines in `docs/demo/demo.tape` or the environment in
+  `docs/demo/shell.sh`. `packages/cli/test/demo-tape.test.ts` fails until they
+  match. A PR that ran `pnpm demo` to check restores the gif before it ships:
   `git restore --source=HEAD --staged --worktree docs/demo.gif`.
 - **Secrets:** never log the ymmv bearer or the GitHub access_token (regression
   tests must not print tokens).
