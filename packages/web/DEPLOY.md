@@ -1,8 +1,40 @@
-# Manual Web Deploy
+# Web Deploy
 
-Manual fallback for the `deploy-worker` job in `.github/workflows/release.yml` (normally fired by
-a `vX.Y.Z` CLI tag). Use it for a web change with no CLI release to tag; keep it in sync if that
-job changes.
+A web change with no CLI release to tag deploys from `main` by dispatching
+`.github/workflows/release.yml`:
+
+```sh
+gh workflow run release.yml --ref main -f environment=production -f dry_run=false
+gh run watch <id> --exit-status      # <id> is the last part of the URL the first command prints
+```
+
+The run uses the release's own `gate` and `deploy-worker` jobs: lint, build, typecheck and tests,
+the production build with its baked-config checks, D1 migrations, the deploy, and a smoke of the
+live site (the home page, a `whoami` that reads D1, and a junk-token sign-in that answers 401
+only when `GITHUB_CLIENT_SECRET` is set and right). Nothing goes to npm and no GitHub Release is cut. It
+needs no Cloudflare credentials on your machine.
+
+- It deploys `main`'s HEAD, and only from `main`. From any other ref, `dry_run=false` with
+  `environment=production` fails in `prep`.
+- The run deploys the commit it captured. If `main` has moved by the time it deploys, it stops, so
+  a re-run of an old run can't put an old build back. Dispatch again.
+- The commit needs a green CI run first, because e2e runs only in `ci.yml`. Right after a merge,
+  wait for CI on `main`.
+- **The WAF rule is still applied by hand.** If `infra/waf-ratelimit.sh` changed since the last
+  deploy, do step 4 below before the dispatch.
+- Afterwards, run the step 6 checks the workflow leaves out: the redirects and HSTS headers, and
+  the workers.dev origins. The Current Version ID that step asks for is in the run's Deploy step
+  log.
+- A tag release deploys the tagged commit. If you deploy web changes that merged after a cut and
+  then tag that cut, the release puts the older build back (its gate prints a warning): dispatch
+  the web deploy again after the release.
+- The Worker-before-CLI rule below holds for a dispatch too: when a web deploy precedes a CLI
+  tag, deploy first, tag second.
+
+## By hand (fallback)
+
+The rest of this file is the manual fallback for the `deploy-worker` job, for when Actions can't
+run it. Keep it in sync if that job changes.
 
 Build + deploy only. Skipped vs CI:
 

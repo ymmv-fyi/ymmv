@@ -1,10 +1,18 @@
 name: Release
 
-# Two entry points:
-#   • push a tag `vX.Y.Z`  → REAL production release: npm publish (provenance) + deploy the Worker,
+# Three ways in:
+#   • push a tag `vX.Y.Z`  → REAL production release: deploy the Worker, npm publish (provenance),
 #                            then cut a GitHub Release with that version's CHANGELOG section as notes.
-#   • workflow_dispatch    → rehearsal/ops: pick an environment + dry-run (default: staging, dry-run).
-#                            The "tagged-release dry-run hits staging" check is this, with defaults.
+#   • workflow_dispatch from main, environment=production, dry_run off
+#                          → web-only production deploy: the same gate and deploy-worker job, for a
+#                            merged web change with no CLI release to tag. Nothing goes to npm and no
+#                            GitHub Release is cut. It deploys the commit it captured, and stops if
+#                            main has moved by the time it deploys, so an old run can't be re-run
+#                            into production.
+#                              gh workflow run release.yml --ref main -f environment=production -f dry_run=false
+#   • any other workflow_dispatch → rehearsal: pick an environment + dry-run (default: staging,
+#                            dry-run). The "tagged-release dry-run hits staging" check is this, with
+#                            defaults. Staging with dry_run off really deploys staging.
 #
 # PRE-TAG CHECKLIST (a `vX.Y.Z` tag deploys STRAIGHT to production — there is no staging gate in the
 # tag path). Sign-in fails CLOSED without its secret, and the gate job below never exercises the mint
@@ -28,7 +36,7 @@ on:
         options: [staging, production]
         default: staging
       dry_run:
-        description: "Dry run: no npm publish, no deploy (config + bundle validated only)"
+        description: "Dry run: no deploy, config + bundle validated only (a dispatch never publishes to npm)"
         type: boolean
         default: true
 
@@ -36,8 +44,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Don't cancel an in-flight release; serialize per ref instead.
-  group: release-${{ github.ref }}
+  # Don't cancel an in-flight release; serialize per ref instead. A dispatch adds its inputs, so a
+  # rehearsal from main never shares a group with a web-only deploy from main: a group keeps one
+  # pending run, and a newer one replaces it.
+  group: release-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}-{1}', inputs.environment, inputs.dry_run) || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -46,6 +56,9 @@ jobs:
   prep:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read # the web-only deploy looks up this commit's CI run
     outputs:
       environment: ${{ steps.x.outputs.environment }}
       dry_run: ${{ steps.x.outputs.dry_run }}
@@ -62,11 +75,12 @@ jobs:
             env_name="${{ inputs.environment }}"
             dry="${{ inputs.dry_run }}"
             version="0.0.0-dispatch.${GITHUB_RUN_NUMBER}"
-            # Real production changes go through a version tag (which also publishes the CLI + provenance).
-            # A dispatch may rehearse prod (dry-run) and really-deploy STAGING, but never really-deploy prod.
-            if [ "$env_name" = "production" ] && [ "$dry" != "true" ]; then
-              echo "Forcing dry_run=true: production deploys go through a version tag, not workflow_dispatch."
-              dry=true
+            # A dispatch really deploys production only from main: that is the web-only deploy, and
+            # main is what was reviewed and merged. From any other ref it stops here. It does not turn
+            # into a dry run, which would report a deploy that never happened.
+            if [ "$env_name" = "production" ] && [ "$dry" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::A production deploy by dispatch runs from main only (got $GITHUB_REF_NAME). Dispatch from main, or keep dry_run on."
+              exit 1
             fi
           fi
           if [ "$env_name" = "production" ]; then db=ymmv; else db=ymmv-staging; fi
@@ -77,6 +91,16 @@ jobs:
             echo "db_name=$db"
           } >> "$GITHUB_OUTPUT"
           echo "Release: env=$env_name dry_run=$dry version=$version db=$db"
+      # A web-only deploy ships pages the gate below never renders: e2e runs only in ci.yml. So the
+      # commit must already have a green CI run. (A tag is not held to this here: a merge right after
+      # the cut cancels the cut's own CI run on main, and /release checks it before tagging.)
+      - name: Require green CI for a web-only production deploy
+        if: github.event_name == 'workflow_dispatch' && steps.x.outputs.environment == 'production' && steps.x.outputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$GITHUB_SHA" --status success --json databaseId --jq length)
+          [ "$green" -ge 1 ] || { echo "::error::No green CI run for $GITHUB_SHA yet. Wait for CI on main, then dispatch again."; exit 1; }
 
   # Pre-flight gate — the same checks CI runs, on the LTS floor. Nothing publishes/deploys if red.
   gate:
@@ -236,6 +260,15 @@ jobs:
         if: needs.prep.outputs.environment == 'production'
         run: node -e "const c=require('./dist/server/wrangler.json');process.exit(c.workers_dev===false&&c.preview_urls===false?0:1)" || { echo "::error::workers_dev/preview_urls not false in generated config — production would serve workers.dev origins"; exit 1; }
         working-directory: packages/web
+      # A dispatch deploys the commit it captured. If main has moved since (a newer merge, or a tag
+      # release that deployed and published meanwhile), this build is older than what should be
+      # live, possibly older than the published CLI expects. A re-run of an old dispatch stops here
+      # too: dispatch again from main instead.
+      - name: Check main has not moved (web-only deploy)
+        if: github.event_name == 'workflow_dispatch' && needs.prep.outputs.environment == 'production' && needs.prep.outputs.dry_run == 'false'
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          [ "$tip" = "$GITHUB_SHA" ] || { echo "::error::main is at $tip, and this run captured $GITHUB_SHA. Dispatch again from main."; exit 1; }
       # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
       - name: Apply D1 migrations
         if: needs.prep.outputs.dry_run == 'false'
