@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +16,7 @@ import {
 } from "../src/update-check.js";
 
 // Everything here goes through the DI seams (fetch/now/env/cachePath/currentVersion/TTY/execPath
-// on the check; spawn/execPath on runUpdate) — no vi.stubGlobal, no real network, no real clock,
+// on the check; spawn/where/execPath on runUpdate) — no vi.stubGlobal, no real network, no real clock,
 // no real config dir. The suite-wide YMMV_NO_UPDATE_CHECK kill switch in setup-env never applies
 // because every call passes its own `env`.
 
@@ -528,24 +528,261 @@ describe("runUpdate", () => {
 
   const SPAWN_OPTS = { stdio: "inherit", shell: true, cwd: homedir() } as const;
   const NPX_PATH = "/home/u/.npm/_npx/a1b2/node_modules/ymmv-cli/dist/cli.js";
+  /** What `npm root -g` prints for the prefix NPM_PATH lives in. */
+  const NPM_ROOT = "/usr/local/lib/node_modules\n";
 
+  /** The package manager's answer to "where do your global installs live". */
+  const where = (stdout: string) => vi.fn(async () => stdout);
+  /** A spawn whose child fires `event` once runUpdate has attached its listeners. The spawn now
+   *  happens after an awaited lookup, so a test can no longer emit right after calling. */
+  const spawnThat = (event: "error" | "exit", arg: unknown) =>
+    vi.fn(() => {
+      const child = new FakeChild();
+      queueMicrotask(() => child.emit(event, arg));
+      return child;
+    });
+
+  // Real layouts: what each manager prints, and where the copy it installed really lives.
   it.each([
-    ["/usr/local/lib/node_modules/ymmv-cli/dist/cli.js", "npm i -g ymmv-cli@latest"],
     [
+      "npm",
+      "/usr/local/lib/node_modules/ymmv-cli/dist/cli.js",
+      "npm root -g",
+      "/usr/local/lib/node_modules",
+      "npm i -g ymmv-cli@latest",
+    ],
+    [
+      // The real package is a SIBLING of the printed node_modules, not inside it.
+      "pnpm 9 and 10",
       "/home/u/.local/share/pnpm/global/5/.pnpm/ymmv-cli@0.8.0/node_modules/ymmv-cli/dist/cli.js",
+      "pnpm root -g",
+      "/home/u/.local/share/pnpm/global/5/node_modules",
       "pnpm add -g ymmv-cli@latest",
     ],
-    ["/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js", "bun add -g ymmv-cli@latest"],
-  ] as const)("spawns the matching upgrade for %s", async (binPath, expected) => {
-    const child = new FakeChild();
-    const spawn = vi.fn(() => child);
-    const run = runUpdate({ spawn, binPath });
-    child.emit("exit", 0);
-    await run;
-    // cwd is pinned to the home dir: cmd.exe resolves bare names from the CURRENT directory
-    // first (CWE-427), so spawning from an untrusted checkout could execute a planted npm.cmd.
-    expect(spawn).toHaveBeenCalledWith(expected, SPAWN_OPTS);
-    expect(process.exitCode).toBeUndefined();
+    [
+      // No node_modules in what 12 prints; the install dir under it is a hash.
+      "pnpm 12",
+      "/home/u/.local/share/pnpm/global/v11/24a8-18da/node_modules/.pnpm/ymmv-cli@0.8.0/node_modules/ymmv-cli/dist/cli.js",
+      "pnpm root -g",
+      "/home/u/.local/share/pnpm/global/v11",
+      "pnpm add -g ymmv-cli@latest",
+    ],
+    [
+      "bun",
+      "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
+      "bun pm bin -g",
+      "/home/u/.bun/bin",
+      "bun add -g ymmv-cli@latest",
+    ],
+  ] as const)(
+    "%s: spawns the upgrade when the manager on PATH owns the running copy",
+    async (_label, binPath, lookup, printed, expected) => {
+      const spawn = spawnThat("exit", 0);
+      const whereFn = where(`${printed}\n`);
+      await runUpdate({ spawn, where: whereFn, binPath });
+      // cwd is pinned to the home dir: cmd.exe resolves bare names from the CURRENT directory
+      // first (CWE-427), so spawning from an untrusted checkout could execute a planted npm.cmd.
+      // The lookup runs the same manager, so it gets the same shell and cwd, plus a timeout.
+      expect(whereFn).toHaveBeenCalledWith(lookup, {
+        shell: true,
+        cwd: homedir(),
+        timeout: expect.any(Number),
+      });
+      expect(spawn).toHaveBeenCalledWith(expected, SPAWN_OPTS);
+      expect(errs).toEqual([]);
+      expect(process.exitCode).toBeUndefined();
+    },
+  );
+
+  it.each([
+    [
+      "npm",
+      "/usr/local/lib/node_modules/ymmv-cli/dist/cli.js",
+      "/home/u/.nvm/versions/node/v22.1.0/lib/node_modules",
+      "This ymmv runs from /usr/local/lib/node_modules/ymmv-cli, but `npm i -g ymmv-cli@latest` installs under /home/u/.nvm/versions/node/v22.1.0/lib/node_modules.",
+      "Run the update with the npm that installed this copy.",
+    ],
+    [
+      "pnpm",
+      "/home/u/.local/share/pnpm/global/5/.pnpm/ymmv-cli@0.8.0/node_modules/ymmv-cli/dist/cli.js",
+      "/opt/pnpm/global/v11",
+      "but `pnpm add -g ymmv-cli@latest` installs under /opt/pnpm/global/v11.",
+      "Run the update with the pnpm that installed this copy.",
+    ],
+    [
+      "bun",
+      "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
+      "/opt/.bun/bin",
+      "but `bun add -g ymmv-cli@latest` installs under /opt/.bun.",
+      "Run the update with the bun that installed this copy.",
+    ],
+    [
+      // The case the bug was filed from: WSL runs the Windows npm's copy, finds the Linux npm.
+      "WSL running the Windows install",
+      "/mnt/c/Users/u/AppData/Roaming/npm/node_modules/ymmv-cli/dist/cli.js",
+      "/home/u/.nvm/versions/node/v22.1.0/lib/node_modules",
+      "This ymmv runs from /mnt/c/Users/u/AppData/Roaming/npm/node_modules/ymmv-cli, but",
+      "This copy is a Windows install, so run `ymmv update` from Windows.",
+    ],
+  ] as const)(
+    "%s: a manager that doesn't own the running copy is refused, nothing spawns",
+    async (_label, binPath, printed, first, second) => {
+      const spawn = vi.fn();
+      await runUpdate({ spawn, where: where(`${printed}\n`), binPath });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(logs).toEqual([]); // never claims to be "running" anything
+      const lines = errs.join("\n").split("\n");
+      expect(lines[1]).toContain(first);
+      expect(lines[2]).toBe(`  ${second}`);
+      expect(lines).toHaveLength(3);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  it.each([
+    ["rejects (missing manager, nonzero exit, timeout)", () => Promise.reject(new Error("x"))],
+    [
+      "throws synchronously",
+      () => {
+        throw new Error("spawn EPERM");
+      },
+    ],
+    ["prints nothing", async () => ""],
+    ["prints a relative path", async () => "lib/node_modules\n"],
+    ["prints two paths", async () => "/usr/local/lib/node_modules\n/opt/x\n"],
+  ] as const)("a lookup that %s gets the manual commands, nothing spawns", async (_label, fn) => {
+    const spawn = vi.fn();
+    await runUpdate({ spawn, where: fn, binPath: NPM_PATH });
+    expect(spawn).not.toHaveBeenCalled();
+    const out = errs.join("\n");
+    expect(out).toContain("Couldn't check where `npm i -g ymmv-cli@latest` would install.");
+    expect(out).toContain("pnpm add -g ymmv-cli@latest");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    ["CRLF from a Windows shell", "/usr/local/lib/node_modules\r\n"],
+    ["a trailing separator", "/usr/local/lib/node_modules/\n"],
+    ["a notice around the path", "\nnpm notice new version\n/usr/local/lib/node_modules\n\n"],
+  ] as const)("the lookup's path line survives %s", async (_label, stdout) => {
+    const spawn = spawnThat("exit", 0);
+    await runUpdate({ spawn, where: where(stdout), binPath: NPM_PATH });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a segment npm redacted to *** matches the running copy's segment there", async () => {
+    // npm prints a UUID-shaped directory name as `***`. Without this a prefix under one is
+    // refused although it owns the copy.
+    const binPath =
+      "/srv/3f2b8c1e-0d4a-4b6f-9a7e-2c5d8e1f0a3b/node/lib/node_modules/ymmv-cli/dist/cli.js";
+    const spawn = spawnThat("exit", 0);
+    await runUpdate({ spawn, where: where("/srv/***/node/lib/node_modules\n"), binPath });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    const refused = vi.fn();
+    await runUpdate({
+      spawn: refused,
+      where: where("/srv/***/other/lib/node_modules\n"),
+      binPath,
+    });
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  it("Windows paths that differ only by case and separators are the same place", async () => {
+    const spawn = spawnThat("exit", 0);
+    await runUpdate({
+      spawn,
+      where: where("c:/users/U/AppData/Roaming/npm/node_modules\r\n"),
+      binPath: "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\ymmv-cli\\dist\\cli.js",
+    });
+    expect(spawn).toHaveBeenCalledWith("npm i -g ymmv-cli@latest", SPAWN_OPTS);
+    expect(errs).toEqual([]);
+  });
+
+  it("POSIX paths that differ by case are different places", async () => {
+    const spawn = vi.fn();
+    await runUpdate({ spawn, where: where("/usr/LOCAL/lib/node_modules\n"), binPath: NPM_PATH });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("a Windows mismatch names both locations in their own form", async () => {
+    const spawn = vi.fn();
+    await runUpdate({
+      spawn,
+      where: where("D:\\nodes\\npm\\node_modules\r\n"),
+      binPath: "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\ymmv-cli\\dist\\cli.js",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(errs.join("\n")).toContain(
+      "This ymmv runs from C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\ymmv-cli, but `npm i -g ymmv-cli@latest` installs under D:\\nodes\\npm\\node_modules.",
+    );
+  });
+
+  it("the refusal strips control bytes from both paths", async () => {
+    // Paths are printed, and a directory name can hold anything.
+    const spawn = vi.fn();
+    await runUpdate({
+      spawn,
+      where: where(`/opt/${ESC}[31mnode/lib/node_modules\n`),
+      binPath: `/home/${ESC}[2Ju/node/lib/node_modules/ymmv-cli/dist/cli.js`,
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    const out = errs.join("\n");
+    expect(out).not.toContain(ESC);
+    expect(out).toContain("/home/u/node/lib/node_modules/ymmv-cli");
+    expect(out).toContain("/opt/node/lib/node_modules");
+  });
+
+  // Symlinks need a real tree; Windows has neither these shapes nor unprivileged symlinks.
+  describe.skipIf(process.platform === "win32")("on a real tree", () => {
+    /** An npm prefix at `<dir>/<name>/node` with ymmv-cli in it; returns the bin script. */
+    const npmInstall = (name: string): string => {
+      const bin = join(dir, name, "node", "lib", "node_modules", "ymmv-cli", "dist", "cli.js");
+      mkdirSync(dirname(bin), { recursive: true });
+      writeFileSync(bin, "");
+      return bin;
+    };
+
+    it("a prefix that is itself a symlink still owns the copy behind it", async () => {
+      // Homebrew and nvm's `current` hand npm a symlinked prefix; the running bin is a realpath.
+      const binPath = realpathSync(npmInstall("real"));
+      symlinkSync(join(dir, "real"), join(dir, "current"));
+      const spawn = spawnThat("exit", 0);
+      await runUpdate({
+        spawn,
+        where: where(`${join(dir, "current", "node", "lib", "node_modules")}\n`),
+        binPath,
+      });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("bun with its bin dir moved: the `ymmv` link there names the running copy", async () => {
+      const binPath = join(dir, ".bun", "install", "global", "node_modules", "ymmv-cli", "cli.js");
+      mkdirSync(dirname(binPath), { recursive: true });
+      writeFileSync(binPath, "");
+      mkdirSync(join(dir, "elsewhere", "bin"), { recursive: true });
+      symlinkSync(binPath, join(dir, "elsewhere", "bin", "ymmv"));
+      const spawn = spawnThat("exit", 0);
+      await runUpdate({
+        spawn,
+        where: where(`${join(dir, "elsewhere", "bin")}\n`),
+        binPath: realpathSync(binPath),
+      });
+      expect(spawn).toHaveBeenCalledWith("bun add -g ymmv-cli@latest", SPAWN_OPTS);
+    });
+
+    it("bun with its bin dir moved and no link to the running copy is refused", async () => {
+      mkdirSync(join(dir, "elsewhere", "bin"), { recursive: true });
+      const spawn = vi.fn();
+      await runUpdate({
+        spawn,
+        where: where(`${join(dir, "elsewhere", "bin")}\n`),
+        binPath: "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
+      });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    });
   });
 
   // Symlink semantics differ on Windows (npm uses a .cmd shim, no symlink), so the POSIX
@@ -565,12 +802,9 @@ describe("runUpdate", () => {
       const argv1 = process.argv[1];
       process.argv[1] = bin;
       try {
-        const child = new FakeChild();
-        const spawn = vi.fn(() => child);
-        const run = runUpdate({ spawn }); // NO binPath: exercise the default resolution
-        await Promise.resolve(); // let the sync prelude reach the spawn
-        child.emit("exit", 0);
-        await run;
+        const spawn = spawnThat("exit", 0);
+        // NO binPath: exercise the default resolution
+        await runUpdate({ spawn, where: where(`${dirname(dirname(dirname(target)))}\n`) });
         expect(spawn).toHaveBeenCalledWith("npm i -g ymmv-cli@latest", SPAWN_OPTS);
       } finally {
         process.argv[1] = argv1;
@@ -579,10 +813,7 @@ describe("runUpdate", () => {
   );
 
   it("passes a nonzero package-manager exit straight through", async () => {
-    const child = new FakeChild();
-    const run = runUpdate({ spawn: () => child, binPath: NPM_PATH });
-    child.emit("exit", 3);
-    await run;
+    await runUpdate({ spawn: spawnThat("exit", 3), where: where(NPM_ROOT), binPath: NPM_PATH });
     expect(process.exitCode).toBe(3);
     expect(errs).toEqual([]); // the pm already explained itself on inherited stdio
   });
@@ -591,10 +822,7 @@ describe("runUpdate", () => {
     ["POSIX sh not-found", 127],
     ["cmd.exe not-found", 9009],
   ] as const)("%s exit code gets the manual fallback, exit 1", async (_label, code) => {
-    const child = new FakeChild();
-    const run = runUpdate({ spawn: () => child, binPath: NPM_PATH });
-    child.emit("exit", code);
-    await run;
+    await runUpdate({ spawn: spawnThat("exit", code), where: where(NPM_ROOT), binPath: NPM_PATH });
     expect(process.exitCode).toBe(1);
     const out = errs.join("\n");
     expect(out).toContain("Couldn't run `npm i -g ymmv-cli@latest`");
@@ -602,10 +830,11 @@ describe("runUpdate", () => {
   });
 
   it("a spawn error event gets the manual fallback, exit 1, never a stack trace", async () => {
-    const child = new FakeChild();
-    const run = runUpdate({ spawn: () => child, binPath: NPM_PATH });
-    child.emit("error", new Error("EACCES"));
-    await run;
+    await runUpdate({
+      spawn: spawnThat("error", new Error("EACCES")),
+      where: where(NPM_ROOT),
+      binPath: NPM_PATH,
+    });
     expect(process.exitCode).toBe(1);
     expect(errs.join("\n")).toContain("Couldn't run");
   });
@@ -615,6 +844,7 @@ describe("runUpdate", () => {
       spawn: () => {
         throw new Error("spawn EPERM");
       },
+      where: where(NPM_ROOT),
       binPath: NPM_PATH,
     });
     expect(process.exitCode).toBe(1);
@@ -661,20 +891,25 @@ describe("runUpdate", () => {
 
   it("ephemeral with a cold cache falls back to @latest", async () => {
     const spawn = vi.fn();
+    const whereFn = where(NPM_ROOT);
     await runUpdate({
       spawn,
+      where: whereFn,
       binPath: NPX_PATH,
       now: () => NOW,
       cachePath: join(dir, "absent.json"),
       currentVersion: "0.8.0",
     });
+    expect(whereFn).not.toHaveBeenCalled(); // no install to check
     expect(spawn).not.toHaveBeenCalled();
     expect(logs.join("\n")).toContain("npx ymmv-cli@latest");
   });
 
   it("unknown installs get all three manual commands and exit 0 (doubt never spawns)", async () => {
     const spawn = vi.fn();
-    await runUpdate({ spawn, binPath: "/opt/tools/ymmv" });
+    const whereFn = where(NPM_ROOT);
+    await runUpdate({ spawn, where: whereFn, binPath: "/opt/tools/ymmv" });
+    expect(whereFn).not.toHaveBeenCalled(); // no manager was picked, so none is asked
     expect(spawn).not.toHaveBeenCalled();
     const out = logs.join("\n");
     expect(out).toContain("npm i -g ymmv-cli@latest");
