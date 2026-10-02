@@ -7,8 +7,8 @@
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
 // a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
 // Values are user-controlled → compared cells go through lib/diff-cells.ts (shortening, collide
-// guard, bidi stripping) under Astro auto-escaping; extras labels through lib/sanitize.ts and
-// extras values through UntrustedValue.
+// guard, bidi stripping, a URL's slash break points) under Astro auto-escaping; extras labels
+// through lib/sanitize.ts and extras values through UntrustedValue.
 //
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
 // only on differing rows (presence, not just hue), and each row carries a visually-hidden
@@ -76,6 +76,9 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
           // shortening, or marks invisible code points, whenever the two cells of a differing row
           // would otherwise show the same text (lib/diff-cells.ts).
           const [theirsCell, mineCell] = pairCells(row.theirs, row.mine, differs);
+          // A URL cell comes cut after its slashes, and the <wbr> between the pieces lets a narrow
+          // column wrap it between path segments, like the extras below. Every other cell is one
+          // piece and renders as the plain string.
           return (
             <tr class={differs ? "changed" : "same"}>
               <th scope="row" class="k">
@@ -85,14 +88,14 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
               </th>
               <td class="theirs">
                 {theirsCell ? (
-                  <span title={theirsCell.title}>{theirsCell.text}</span>
+                  <span title={theirsCell.title}>{theirsCell.segments.map((part, i) => <>{i > 0 && <wbr />}{part}</>)}</span>
                 ) : (
                   <span class="missing">—</span>
                 )}
               </td>
               <td class="yours">
                 {mineCell ? (
-                  <span title={mineCell.title}>{mineCell.text}</span>
+                  <span title={mineCell.title}>{mineCell.segments.map((part, i) => <>{i > 0 && <wbr />}{part}</>)}</span>
                 ) : (
                   <span class="missing">—</span>
                 )}

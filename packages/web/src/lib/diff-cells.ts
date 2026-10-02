@@ -1,10 +1,14 @@
 import { displayUrl } from "@ymmv/shared";
-import { urlTitle } from "./display-value.ts";
+import { slashSegments, urlTitle } from "./display-value.ts";
+import { safeHref } from "./safe-href.ts";
 import { sanitizeText } from "./sanitize.ts";
 
 export interface Cell {
   text: string;
   title?: string;
+  // `text` in the pieces Diff.astro puts a <wbr> between: cut after each run of "/" when the
+  // stored value is a URL, otherwise the one string. Joined, they are always `text`.
+  segments: string[];
 }
 
 const FFFD = String.fromCodePoint(0xfffd);
@@ -55,12 +59,14 @@ export function pairCells(
   const base = (v: string) => (shortenCollide ? v : displayUrl(v));
   const invisibleCollide =
     pair != null && shown(base(pair[0]), false) === shown(base(pair[1]), false);
-  const cell = (v: string | null): Cell | null =>
-    v == null
-      ? null
-      : {
-          text: render(base(v), invisibleCollide),
-          title: shortenCollide ? undefined : urlTitle(v),
-        };
+  const cell = (v: string | null): Cell | null => {
+    if (v == null) return null;
+    const text = render(base(v), invisibleCollide);
+    // The gate is UntrustedValue's (an http(s) URL that parses), asked of the stored value: a
+    // collided URL renders raw and unshortened and is a URL all the same. The cut is made on the
+    // final text, after the marks, so a U+FFFD beside a slash stays in its piece.
+    const segments = safeHref(v) ? slashSegments(text) : [text];
+    return { text, title: shortenCollide ? undefined : urlTitle(v), segments };
+  };
   return [cell(theirs), cell(mine)];
 }

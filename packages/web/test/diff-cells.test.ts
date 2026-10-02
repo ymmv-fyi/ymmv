@@ -11,48 +11,129 @@ const texts = (a: string, b: string) => pairCells(a, b, true).map((c) => c?.text
 describe("pairCells", () => {
   it("a one-sided row shortens the present side and carries the full URL as its title", () => {
     expect(pairCells("https://github.com/a", null, true)).toEqual([
-      { text: "github.com/a", title: "https://github.com/a" },
+      {
+        text: "github.com/a",
+        title: "https://github.com/a",
+        segments: ["github.com/", "a"],
+      },
       null,
     ]);
-    expect(pairCells(null, "Neovim", true)).toEqual([null, { text: "Neovim", title: undefined }]);
+    expect(pairCells(null, "Neovim", true)).toEqual([
+      null,
+      { text: "Neovim", title: undefined, segments: ["Neovim"] },
+    ]);
   });
 
   it("strips bidi controls from text and title", () => {
     expect(pairCells(`https://github.com/${RLO}bidi`, null, true)).toEqual([
-      { text: "github.com/bidi", title: "https://github.com/bidi" },
+      {
+        text: "github.com/bidi",
+        title: "https://github.com/bidi",
+        segments: ["github.com/", "bidi"],
+      },
       null,
     ]);
   });
 
   it("shortens both sides, with titles, when the shown texts stay distinct", () => {
     expect(pairCells(`https://github.com/${RLO}a`, "https://github.com/b", true)).toEqual([
-      { text: "github.com/a", title: "https://github.com/a" },
-      { text: "github.com/b", title: "https://github.com/b" },
+      { text: "github.com/a", title: "https://github.com/a", segments: ["github.com/", "a"] },
+      { text: "github.com/b", title: "https://github.com/b", segments: ["github.com/", "b"] },
     ]);
     expect(pairCells("https://github.com/a", "Neovim", true)).toEqual([
-      { text: "github.com/a", title: "https://github.com/a" },
-      { text: "Neovim", title: undefined },
+      { text: "github.com/a", title: "https://github.com/a", segments: ["github.com/", "a"] },
+      { text: "Neovim", title: undefined, segments: ["Neovim"] },
     ]);
   });
 
   it("a row the diff calls same never collides, even when the raw sides differ by a trim", () => {
     expect(pairCells("https://github.com/a/dots", "https://github.com/a/dots ", false)).toEqual([
-      { text: "github.com/a/dots", title: "https://github.com/a/dots" },
-      { text: "github.com/a/dots", title: "https://github.com/a/dots" },
+      {
+        text: "github.com/a/dots",
+        title: "https://github.com/a/dots",
+        segments: ["github.com/", "a/", "dots"],
+      },
+      {
+        text: "github.com/a/dots",
+        title: "https://github.com/a/dots",
+        segments: ["github.com/", "a/", "dots"],
+      },
     ]);
   });
 
   it("renders raw, without titles, when shortening would collide the sides", () => {
-    for (const [a, b] of [
-      ["https://github.com/plain/dots", "github.com/plain/dots"],
-      ["https://GitHub.com/x", "https://github.com/x"],
-      ["https://good.com@evil.com", "https://evil.com"],
-      ["https://a.com:443/x", "https://a.com/x"],
-    ]) {
+    // raw keeps the scheme, so a URL side's first cut lands after "https://"; the schemeless
+    // side is plain text and stays one piece
+    for (const [a, b, aSegments, bSegments] of [
+      [
+        "https://github.com/plain/dots",
+        "github.com/plain/dots",
+        ["https://", "github.com/", "plain/", "dots"],
+        ["github.com/plain/dots"],
+      ],
+      [
+        "https://GitHub.com/x",
+        "https://github.com/x",
+        ["https://", "GitHub.com/", "x"],
+        ["https://", "github.com/", "x"],
+      ],
+      [
+        "https://good.com@evil.com",
+        "https://evil.com",
+        ["https://", "good.com@evil.com"],
+        ["https://", "evil.com"],
+      ],
+      [
+        "https://a.com:443/x",
+        "https://a.com/x",
+        ["https://", "a.com:443/", "x"],
+        ["https://", "a.com/", "x"],
+      ],
+    ] as const) {
       expect(pairCells(a, b, true)).toEqual([
-        { text: a, title: undefined },
-        { text: b, title: undefined },
+        { text: a, title: undefined, segments: aSegments },
+        { text: b, title: undefined, segments: bSegments },
       ]);
+    }
+  });
+
+  it("cuts a URL after each run of slashes, and leaves every other value in one piece", () => {
+    const segments = (a: string, b: string) => pairCells(a, b, true).map((c) => c?.segments);
+    expect(segments("https://github.com/a/dots", "bash/zsh")).toEqual([
+      ["github.com/", "a/", "dots"],
+      ["bash/zsh"],
+    ]);
+    // the gate is asked of the stored value: a collided URL renders raw, with its scheme, and
+    // is still cut, while the schemeless side is plain text here as everywhere else
+    expect(segments("https://github.com/plain/dots", "github.com/plain/dots")).toEqual([
+      ["https://", "github.com/", "plain/", "dots"],
+      ["github.com/plain/dots"],
+    ]);
+    // a scheme the site never links is not a URL cell
+    expect(segments("ftp://a.com/x/y", "javascript:a/b")).toEqual([
+      ["ftp://a.com/x/y"],
+      ["javascript:a/b"],
+    ]);
+  });
+
+  it("cuts after the marks, so a mark beside a slash stays visible in its piece", () => {
+    const [theirs, mine] = pairCells(`https://a.com/x/${RLO}y`, "https://a.com/x/y", true);
+    expect(theirs).toEqual({
+      text: `a.com/x/${FFFD}y`,
+      title: "https://a.com/x/y",
+      segments: ["a.com/", "x/", `${FFFD}y`],
+    });
+    expect(mine?.segments).toEqual(["a.com/", "x/", "y"]);
+  });
+
+  it("the pieces always join back to the text", () => {
+    for (const [a, b] of [
+      ["https://github.com/a//b/", "http://x.dev/a/b"],
+      [`https://goo${ZWSP}gle.com/a`, "https://google.com/a"],
+      ["https://alice@a.com/a b", "https://bob@a.com/a  b"],
+      ["bash/zsh", "/"],
+    ]) {
+      for (const cell of pairCells(a, b, true)) expect(cell?.segments.join("")).toBe(cell?.text);
     }
   });
 

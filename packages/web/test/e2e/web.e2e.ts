@@ -1034,6 +1034,54 @@ test.describe("the 3-column diff", () => {
     }
   });
 
+  test("a URL cell wraps between path segments on a phone, never inside a word that fits", async ({
+    page,
+  }) => {
+    const text = "github.com/antfu/dotfiles-but-with-a-very-long-path/blob/main/config";
+    const words = ["github.com", "antfu", "blob", "main", "config"];
+    // at 320 the value column holds 8 characters: "github.com" is longer than a line there and
+    // still breaks, like any segment wider than the column
+    const fitting = new Map([
+      [320, words.filter((word) => word.length <= 8)],
+      [360, words],
+      [375, words],
+      [480, words],
+    ]);
+    for (const [width, list] of fitting) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/antfu/vs/bardisty");
+      await page.evaluate(() => document.fonts.ready);
+      const cell = page
+        .locator("table.diff tbody tr")
+        .filter({ hasText: "dotfiles" })
+        .locator("td.theirs span");
+      // a word broken across lines has more than one client rect
+      const broken = await cell.evaluate((span, list) => {
+        const found: string[] = [];
+        const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          const text = node.textContent ?? "";
+          for (const word of list) {
+            for (let at = text.indexOf(word); at !== -1; at = text.indexOf(word, at + 1)) {
+              const range = document.createRange();
+              range.setStart(node, at);
+              range.setEnd(node, at + word.length);
+              if (range.getClientRects().length > 1) found.push(word);
+            }
+          }
+        }
+        return found;
+      }, list);
+      expect(broken, `at ${width}px`).toEqual([]);
+      // the break points are <wbr>s: the cell still reads, and copies, as the one unbroken
+      // string, under the same full-URL title
+      await expect(cell).toHaveText(text);
+      expect(await cell.evaluate((span) => span.textContent)).toBe(text);
+      await expect(cell).toHaveAttribute("title", `https://${text}`);
+    }
+  });
+
   test("the command follows the pair's order and copies the stored handles", async ({ page }) => {
     await page.goto("/bardisty/vs/antfu");
     const cmd = page.locator(".session > .cmdline .install");
@@ -1194,7 +1242,7 @@ test.describe("long values + safety", () => {
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1); // no horizontal scrollbar => it wrapped
-    // the slash break points are the diff extras' alone: a profile link stays one plain string
+    // the slash break points are the diff page's alone: a profile link stays one plain string
     expect(await page.locator("wbr").count()).toBe(0);
   });
 

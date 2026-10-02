@@ -20,7 +20,7 @@
 // still breaks. A <wbr> is not text: textContent, the copied string and what a screen reader
 // reads are unchanged. Opt-in (the diff extras pass it) so the profile page renders as before.
 import { displayUrl } from "@ymmv/shared";
-import { urlTitle } from "../lib/display-value.ts";
+import { slashSegments, urlTitle } from "../lib/display-value.ts";
 import { safeHref } from "../lib/safe-href.ts";
 import { sanitizeText } from "../lib/sanitize.ts";
 
@@ -34,7 +34,7 @@ const href = safeHref(value);
 const text = sanitizeText(href ? displayUrl(value) : value);
 const title = href ? urlTitle(value) : undefined;
 // Only a link's display text is segmented: every other value keeps the one-string render.
-const [head, ...segments] = href && breakAfterSlash ? text.split(/(?<=\/)(?=[^/])/) : [text];
+const [head, ...segments] = href && breakAfterSlash ? slashSegments(text) : [text];
 ---
 
 {
