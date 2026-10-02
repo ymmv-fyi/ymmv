@@ -1,3 +1,5 @@
+<!-- Title: type(scope): summary, such as "fix(cli): ...". It becomes the commit subject on main. -->
+
 ## What changed
 
 <!-- What this changes and why. Link the issue it fixes, if there is one: Fixes #123 -->

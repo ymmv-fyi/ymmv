@@ -52,10 +52,14 @@ do tests, refactors or CI changes.
 
 ## Commits and pull requests
 
-Pull requests are usually rebase-merged, so each commit lands on `main` as you wrote it. Keep a
-commit to one change that builds and passes the tests, and fold fix-ups into the commit they fix
-before review. Subjects follow `type(scope): summary`, such as `fix(cli): ...` or
-`feat(web): ...`. The scope is optional, as in `docs: ...`. The body says what changed and why.
+Pull requests are squash-merged. One pull request becomes one commit on `main`, so a change can
+be undone with one revert. Keep a pull request to one change. Two unrelated fixes are two pull
+requests.
+
+The pull request's title becomes the commit subject, so write it as `type(scope): summary`, such
+as `fix(cli): ...` or `feat(web): ...`. The scope is optional, as in `docs: ...`. The commits
+inside are squashed, so they don't need tidying. Now and then a maintainer rebase-merges a pull
+request whose commits are meant to stand apart, such as a release cut.
 
 In the pull request, say what changed, how you tested it, and what you couldn't test: an OS, a
 terminal, a package manager.

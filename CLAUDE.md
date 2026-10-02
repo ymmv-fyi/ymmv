@@ -83,7 +83,9 @@ one of them changes here, update it there too.
   `dry_run=false` (a web-only deploy: no npm publish). **Merging to main deploys
   nothing.**
 - Deploy status command: `gh run list --workflow release.yml --limit 1`
-- Merge method: rebase
+- Merge method: squash (one PR is one commit on `main`, undone with one revert).
+  Rebase only for a PR whose commits are deliberately separate, such as the
+  release cut, which keeps its `docs: cut X.Y.Z` subject.
 - Project type: web app + API (Worker) and npm CLI (`ymmv-cli`)
 - Post-deploy health check: https://ymmv.fyi
 
