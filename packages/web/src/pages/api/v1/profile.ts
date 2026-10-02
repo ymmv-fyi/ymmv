@@ -203,9 +203,10 @@ export const POST: APIRoute = async ({ request }) => {
   try {
     // Bound-handle guard: publish may only use the handle login already bound to this github_id.
     // Anything else — an unclaimed handle (pre-owner squat), a handle another account holds live or
-    // vacated (takeover), a self-rename, or a limbo account (handle_lower NULL) — is refused; the
-    // caller must (re-)login, where GitHub proves name ownership. 409 keeps every deployed CLI's
-    // self-heal working: on 409 it re-logins (refreshing the bound handle) and retries once.
+    // vacated (takeover), a self-rename, a limbo account (handle_lower NULL), or an account with no
+    // users row (deleted after this request passed auth) — is refused; the caller must (re-)login,
+    // where GitHub proves name ownership. 409 keeps every deployed CLI's self-heal working: on 409
+    // it re-logins (refreshing the bound handle) and retries once.
     const bound = await env.DB.prepare("SELECT handle, handle_lower FROM users WHERE github_id = ?")
       .bind(githubId)
       .first<{ handle: string | null; handle_lower: string | null }>();
@@ -220,19 +221,20 @@ export const POST: APIRoute = async ({ request }) => {
     // handle_lower: it stamps the row published (updated_at + extras) and rewrites the entries,
     // and EVERY write statement re-checks the bind (handle_lower = ?) inside the transaction. That
     // closes the guard-to-batch TOCTOU as a CAS: if a concurrent login rebound this account (GitHub
-    // rename on another device) or a concurrent DELETE vacated it (handle_lower NULL), the whole
-    // batch no-ops — a stale publish can neither undo a GitHub-proven rename nor resurrect a
-    // deleted profile. Delete-then-insert entries so a republish drops keys.
+    // rename on another device) or a concurrent DELETE removed its users row, the whole batch
+    // no-ops — a stale publish can neither undo a GitHub-proven rename nor resurrect a deleted
+    // profile. Delete-then-insert entries so a republish drops keys.
     //
     // The same gate carries the If-Match precondition: `(? IS NULL OR updated_at = ?)` is inert
     // without a tag (every statement is byte-identical to the unconditional write) and otherwise
     // requires the stored stamp to still equal the one the caller read, so a merge built on a
     // stale read no-ops instead of clobbering the write that landed in between. The stamp UPDATE
     // runs LAST because it rewrites the very column the entry statements gate on. A NULL stamp
-    // (never published, or vacated since the read) never equals a tag, which is the right verdict:
-    // what the caller read is gone. Known gap: two publishes stamped in the same millisecond share
-    // a tag, so a reader of the first can't see the second (needs two same-account writes in one
-    // millisecond under the per-identity write limit; a revision column would close it).
+    // (never published, or deleted and signed in again since the read) never equals a tag, which
+    // is the right verdict: what the caller read is gone. Known gap: two publishes stamped in the
+    // same millisecond share a tag, so a reader of the first can't see the second (needs two
+    // same-account writes in one millisecond under the per-identity write limit; a revision column
+    // would close it).
     const gate = "AND handle_lower = ? AND (? IS NULL OR updated_at = ?)";
     const gateBinds = [handleLower, expectedTag, expectedTag] as const;
     const writes = [
@@ -258,7 +260,7 @@ export const POST: APIRoute = async ({ request }) => {
     const stampResult = results[writes.length - 1];
     const probeRow = results[writes.length]?.results[0];
     if ((stampResult?.meta.changes ?? 0) === 0) {
-      // Nothing written. Bind moved (rename / vacate / limbo) → 409, the verdict deployed CLIs
+      // Nothing written. Bind moved (rename / delete / limbo) → 409, the verdict deployed CLIs
       // self-heal from by re-logging-in — and it wins over a stamp mismatch, since a re-read under
       // the old handle can't fix a moved bind. Bind intact but the stamp moved → 412: the caller's
       // read is stale, and only a caller that sent a tag (and so has a probe row) can land here.
@@ -283,17 +285,18 @@ export const POST: APIRoute = async ({ request }) => {
   return noStoreJson(200, { ok: true, handle: boundHandle });
 };
 
-// DELETE /api/v1/profile — authed hard-delete (v1 delete semantics). One atomic batch:
-//   • record the current handle in handle_history BEFORE clearing it (the SELECT reads the live
-//     value in-transaction). Nobody can publish-squat the vacated handle: POST's bound-handle guard
-//     refuses any handle not currently login-bound, so reclaim (the owner's included — delete also
-//     clears their bind) flows ONLY through a GitHub-proven login, never an arbitrary publish (no
-//     impersonation of the GitHub owner after they delete).
-//   • drop the user's profile_entries,
-//   • clear handle/handle_lower (→ reclaimable) + extras, and NULL updated_at so the row reads as
-//     "no profile" (GET 404s); the users row is kept so a later login re-binds the same github_id,
-//   • revoke ALL of this account's tokens (the spec's "delete revokes tokens" — kills every session;
-//     the CLI then drops its now-dead local token).
+// DELETE /api/v1/profile — authed full erase. One atomic batch deletes every row keyed to the
+// account's github_id, and writes nothing:
+//   • its profile_entries,
+//   • its tokens, which signs the account out everywhere (the CLI then drops its dead local token),
+//   • its handle_history rows, so a handle it renamed away from stops redirecting,
+//   • its users row.
+// After the batch the database holds nothing about the account. The freed handle needs no marker
+// row to stay safe: POST's bound-handle guard refuses any handle the caller did not bind at login,
+// so nobody can publish-squat it, and reclaim (the former owner's included) flows ONLY through a
+// GitHub-proven login, whose upsert inserts a fresh users row. A publish from this account that
+// was already past auth finds no users row to gate on and no-ops (409). A sign-in is one batch
+// too (auth/token.ts), so it lands wholly before this batch or wholly after it.
 export const DELETE: APIRoute = async ({ request }) => {
   const githubId = await authenticateRequest(request, env.DB);
   if (githubId === null) return err(401, "unauthorized");
@@ -302,20 +305,12 @@ export const DELETE: APIRoute = async ({ request }) => {
   const limited = await checkWriteRateLimit(githubId);
   if (limited) return limited;
 
-  const now = new Date().toISOString();
   try {
     await env.DB.batch([
-      env.DB.prepare(
-        "INSERT OR REPLACE INTO handle_history (old_handle_lower, github_id, changed_at) " +
-          "SELECT handle_lower, github_id, ? FROM users WHERE github_id = ? AND handle_lower IS NOT NULL",
-      ).bind(now, githubId),
       env.DB.prepare("DELETE FROM profile_entries WHERE github_id = ?").bind(githubId),
-      env.DB.prepare(
-        "UPDATE users SET handle = NULL, handle_lower = NULL, extras = '[]', updated_at = NULL WHERE github_id = ?",
-      ).bind(githubId),
-      env.DB.prepare(
-        "UPDATE tokens SET revoked_at = ? WHERE github_id = ? AND revoked_at IS NULL",
-      ).bind(now, githubId),
+      env.DB.prepare("DELETE FROM tokens WHERE github_id = ?").bind(githubId),
+      env.DB.prepare("DELETE FROM handle_history WHERE github_id = ?").bind(githubId),
+      env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(githubId),
     ]);
   } catch (e) {
     console.error("profile delete failed for github_id", githubId, e);

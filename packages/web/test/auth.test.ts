@@ -3,6 +3,7 @@ import { SCHEMA_VERSION } from "@ymmv/shared";
 import type { APIContext } from "astro";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../src/lib/auth.ts";
+import { handleBindStatements } from "../src/lib/users.ts";
 import { POST as LOGOUT } from "../src/pages/api/v1/auth/logout.ts";
 import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { GET as WHOAMI } from "../src/pages/api/v1/auth/whoami.ts";
@@ -87,6 +88,16 @@ type MintBody = { token: string; handle: string | null; github_id: number; revok
 async function mint(accessToken = "gho_valid", revoke?: string): Promise<MintBody> {
   const body = { access_token: accessToken, ...(revoke === undefined ? {} : { revoke }) };
   return (await (await MINT(mintCtx(body))).json()) as MintBody;
+}
+
+/** How many token rows (live or revoked) and users rows one account has. */
+async function accountRows(githubId: number): Promise<{ tokens: number; users: number }> {
+  const [tokens, users] = await env.DB.batch<{ n: number }>(
+    ["tokens", "users"].map((table) =>
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE github_id = ?`).bind(githubId),
+    ),
+  );
+  return { tokens: tokens?.results[0]?.n ?? -1, users: users?.results[0]?.n ?? -1 };
 }
 
 async function activeTokens(githubId: number): Promise<number> {
@@ -388,32 +399,42 @@ describe("POST /api/v1/auth/token — mint", () => {
       expect(await activeTokens(4242)).toBe(1);
     });
 
-    it("a statement failing INSIDE the batch rolls the insert back: old token live, nothing minted", async () => {
-      // The whole point of the batch. A non-atomic implementation (two sequential runs) would
-      // leave the new row behind when the second statement fails.
+    it("a statement failing INSIDE the batch rolls the insert and the bind back: old token live, nothing minted", async () => {
+      // The whole point of the batch. A non-atomic implementation (sequential runs) would leave
+      // the new token row, or the rebound handle, behind when a later statement fails.
       stubGithub(() => introspectOk(4242, "carol"));
       const a = await mint("t1");
+      stubGithub(() => introspectOk(4242, "caroline")); // this sign-in would rebind the handle
       const realBatch = env.DB.batch.bind(env.DB);
-      let calls = 0;
+      // The revoke is the batch's last statement: swap it for one that fails.
+      let batched = 0;
       const batchSpy = vi
         .spyOn(env.DB, "batch")
-        .mockImplementation(async (stmts: D1PreparedStatement[]) => {
-          calls += 1;
-          if (calls === 2) {
-            return realBatch([stmts[0], env.DB.prepare("UPDATE no_such_table SET x = 1")]);
-          }
-          return realBatch(stmts);
+        .mockImplementationOnce(async (stmts: D1PreparedStatement[]) => {
+          batched = stmts.length;
+          return realBatch([
+            ...stmts.slice(0, -1),
+            env.DB.prepare("UPDATE no_such_table SET x = 1"),
+          ]);
         });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         const res = await MINT(mintCtx({ access_token: "t2", revoke: a.token }));
         expect(res.status).toBe(500);
+        expect(batchSpy).toHaveBeenCalledTimes(1);
       } finally {
         batchSpy.mockRestore();
         errSpy.mockRestore();
       }
+      // The sabotaged batch was the whole sign-in: the bind, the token insert and the revoke.
+      // (Asserted out here: the handler's catch would swallow an expect inside the mock.)
+      expect(batched).toBe(handleBindStatements(env.DB, 4242, "caroline", "").length + 2);
       expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(200);
       expect(await activeTokens(4242)).toBe(1); // the INSERT in the same batch was rolled back
+      const user = await env.DB.prepare("SELECT handle FROM users WHERE github_id = ?")
+        .bind(4242)
+        .first<{ handle: string }>();
+      expect(user?.handle).toBe("carol"); // and so was the bind
     });
 
     it("revokes nothing on a GitHub outage (503) or an unset secret (500): every gate runs before the batch", async () => {
@@ -433,23 +454,17 @@ describe("POST /api/v1/auth/token — mint", () => {
       expect(await activeTokens(4242)).toBe(1);
     });
 
-    it("insert and revoke are one batch: a failed batch leaves the old token live, logs no token", async () => {
+    it("a failed sign-in batch answers 500, leaves the old token live, and logs no token", async () => {
       stubGithub(() => introspectOk(4242, "carol"));
       const a = await mint("t1");
       const logged: unknown[][] = [];
       const errSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
         logged.push(args);
       });
-      const realBatch = env.DB.batch.bind(env.DB);
-      let calls = 0;
-      // The first batch is the handle bind; the second is the token batch under test.
-      const batchSpy = vi
-        .spyOn(env.DB, "batch")
-        .mockImplementation(async (stmts: D1PreparedStatement[]) => {
-          calls += 1;
-          if (calls === 2) throw new Error(`d1 down while rotating ${a.token}`);
-          return realBatch(stmts);
-        });
+      // A sign-in is one batch: the handle bind, the token insert and the revoke.
+      const batchSpy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async () => {
+        throw new Error(`d1 down while rotating ${a.token}`);
+      });
       try {
         const res = await MINT(mintCtx({ access_token: "t2", revoke: a.token }));
         expect(res.status).toBe(500);
@@ -508,6 +523,120 @@ describe("POST /api/v1/auth/token — mint", () => {
       .bind("bob")
       .first<{ github_id: number }>();
     expect(hist?.github_id).toBe(60); // prior handle recorded
+  });
+
+  it("sign-in after a delete: a fresh users row, a new token that publishes, and the erased token's retire is revoked:false", async () => {
+    stubGithub(() => introspectOk(4301, "ada"));
+    const first = await mint("t1");
+    await PUBLISH(publishCtx(first.token, "ada", [{ key: "editor", value: "Vim" }]));
+    expect((await DELETE_PROFILE(deleteCtx(first.token))).status).toBe(200);
+    expect(await accountRows(4301)).toEqual({ tokens: 0, users: 0 });
+
+    // A CLI that still holds the erased token sends it as `revoke`. Its row no longer exists, so
+    // the retire changes nothing and answers revoked:false, as it does for an already-revoked
+    // row. The field is still present, which is what the CLI's login parse requires.
+    const res = await MINT(mintCtx({ access_token: "t2", revoke: first.token }));
+    expect(res.status).toBe(200);
+    const second = (await res.json()) as MintBody;
+    expect(second).toMatchObject({ handle: "ada", github_id: 4301, revoked: false });
+    expect(second.token).not.toBe(first.token);
+
+    const user = await env.DB.prepare(
+      "SELECT handle, extras, updated_at FROM users WHERE github_id = ?",
+    )
+      .bind(4301)
+      .first();
+    expect(user).toEqual({ handle: "ada", extras: "[]", updated_at: null });
+    expect((await WHOAMI(whoamiCtx(first.token))).status).toBe(401);
+    expect(await activeTokens(4301)).toBe(1);
+    expect(
+      (await PUBLISH(publishCtx(second.token, "ada", [{ key: "editor", value: "Helix" }]))).status,
+    ).toBe(200);
+  });
+
+  it("a sign-in is one batch, for a bound handle and for a reserved username", async () => {
+    // Bind and mint in two batches would let a delete land between them: it would erase the users
+    // row, and the insert would then leave a live token for the erased account.
+    const batchSpy = vi.spyOn(env.DB, "batch");
+    try {
+      stubGithub(() => introspectOk(4302, "bea"));
+      const bound = await mint("t1");
+      expect(batchSpy).toHaveBeenCalledTimes(1);
+      await mint("t2", bound.token);
+      expect(batchSpy).toHaveBeenCalledTimes(2);
+      stubGithub(() => introspectOk(51, "login"));
+      expect((await mint("t3")).handle).toBeNull();
+      expect(batchSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      batchSpy.mockRestore();
+    }
+    expect(await accountRows(4302)).toEqual({ tokens: 2, users: 1 });
+    expect(await accountRows(51)).toEqual({ tokens: 1, users: 1 });
+  });
+
+  it("reserved username + revoke: `revoked` reads the retire, not a bind statement", async () => {
+    // The reserved-username bind is two statements, not four, so the retire sits at another index.
+    stubGithub(() => introspectOk(52, "login"));
+    const a = await mint("t1");
+    expect(a.handle).toBeNull();
+    expect(a).not.toHaveProperty("revoked");
+    const b = await mint("t2", a.token);
+    expect(b.revoked).toBe(true);
+    expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(401);
+    expect((await mint("t3", a.token)).revoked).toBe(false);
+    expect((await mint("t4", "ymmv_never_minted")).revoked).toBe(false);
+  });
+
+  it("a delete landing right after a sign-in's batch never leaves a token without its users row", async () => {
+    // With the bind and the mint in two batches, this delete would land between them: the mint
+    // would then insert a live token for an account with no users row.
+    stubGithub(() => introspectOk(4303, "cleo"));
+    const first = await mint("t1");
+    const realBatch = env.DB.batch.bind(env.DB);
+    let deleted: number | undefined;
+    const batchSpy = vi
+      .spyOn(env.DB, "batch")
+      .mockImplementationOnce(async (stmts: D1PreparedStatement[]) => {
+        const out = await realBatch(stmts);
+        deleted = (await DELETE_PROFILE(deleteCtx(first.token))).status;
+        return out;
+      });
+    let second: MintBody;
+    try {
+      second = await mint("t2");
+    } finally {
+      batchSpy.mockRestore();
+    }
+    expect(deleted).toBe(200);
+    expect(await accountRows(4303)).toEqual({ tokens: 0, users: 0 });
+    expect((await WHOAMI(whoamiCtx(second.token))).status).toBe(401);
+  });
+
+  it("a delete that passed auth before a sign-in and lands after it erases that sign-in too", async () => {
+    // The other order of the same race. The delete's batch runs after the whole sign-in, so it
+    // removes the new users row and the new token with the rest: nothing is left, and the machine
+    // that just signed in is signed out.
+    stubGithub(() => introspectOk(4304, "dot"));
+    const first = await mint("t1");
+    await PUBLISH(publishCtx(first.token, "dot", [{ key: "editor", value: "Vim" }]));
+    const realBatch = env.DB.batch.bind(env.DB);
+    let second: MintBody | undefined;
+    const batchSpy = vi
+      .spyOn(env.DB, "batch")
+      .mockImplementationOnce(async (stmts: D1PreparedStatement[]) => {
+        second = await mint("t2"); // another machine signs in; its batch is the real one
+        return realBatch(stmts);
+      });
+    try {
+      expect((await DELETE_PROFILE(deleteCtx(first.token))).status).toBe(200);
+    } finally {
+      batchSpy.mockRestore();
+    }
+    expect(second?.handle).toBe("dot");
+    expect(await accountRows(4304)).toEqual({ tokens: 0, users: 0 });
+    for (const token of [first.token, second?.token ?? ""]) {
+      expect((await WHOAMI(whoamiCtx(token))).status).toBe(401);
+    }
   });
 
   it("a minted token round-trips a real publish", async () => {

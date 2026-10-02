@@ -72,10 +72,19 @@ function revokeStatement(db: D1Database, hash: string, now: string): D1PreparedS
  * on purpose, exactly like `revokeToken`: holding the raw token IS the credential, and the file
  * may hold a token for a different account than the one now logging in. `revoked` is undefined
  * when nothing was asked, else whether that token was live.
+ *
+ * `bind` is the sign-in's handle-bind statements (the users upsert and its handle_history writes:
+ * `handleBindStatements`, or the reserved-username displacement in auth/token.ts). They run in
+ * that same batch ahead of the insert, so a sign-in is one transaction. A profile delete
+ * (DELETE /api/v1/profile) lands wholly before the sign-in or wholly after it. In two batches, a
+ * delete landing between them would erase the users row and the insert would then leave a live
+ * token for the erased account. Because `bind` upserts the users row, no sign-in leaves a token
+ * row without one.
  */
 export async function mintToken(
   db: D1Database,
   githubId: number,
+  bind: D1PreparedStatement[],
   revokeRaw?: string,
 ): Promise<{ token: string; revoked?: boolean }> {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -86,6 +95,7 @@ export async function mintToken(
   const raw = `ymmv_${b64}`;
   const now = new Date().toISOString();
   const stmts = [
+    ...bind,
     db
       .prepare(
         "INSERT INTO tokens (hash, github_id, created_at, revoked_at) VALUES (?, ?, ?, NULL)",
@@ -95,7 +105,8 @@ export async function mintToken(
   if (revokeRaw !== undefined) stmts.push(revokeStatement(db, await hashToken(revokeRaw), now));
   const results = await db.batch(stmts);
   if (revokeRaw === undefined) return { token: raw };
-  return { token: raw, revoked: (results[1]?.meta.changes ?? 0) > 0 };
+  // The revoke, when asked for, is the batch's last statement.
+  return { token: raw, revoked: (results[stmts.length - 1]?.meta.changes ?? 0) > 0 };
 }
 
 /** Revoke a token by its raw value. Idempotent: false when already revoked or unknown. */

@@ -17,8 +17,8 @@ import { handleBindStatements } from "../../../../lib/users.ts";
 // obtained; THAT is the credential (there is no ymmv bearer yet). The Worker verifies via GitHub token
 // introspection that the token was issued to ymmv's OWN OAuth app (audience binding — a token minted
 // for any other app, or a leaked PAT, is rejected), binds the handle to the github_id authoritatively,
-// and mints an opaque ymmv token. An optional `revoke` (the stored ymmv token the CLI's login
-// replaces) is retired in the same D1 batch as the mint. Do not log the tokens (either of them)
+// and mints an opaque ymmv token, all in one D1 batch. An optional `revoke` (the stored ymmv token
+// the CLI's login replaces) is retired in that batch too. Do not log the tokens (either of them)
 // or the client secret.
 export const POST: APIRoute = async ({ request }) => {
   let body: unknown;
@@ -73,17 +73,20 @@ export const POST: APIRoute = async ({ request }) => {
   try {
     const now = new Date().toISOString();
     const { id, login } = user;
+    // One batch for the whole sign-in (bind + mint, see mintToken): a profile delete racing it
+    // can't land between the two and leave a token for an account with no users row.
     let handle: string | null;
+    let bind: D1PreparedStatement[];
     if (isValidHandle(login) && !isReserved(login.toLowerCase())) {
       // Authoritative bind — introspection just proved the caller owns `login`. It takes the handle
       // from any stale holder; a login is not a publish (updated_at stays NULL).
-      await env.DB.batch(handleBindStatements(env.DB, id, login, now));
+      bind = handleBindStatements(env.DB, id, login, now);
       handle = login;
     } else {
       // Rare: the GitHub username collides with a reserved route/verb, so this identity can't hold a
       // handle. Mint a token (the user can still act on their github_id) but DISPLACE any prior handle
       // to limbo — record it to history + clear it — so a stale /handle doesn't keep resolving here.
-      await env.DB.batch([
+      bind = [
         env.DB.prepare(
           "INSERT OR REPLACE INTO handle_history (old_handle_lower, github_id, changed_at) " +
             "SELECT handle_lower, github_id, ? FROM users WHERE github_id = ? AND handle_lower IS NOT NULL",
@@ -93,10 +96,10 @@ export const POST: APIRoute = async ({ request }) => {
             "VALUES (?, NULL, NULL, '[]', NULL, ?) " +
             "ON CONFLICT(github_id) DO UPDATE SET handle = NULL, handle_lower = NULL",
         ).bind(id, now),
-      ]);
+      ];
       handle = null;
     }
-    const { token, revoked } = await mintToken(env.DB, id, revoke);
+    const { token, revoked } = await mintToken(env.DB, id, bind, revoke);
     // github_id rides along so the CLI can compare IDENTITY across a re-login: a handle string can
     // change hands (rename + reclaim) while the account id cannot. `satisfies` pins the wire shape
     // to the shared contract the CLI parses against. `revoked` is present iff `revoke` was sent

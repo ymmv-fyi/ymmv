@@ -17,8 +17,10 @@ import { readCacheControl } from "../lib/profile-read.ts";
 //     dismissals.ts), sign-in, revoke and logout (device-flow.ts, auth-http.ts, index.ts),
 //     detection (detect.ts), what a publish sends and when it asks (api.ts, commands.ts), the CI
 //     and same-server checks (config.ts), ymmv update (update.ts).
-// What the code can't show (Cloudflare's own log contents and retention) is named as outside it,
-// never promised.
+// What the code can't show (Cloudflare's own log contents and retention, how far back its D1
+// backups reach, and which Workers plan the account is on) is named as outside it, never promised.
+// The backup window is from developers.cloudflare.com/d1/reference/time-travel and the plan is the
+// account's, both as of 2026-10-02. A plan change re-reads the backup paragraph.
 //
 // Server-rendered on purpose: a prerendered page is a static asset, which Workers Static Assets
 // serves ahead of the Worker, so the middleware's www/http redirect and HSTS would never see it.
@@ -59,16 +61,16 @@ const DESCRIPTION =
         and when the token was made and revoked. The server stores the hash, never the token.
       </li>
       <li>
-        <code>handle_history</code>: a handle you stopped using, by renaming on GitHub or by
-        running <code>ymmv delete</code>, with your account id and the date. After you rename on
-        GitHub and sign in again, the old address redirects to the new one while your profile is
-        published.
+        <code>handle_history</code>: a handle you stopped using by renaming on GitHub, with your
+        account id and the date. After you rename on GitHub and sign in again, the old address
+        redirects to the new one while your profile is published.
       </li>
     </ul>
     <p>
-      Tokens don't expire. Each one works until it is revoked: <code>ymmv logout</code> revokes the
-      one on that machine, signing in again revokes the one it replaces, and{" "}
-      <code>ymmv delete</code> revokes all of yours. A revoked row stays in the table.
+      Tokens don't expire. Each one works until its row is revoked or deleted:{" "}
+      <code>ymmv logout</code> revokes the one on that machine, signing in again revokes the one it
+      replaces, and <code>ymmv delete</code> deletes every token row on your account, live or
+      revoked. A revoked row stays in the table until <code>ymmv delete</code> deletes it.
     </p>
 
     <h2>What the server doesn't store</h2>
@@ -119,20 +121,39 @@ const DESCRIPTION =
     </p>
 
     <h2>What deleting your profile removes</h2>
-    <p><code>ymmv delete</code> asks first, unless you pass <code>-y</code>, then in one step it:</p>
+    <p>
+      <code>ymmv delete</code> asks first, unless you pass <code>-y</code>. Then, in one step, it
+      deletes every row that carries your GitHub account id, in all four tables:
+    </p>
     <ul>
-      <li>deletes your <code>profile_entries</code> rows,</li>
+      <li>your <code>users</code> row,</li>
+      <li>your <code>profile_entries</code> rows,</li>
+      <li>your <code>tokens</code> rows, live and revoked, so every machine is signed out,</li>
       <li>
-        clears the handle, extra lines and <code>updated_at</code> on your <code>users</code> row,
+        your <code>handle_history</code> rows, so an address you renamed away from stops
+        redirecting.
       </li>
-      <li>revokes every token on your account, which signs you out on every machine,</li>
-      <li>records the handle in <code>handle_history</code>.</li>
     </ul>
     <p>
-      Your page and its JSON answer 404 after that, until you publish again. What stays: the{" "}
-      <code>users</code> row with your GitHub account id and the date you first signed in, your
-      revoked <code>tokens</code> rows, and your <code>handle_history</code> rows. The{" "}
-      <code>users</code> row stays so that signing in again finds the same account.
+      After that, no table holds a row with your GitHub account id. Your page and its JSON answer
+      404 until you sign in and publish again. Signing in again makes a new <code>users</code> row,
+      the same as a first sign-in.
+    </p>
+    <p>
+      The delete doesn't reach Cloudflare's backups. Cloudflare keeps point-in-time backups of the
+      database, which it calls Time Travel and describes at{" "}
+      <a href="https://developers.cloudflare.com/d1/reference/time-travel/">developers.cloudflare.com/d1/reference/time-travel</a>.
+      A restore puts the whole database back to a chosen moment, rows deleted since then included.
+      In October 2026 Cloudflare's docs put the limit at 7 days back on the Workers Free plan and 30
+      days on Workers Paid, so 30 days is the longest a deleted row could come back. Nothing in this
+      code runs a restore. A maintainer would have to run one by hand.
+    </p>
+    <p>
+      It doesn't reach outside the database either. The server's failure log lines and Cloudflare's
+      rate-limit counters stay as they are. The CLI removes the <code>token.json</code> it signed in
+      with on the machine you run the delete on. Your other machines keep theirs, holding a token
+      that no longer works, and <code>update-check.json</code> and{" "}
+      <code>dismissed-marks.json</code> stay on every machine.
     </p>
     <p>
       Nothing purges a cache on delete. Pages, JSON and rename redirects go out with{" "}

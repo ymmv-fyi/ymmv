@@ -41,7 +41,8 @@ export function handleBindStatements(
     //     excludes it).
     db.prepare("DELETE FROM handle_history WHERE old_handle_lower = ?").bind(handleLower),
     // 3. claim the handle, unpublished (updated_at stays NULL, extras untouched on conflict).
-    //    created_at lands only on first insert.
+    //    created_at lands only on first insert. A delete (DELETE /api/v1/profile) removes the row,
+    //    so the account's next login is a first insert again.
     db
       .prepare(
         "INSERT INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) " +
