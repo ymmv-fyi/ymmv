@@ -116,14 +116,19 @@ YMMV_DEMO_ROOT=$root YMMV_DEMO_HOME=$tmp/home YMMV_DEMO_NODE=$(node -p process.e
 
 # VHS 0.12.0 exits 0 without writing anything. And a command that failed still ends at a shell
 # prompt with VHS exiting 0, so the committed gif is replaced only when the publish landed and every
-# `ymmv` the tape ran exited 0 (shell.sh logs each status).
+# command the tape runs was `ymmv` and exited 0 (shell.sh logs each status). The tape ends each one
+# with a bare `Wait`, for the shell prompt, so the log has to hold one 0 per bare Wait: a mistyped
+# `ymv` logs nothing, and counting the tape's `ymmv` lines would miss it along with the log.
 [ -s "$tmp/demo.gif" ] || { echo "demo: vhs wrote no gif" >&2; exit 1; }
 if ! kill -0 "$worker" 2>/dev/null || [ "$(probe /api/v1/u/bardisty)" != 200 ]; then
   echo "demo: the recording didn't publish the demo profile, so docs/demo.gif is unchanged" >&2
   exit 1
 fi
-if [ ! -s "$tmp/home/statuses" ] || grep -qv '^0$' "$tmp/home/statuses"; then
-  echo "demo: a ymmv command in the recording failed, so docs/demo.gif is unchanged" >&2
+scenes=$(grep -cE '^Wait[[:space:]]*(#|$)' docs/demo/demo.tape)
+ran=$(grep -c '^0$' "$tmp/home/statuses" 2>/dev/null || true)
+if [ "$ran" != "$scenes" ] || grep -qv '^0$' "$tmp/home/statuses"; then
+  echo "demo: the tape runs $scenes commands and ${ran:-0} of them were a ymmv that exited 0, so" \
+    "docs/demo.gif is unchanged" >&2
   exit 1
 fi
 mv "$tmp/demo.gif" docs/demo.gif
