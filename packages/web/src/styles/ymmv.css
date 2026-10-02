@@ -275,7 +275,7 @@ a {
 }
 /* the output's opening line: the page's address. The handle is the h1, in the shell's register.
    (.url is shared with the diff heading — .diff-h re-dresses it there, so session-only spacing
-   stays scoped to .session.) */
+   stays scoped to .session. The data page, /privacy, carries its h1 in it the same way.) */
 .url {
   font-family: var(--font-mono);
   color: var(--faint);
@@ -875,7 +875,7 @@ table.extras-dim th {
 
 /* ---- profile-session overrides of shared components (after their base rules — see .session) ---- */
 /* the h1 rides inline in the breadcrumb — undo the display-handle dress (.handle base, kept for
-   the empty/404 state) piece by piece */
+   the empty/404 state) piece by piece. Unscoped on purpose: /privacy's breadcrumb h1 needs it too. */
 .url .handle {
   display: inline;
   font-family: var(--font-mono);
@@ -910,6 +910,77 @@ table.extras-dim th {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--accent);
+}
+
+/* ---- data page (/privacy; DESIGN.md → Components & States): a reading page in the document
+   column. The breadcrumb carries the h1 like a profile; prose sits in the session's 14px/1.7
+   register, one tier under ink so the headings and named identifiers (code, b) lead the scan. ---- */
+.doc {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--mid);
+}
+.doc-lede {
+  margin-top: 1.7em;
+}
+.doc h2 {
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--text);
+  margin: 2.4em 0 0.6em;
+  text-wrap: balance;
+}
+/* the section mark, as on the landing's labels: CSS-only, so it stays out of textContent. Where the
+   alt-text form is supported, its empty alt keeps screen readers from announcing the mark before
+   every heading; elsewhere the plain form keeps the mark on screen. */
+.doc h2::before {
+  content: "// ";
+  font-weight: 400;
+  color: var(--faint);
+}
+@supports (content: "" / "") {
+  .doc h2::before {
+    content: "// " / "";
+  }
+}
+.doc ul {
+  padding-left: 2ch;
+  list-style: "- ";
+}
+.doc p + p,
+.doc p + ul,
+.doc ul + p {
+  margin-top: 0.9em;
+}
+.doc li::marker {
+  color: var(--faint);
+}
+.doc li + li {
+  margin-top: 0.5em;
+}
+.doc code,
+.doc b {
+  font: inherit;
+  font-weight: 500;
+  color: var(--text);
+}
+/* long paths and header values break rather than push a phone column sideways */
+.doc code {
+  overflow-wrap: anywhere;
+}
+/* prose links are amber (links are amber's job). Amber sits within 3:1 of the --mid prose in both
+   themes (about 1.0 in dark, 1.8 in light), so the underline is the cue that isn't color: --faint,
+   which clears 4.5:1 on bg, not the readout's --accent-soft, which barely shows. The breadcrumb's
+   home link keeps its own quiet dress (.url a). */
+.doc :is(p, li) a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--faint);
+  overflow-wrap: anywhere;
+  transition: border-bottom-color 150ms ease;
+}
+.doc :is(p, li) a:hover {
+  border-bottom-color: var(--accent);
 }
 
 /* ---- landing (DESIGN.md → Landing layout; decided 2026-09-14, direction "House") ---- */
@@ -1344,6 +1415,7 @@ table.extras-dim th {
 .foot a:focus-visible,
 .live-link a:focus-visible,
 .site-foot a:focus-visible,
+.doc :is(p, li) a:focus-visible,
 .diff-cta .go:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
