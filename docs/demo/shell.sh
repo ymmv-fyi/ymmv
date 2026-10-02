@@ -8,13 +8,17 @@ if [ -z "${YMMV_DEMO_ROOT-}" ] || [ -z "${YMMV_DEMO_HOME-}" ] || [ -z "${YMMV_DE
   echo "demo: record with pnpm demo" >&2
   return 1
 fi
+# --import reads its argument as a URL, so a `#`, `?` or `%` in the checkout's path would end the
+# path early or be decoded. The file URL has them encoded.
+ymmv_demo_reroute=$("$YMMV_DEMO_NODE" -p 'require("node:url").pathToFileURL(process.argv[1]).href' \
+  "$YMMV_DEMO_ROOT/docs/demo/reroute.mjs") || return 1
 
 ymmv() {
   env -i \
     HOME="$YMMV_DEMO_HOME" PATH=/usr/bin:/bin TERM="$TERM" \
     VISUAL=zed SHELL=/bin/bash TERM_PROGRAM=WarpTerminal BROWSER=zen MISE_SHELL=bash CLAUDECODE=1 \
     YMMV_NO_UPDATE_CHECK=1 YMMV_DEMO_WORKER="$YMMV_DEMO_WORKER" \
-    "$YMMV_DEMO_NODE" --import "$YMMV_DEMO_ROOT/docs/demo/reroute.mjs" \
+    "$YMMV_DEMO_NODE" --import "$ymmv_demo_reroute" \
     "$YMMV_DEMO_ROOT/packages/cli/dist/cli.js" "$@"
   # A failed command still ends at a shell prompt, which is all a bare Wait checks, so each exit
   # status is logged for record.sh to check.

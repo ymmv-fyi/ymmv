@@ -80,9 +80,11 @@ trap cleanup EXIT
 pnpm -r build
 
 # A fresh login for each run. Its hash goes into this run's copy of the seed, so no token that
-# works anywhere is committed.
-token=$(node -p 'require("node:crypto").randomBytes(32).toString("hex")')
-hash=$(node -p 'require("node:crypto").createHash("sha256").update(process.argv[1]).digest("hex")' "$token")
+# works anywhere is committed. One process makes both, so the token is never on a command line.
+login=$(node -p 'const c = require("node:crypto"), t = c.randomBytes(32).toString("hex");
+  `${t} ${c.createHash("sha256").update(t).digest("hex")}`')
+token=${login% *}
+hash=${login#* }
 sed "s/@TOKEN_HASH@/$hash/" docs/demo/seed.sql >"$tmp/seed.sql"
 
 cd packages/web
