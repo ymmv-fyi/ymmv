@@ -1,6 +1,6 @@
 import { displayUrl } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { urlTitle } from "../src/lib/display-value.ts";
+import { slashSegments, urlTitle } from "../src/lib/display-value.ts";
 
 const RLO = String.fromCodePoint(0x202e);
 
@@ -19,6 +19,37 @@ describe("urlTitle", () => {
   it("a trim alone earns no tooltip, and the title is sanitized like the text", () => {
     expect(urlTitle("  github.com/a  ")).toBeUndefined();
     expect(urlTitle(`https://github.com/${RLO}bidi`)).toBe("https://github.com/bidi");
+  });
+});
+
+describe("slashSegments", () => {
+  it("cuts a URL's display text after each slash", () => {
+    expect(slashSegments("github.com/antfu/dotfiles")).toEqual([
+      "github.com/",
+      "antfu/",
+      "dotfiles",
+    ]);
+  });
+
+  it("cuts after a run of slashes, never inside one: a kept scheme's // stays together", () => {
+    expect(slashSegments("http://x.dev/a")).toEqual(["http://", "x.dev/", "a"]);
+    expect(slashSegments("a.com/x//y///z")).toEqual(["a.com/", "x//", "y///", "z"]);
+  });
+
+  it("a trailing slash ends the last piece and adds no empty one", () => {
+    expect(slashSegments("github.com/antfu/")).toEqual(["github.com/", "antfu/"]);
+    expect(slashSegments("a.com//")).toEqual(["a.com//"]);
+  });
+
+  it("a string with no slash is one piece", () => {
+    expect(slashSegments("github.com")).toEqual(["github.com"]);
+    expect(slashSegments("")).toEqual([""]);
+  });
+
+  it("the pieces join back to the input", () => {
+    for (const text of ["github.com/a/b", "http://x//y/", "/", "//a", "a/b?c=d/e#f/g"]) {
+      expect(slashSegments(text).join("")).toBe(text);
+    }
   });
 });
 
