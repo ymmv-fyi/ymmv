@@ -145,8 +145,15 @@ const DESCRIPTION =
       <a href="https://developers.cloudflare.com/d1/reference/time-travel/">developers.cloudflare.com/d1/reference/time-travel</a>.
       A restore puts the whole database back to a chosen moment, rows deleted since then included.
       In October 2026 Cloudflare's docs put the limit at 7 days back on the Workers Free plan and 30
-      days on Workers Paid, and ymmv.fyi's account was on the Free plan. Nothing in this code runs
-      a restore. A maintainer would have to run one by hand.
+      days on Workers Paid, so 30 days is the longest a deleted row could come back. Nothing in this
+      code runs a restore. A maintainer would have to run one by hand.
+    </p>
+    <p>
+      It doesn't reach outside the database either. The server's failure log lines and Cloudflare's
+      rate-limit counters stay as they are. The CLI removes the <code>token.json</code> it signed in
+      with on the machine you run the delete on. Your other machines keep theirs, holding a token
+      that no longer works, and <code>update-check.json</code> and{" "}
+      <code>dismissed-marks.json</code> stay on every machine.
     </p>
     <p>
       Nothing purges a cache on delete. Pages, JSON and rename redirects go out with{" "}
