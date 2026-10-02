@@ -1,0 +1,60 @@
+name: Bug report
+description: The CLI or ymmv.fyi doesn't do what it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems don't go here. [Report them privately](https://github.com/ymmv-fyi/ymmv/security/advisories/new).
+
+        Never paste a token or password anywhere in this form. Leave out the value of `YMMV_TOKEN`, the contents of `token.json`, anything that starts with `ymmv_` and any password in a `YMMV_API` URL.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - CLI
+        - Website
+        - JSON API
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran or clicked, what you expected, and what you got. Paste the whole output.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ymmv set editor Neovim
+        2. ymmv
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: CLI version
+      description: What `ymmv version` prints. Skip it for a website bug.
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run the CLI
+      description: "`ymmv update` and the update notice depend on this."
+      options:
+        - npx ymmv-cli@latest
+        - npm i -g ymmv-cli
+        - pnpm add -g ymmv-cli
+        - bun add -g ymmv-cli
+        - Something else (say what below)
+  - type: input
+    id: environment
+    attributes:
+      label: OS, terminal and Node version
+      placeholder: macOS 15, Ghostty, Node 22.20
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
