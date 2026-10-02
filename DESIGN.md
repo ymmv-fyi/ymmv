@@ -45,7 +45,7 @@ hex literals (four places must agree: Layout meta, no-FOUC literals, these token
 | `--bg` | `#0e0c09` | `#f6f3ea` | |
 | `--surface` | `#16130e` | `#fffdf8` | cards, raised controls |
 | `--text` | `#ece7dc` (15.8:1) | `#1a1712` (16.1:1) | |
-| `--mid` | `#c4bdae` (10.5) | `#454035` (9.3) | hero secondary tier |
+| `--mid` | `#c4bdae` (10.5) | `#454035` (9.3) | hero secondary tier, data-page prose |
 | `--muted` | `#9a927f` (6.3) | `#5c564a` (6.6) | labels, notes |
 | `--faint` | `#8a8272` (5.1) | `#6e6759` (5.1) | real content (shared diff rows) — must clear AA 4.5:1 on bg AND surface |
 | `--hairline` | `#272219` | `#e4decd` | rules, table rows |
@@ -115,7 +115,7 @@ Top to bottom:
   motion; the finished run is the server markup. It is the only motion on the page.
 - **What you get** (`.get`): the README's four points as plain text in two columns, no icons.
 - **Later** (`.later`): the diff, as a footnote, with the view and diff commands.
-- **Reference** (`.site-foot`): unchanged.
+- **Reference** (`.site-foot`): unchanged, plus a `data` row linking `/privacy`.
 
 Amber on the landing: the published link inside the terminal, the dotfiles link in the page
 preview, and link hovers. No live dot, no accent stripe — the scarcity rule holds.
@@ -197,6 +197,13 @@ the identity.
   amber nudge", `packages/cli/src/render.ts`) — the deliberate exception to empty-state
   accent-scarcity on both surfaces.
 - **Revision stamp** (`.rev`): profiles date themselves — "updated YYYY-MM-DD" under the handle.
+- **Data page** (`.doc`, `/privacy`): what the server, the browser and the CLI keep, written from
+  the code. A reading page in the 680px column: the `ymmv.fyi/privacy` breadcrumb carries the h1
+  like a profile, prose in the session's 14px/1.7 mono at `--mid`, sentence-case h2s behind the
+  `//` section mark, identifiers (`code`, `b`) in ink, prose links amber over a `--faint`
+  underline (amber sits within 3:1 of `--mid` in both themes, so the underline carries the cue
+  that isn't color, and the readout's `--accent-soft` one is too faint for it). Plain statements
+  only: each one names code that does it, so a change to that code re-reads the page.
 
 ## Motion
 

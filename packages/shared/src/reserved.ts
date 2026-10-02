@@ -13,8 +13,10 @@
  * invariant against the real route table.
  */
 
-/** Root path segments the web app reserves (everything else at root is a handle). */
-export const RESERVED_ROUTES = ["404", "api", "login", "logout"] as const;
+/** Root path segments the web app reserves (everything else at root is a handle). `privacy`
+ *  (the /privacy data page) is a GitHub organization's login, and an organization can't sign in,
+ *  so reserving it took no one's handle (checked 2026-10-02). */
+export const RESERVED_ROUTES = ["404", "api", "login", "logout", "privacy"] as const;
 
 /** CLI verb words — reserved as non-claimable handles so `ymmv <verb>` is unambiguous.
  *  `publish` and `version` are here even though flags/bare `ymmv` cover them: both are

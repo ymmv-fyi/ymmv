@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 
 // Every top-level STATIC route the web app serves itself must be a reserved handle.
 //
-//   src/pages/404.astro   → /404   ─┐ static: Astro resolves these ahead of
-//   src/pages/api/…       → /api/… ─┘ the dynamic [handle] page
-//   src/pages/[handle]/…  → /:handle  (dynamic — never a literal segment)
-//   src/pages/index.astro → /         (root — not a handle)
+//   src/pages/404.astro     → /404     ─┐ static: Astro resolves these ahead of
+//   src/pages/privacy.astro → /privacy  │ the dynamic [handle] page
+//   src/pages/api/…         → /api/…   ─┘
+//   src/pages/[handle]/…    → /:handle   (dynamic — never a literal segment)
+//   src/pages/index.astro   → /          (root — not a handle)
 //
 // A handle-shaped static segment missing from RESERVED is claimable at publish, yet its
 // HTML page is shadowed by the static route while the JSON endpoint still serves the

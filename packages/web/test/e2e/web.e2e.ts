@@ -355,6 +355,77 @@ test.describe("landing", () => {
   });
 });
 
+test.describe("privacy page", () => {
+  test("answers 200 with the URL title, the breadcrumb h1 and its own canonical", async ({
+    page,
+  }) => {
+    const res = await page.goto("/privacy");
+    expect(res?.status()).toBe(200);
+    // the short policy: request-invariant HTML that names hashed /_astro assets, like the landing
+    expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
+    await expect(page).toHaveTitle("ymmv.fyi/privacy");
+    await expect(page.locator("h1")).toHaveCount(1);
+    await expect(page.locator(".url h1.handle")).toHaveText("privacy");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://ymmv.fyi/privacy",
+    );
+    await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+    await expect(page.locator(".doc h2").first()).toHaveText("What the server stores");
+  });
+
+  test("keeps the // section mark out of each heading's accessible name", async ({ page }) => {
+    // toHaveText reads textContent, which never includes ::before, so only the role name sees
+    // the mark: without its empty alt text, a screen reader reads "slash slash" before every h2
+    await page.goto("/privacy");
+    await expect(
+      page.getByRole("heading", { level: 2, name: "What the server stores", exact: true }),
+    ).toHaveCount(1);
+  });
+
+  test("the landing's reference footer links it", async ({ page }) => {
+    await page.goto("/");
+    const link = page.locator('.site-foot a[href="/privacy"]');
+    await expect(link).toHaveText("ymmv.fyi/privacy");
+    await link.click();
+    await expect(page).toHaveURL(/\/privacy$/);
+    await expect(page.locator(".url h1.handle")).toHaveText("privacy");
+  });
+
+  test("ends on where to ask, with the private advisory form for anything sensitive", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const last = page.locator(".doc > p").last();
+    await expect(last.locator('a[href="https://github.com/ymmv-fyi/ymmv/issues"]')).toHaveCount(1);
+    await expect(
+      last.locator('a[href="https://github.com/ymmv-fyi/ymmv/security/advisories/new"]'),
+    ).toHaveCount(1);
+  });
+
+  test("is Worker-rendered, so the canonical-origin redirect reaches it", async ({ request }) => {
+    // A prerendered page would be a static asset, served ahead of the Worker: www would then
+    // answer 200 here instead of redirecting, and the page would never get HSTS.
+    const www = await request.get("/privacy", {
+      headers: { host: "www.ymmv.fyi" },
+      maxRedirects: 0,
+    });
+    expect(www.status()).toBe(301);
+    expect(www.headers().location).toBe("https://ymmv.fyi/privacy");
+  });
+
+  test("never scrolls sideways on a small phone", async ({ page }) => {
+    // code spans and prose links wrap anywhere by CSS, so this catches the rest: a long unbroken
+    // token in plain prose, a <b>, a heading or the breadcrumb, or a new element wider than 320px
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.goto("/privacy");
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
+});
+
 test.describe("routing", () => {
   test("301s a renamed handle to the current one (HTML + JSON)", async ({ request }) => {
     const html = await request.get("/antfuold", { maxRedirects: 0 });

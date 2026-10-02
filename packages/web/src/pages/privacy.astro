@@ -1,0 +1,202 @@
+---
+import Layout from "../components/Layout.astro";
+import { readCacheControl } from "../lib/profile-read.ts";
+
+// What the server keeps, written from the code (DESIGN.md → Components & States → Data page). Each
+// statement describes code as it is today. Change any of it, re-read this page:
+//   web, from packages/web: the schema (migrations/), sign-in and revoke (src/lib/auth.ts,
+//     src/lib/github.ts, src/lib/users.ts, src/pages/api/v1/auth/*), publish and delete
+//     (src/pages/api/v1/profile.ts), the public read, its cache header and the rename redirects
+//     (src/pages/api/v1/u/[handle].ts, src/lib/profile-read.ts, src/pages/[handle]/index.astro,
+//     src/pages/[handle]/vs/[viewer].astro), what a page shows (src/components/Profile.astro,
+//     src/components/Diff.astro), the log lines (every console.error, and wrangler.jsonc's
+//     observability), the rate limits (src/lib/rate-limit.ts, and infra/waf-ratelimit.sh at the
+//     repo root), browser storage (src/components/Layout.astro, src/components/TerminalRun.astro),
+//     fonts and no sessions (astro.config.mjs);
+//   cli, from packages/cli/src: the local files (token-store.ts, update-check.ts,
+//     dismissals.ts), sign-in, revoke and logout (device-flow.ts, auth-http.ts, index.ts),
+//     detection (detect.ts), what a publish sends and when it asks (api.ts, commands.ts), the CI
+//     and same-server checks (config.ts), ymmv update (update.ts).
+// What the code can't show (Cloudflare's own log contents and retention) is named as outside it,
+// never promised.
+//
+// Server-rendered on purpose: a prerendered page is a static asset, which Workers Static Assets
+// serves ahead of the Worker, so the middleware's www/http redirect and HSTS would never see it.
+// `privacy` is in RESERVED_ROUTES (@ymmv/shared), so no handle can claim this path.
+// Request-invariant HTML that names hashed /_astro assets: the short policy, like the landing.
+Astro.response.headers.set("cache-control", readCacheControl("notfound"));
+
+const REPO = "https://github.com/ymmv-fyi/ymmv";
+const DESCRIPTION =
+  "What the ymmv.fyi server stores when you sign in and publish, what it doesn't store, and what ymmv delete removes.";
+---
+
+<Layout
+  title="ymmv.fyi/privacy"
+  description={DESCRIPTION}
+  canonicalPath="/privacy"
+>
+  <article class="doc">
+    <div class="url"><a href="/">ymmv.fyi</a>/<h1 class="handle">privacy</h1></div>
+
+    <p class="doc-lede">
+      This page lists what ymmv.fyi and its CLI keep about you. It is written from the code, not
+      as a legal policy, and the code is public at <a href={REPO}>github.com/ymmv-fyi/ymmv</a> if
+      you want to check a line.
+    </p>
+
+    <h2>What the server stores</h2>
+    <p>The database (Cloudflare D1) keeps your data in four tables:</p>
+    <ul>
+      <li>
+        <code>users</code>: your GitHub account id, your GitHub username as your handle, your extra
+        lines, when you last published (<code>updated_at</code>) and when you first signed in
+        (<code>created_at</code>). Signing in creates this row, even if you never publish.
+      </li>
+      <li><code>profile_entries</code>: the stack values you published, one row per key.</li>
+      <li>
+        <code>tokens</code>: one row per sign-in, with a SHA-256 hash of the token, your account id,
+        and when the token was made and revoked. The server stores the hash, never the token.
+      </li>
+      <li>
+        <code>handle_history</code>: a handle you stopped using, by renaming on GitHub or by
+        running <code>ymmv delete</code>, with your account id and the date. After you rename on
+        GitHub and sign in again, the old address redirects to the new one while your profile is
+        published.
+      </li>
+    </ul>
+    <p>
+      Tokens don't expire. Each one works until it is revoked: <code>ymmv logout</code> revokes the
+      one on that machine, signing in again revokes the one it replaces, and{" "}
+      <code>ymmv delete</code> revokes all of yours. A revoked row stays in the table.
+    </p>
+
+    <h2>What the server doesn't store</h2>
+    <ul>
+      <li>
+        <b>Your GitHub access token.</b> During sign-in the CLI gets one from GitHub and sends it to
+        the server once. The server asks GitHub which account it belongs to, keeps the id and
+        username from the answer, and drops the token. The CLI doesn't save it either.
+      </li>
+      <li>
+        <b>Your email address, name or avatar.</b> The server keeps only your account id and
+        username from GitHub's answer.
+      </li>
+      <li>
+        <b>Your IP address, browser or referrer.</b> None of them goes into the database or into
+        the server's own log lines.
+      </li>
+    </ul>
+    <p>
+      Sign-in asks GitHub for no OAuth scopes, which limits that GitHub token to read-only access
+      to public information. Neither the CLI nor the server revokes it afterwards. To remove ymmv's
+      access on GitHub's side, revoke it at{" "}
+      <a href="https://github.com/settings/applications">github.com/settings/applications</a>. That
+      doesn't sign you out of ymmv. <code>ymmv logout</code> signs out the machine you run it on.
+    </p>
+
+    <h2>Logs and rate limits</h2>
+    <p>
+      The server writes a log line only when a request fails. A few of those lines name the handle
+      or GitHub account id involved, and none contains a token. They go to Cloudflare Workers Logs,
+      which <code>wrangler.jsonc</code> turns on. Workers Logs also keeps its own record of each
+      request, and this code doesn't set what Cloudflare puts in that record or how long it keeps
+      it.
+    </p>
+    <p>
+      To rate-limit requests, Cloudflare counts sign-ins and the CLI's signed-in calls per IP
+      address, and sign-ins, publishes and deletes per GitHub account id. The counters live in
+      Cloudflare, not in the database.
+    </p>
+
+    <h2>What is public</h2>
+    <p>
+      Your page at <code>ymmv.fyi/&lt;handle&gt;</code> is public, and so is the same data as JSON
+      at <code>ymmv.fyi/api/v1/u/&lt;handle&gt;</code>, which any website can fetch. Both show your
+      handle, your stack, your extra lines and when you last published. Neither shows your GitHub
+      account id. A diff page, <code>ymmv.fyi/&lt;handle&gt;/vs/&lt;you&gt;</code>, shows your
+      values next to someone else's.
+    </p>
+
+    <h2>What deleting your profile removes</h2>
+    <p><code>ymmv delete</code> asks first, unless you pass <code>-y</code>, then in one step it:</p>
+    <ul>
+      <li>deletes your <code>profile_entries</code> rows,</li>
+      <li>
+        clears the handle, extra lines and <code>updated_at</code> on your <code>users</code> row,
+      </li>
+      <li>revokes every token on your account, which signs you out on every machine,</li>
+      <li>records the handle in <code>handle_history</code>.</li>
+    </ul>
+    <p>
+      Your page and its JSON answer 404 after that, until you publish again. What stays: the{" "}
+      <code>users</code> row with your GitHub account id and the date you first signed in, your
+      revoked <code>tokens</code> rows, and your <code>handle_history</code> rows. The{" "}
+      <code>users</code> row stays so that signing in again finds the same account.
+    </p>
+    <p>
+      Nothing purges a cache on delete. Pages, JSON and rename redirects go out with{" "}
+      <code>s-maxage=30, stale-while-revalidate=86400</code>, so a cache that follows those
+      headers can serve the old copy for up to a day. Copies someone already saved are out of the
+      site's reach.
+    </p>
+    <p>
+      <code>ymmv logout</code> does less. It revokes the token on that machine and deletes the local
+      copy, and your page stays up.
+    </p>
+
+    <h2>In your browser</h2>
+    <p>
+      The site sets no cookies and loads no analytics or third-party scripts. Its fonts are
+      downloaded when the site is built and served from ymmv.fyi.
+    </p>
+    <p>
+      The site keeps two keys in <code>localStorage</code>: <code>ymmv-theme</code>, your light or
+      dark choice, and <code>ymmv-you</code>, the last handle you submitted in a diff form. When the
+      home page plays its intro, it sets <code>ymmv-landing-run</code> in{" "}
+      <code>sessionStorage</code> so the intro plays once per visit.
+    </p>
+
+    <h2>On your machine</h2>
+    <p>
+      The CLI keeps three files in <code>~/.config/ymmv</code> on Linux (or{" "}
+      <code>$XDG_CONFIG_HOME/ymmv</code>), <code>~/Library/Preferences/ymmv</code> on macOS and{" "}
+      <code>%APPDATA%\ymmv\Config</code> on Windows:
+    </p>
+    <ul>
+      <li>
+        <code>token.json</code>: your ymmv token, handle, GitHub account id and the server address.
+        On Linux and macOS only your user can read it (mode 0600).
+      </li>
+      <li>
+        <code>update-check.json</code>: when the CLI last checked for a new version, and what it
+        found.
+      </li>
+      <li>
+        <code>dismissed-marks.json</code>: detection mismatches you told it to stop pointing out.
+      </li>
+    </ul>
+    <p>
+      Detection runs on your machine and only fills in the preview. A publish sends what the
+      preview showed: your handle, your stack values and your extra lines. In a terminal{" "}
+      <code>ymmv</code> asks before it sends, and <code>ymmv -y</code> sends without asking.{" "}
+      <code>ymmv set</code> and <code>ymmv unset</code> publish their change right away, with no
+      preview and no confirmation.
+    </p>
+    <p>
+      Besides ymmv.fyi, the CLI talks to github.com when you sign in. It asks registry.npmjs.org for
+      the latest version once a day, or six hours after a failed check. Set{" "}
+      <code>YMMV_NO_UPDATE_CHECK=1</code> or <code>NO_UPDATE_NOTIFIER=1</code> to turn that off, and
+      it never runs under CI. <code>ymmv update</code> runs your package manager, which talks to its
+      own registry.
+    </p>
+
+    <h2>Questions</h2>
+    <p>
+      Ask in a GitHub issue at <a href={`${REPO}/issues`}>github.com/ymmv-fyi/ymmv/issues</a>. For
+      anything sensitive, such as a security problem or something you'd rather not post in public,
+      use the private advisory form at{" "}
+      <a href={`${REPO}/security/advisories/new`}>github.com/ymmv-fyi/ymmv/security/advisories/new</a>.
+    </p>
+  </article>
+</Layout>
