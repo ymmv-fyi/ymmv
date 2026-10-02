@@ -144,6 +144,15 @@ YMMV_API=http://localhost:8788 node packages/cli/dist/cli.js bardisty
 Stop it before `test:e2e`, which serves its own fresh build on the same port and
 refuses to start while anything holds it.
 
+`pnpm demo` re-records `docs/demo.gif` from `docs/demo/demo.tape`. It runs the
+tape against a local Worker with a demo account, so it needs no sign-in and sends
+nothing to ymmv.fyi. It needs [VHS](https://github.com/charmbracelet/vhs) 0.10.0,
+ttyd and ffmpeg, on Linux, WSL or macOS. Maintainers re-record the gif when they
+cut a release, so leave it out of a pull request. If you ran `pnpm demo`, restore
+it with `git restore --source=HEAD --staged --worktree docs/demo.gif`. A change to
+the first publish's questions fails `packages/cli/test/demo-tape.test.ts` until
+the tape's `Wait` lines match.
+
 Versions come from tags. Every `package.json` stays at `0.0.0`, and CI stamps
 the real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
 
