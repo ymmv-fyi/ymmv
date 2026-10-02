@@ -12,7 +12,8 @@ name: Release
 #                              gh workflow run release.yml --ref main -f environment=production -f dry_run=false
 #   • any other workflow_dispatch → rehearsal: pick an environment + dry-run (default: staging,
 #                            dry-run). The "tagged-release dry-run hits staging" check is this, with
-#                            defaults. Staging with dry_run off really deploys staging.
+#                            defaults. A dry run works from any ref. Staging with dry_run off really
+#                            deploys staging, from main only.
 #
 # PRE-TAG CHECKLIST (a `vX.Y.Z` tag deploys STRAIGHT to production — there is no staging gate in the
 # tag path). Sign-in fails CLOSED without its secret, and the gate job below never exercises the mint
@@ -23,8 +24,8 @@ name: Release
 #        wrangler secret put GITHUB_CLIENT_SECRET --env production
 #      Value = the ymmv GitHub OAuth app's client secret (GitHub → Settings → Developer settings →
 #      OAuth Apps → ymmv). GITHUB_CLIENT_ID is a committed @ymmv/shared constant, not a secret.
-#   2. Rehearse on staging (workflow_dispatch → staging) and run a real `ymmv login` against it. Only
-#      tag once that succeeds.
+#   2. Deploy staging from main and run a real `ymmv login` against it. Only tag once that succeeds.
+#        gh workflow run release.yml --ref main -f environment=staging -f dry_run=false
 on:
   push:
     tags: ["v*"]
@@ -75,11 +76,14 @@ jobs:
             env_name="${{ inputs.environment }}"
             dry="${{ inputs.dry_run }}"
             version="0.0.0-dispatch.${GITHUB_RUN_NUMBER}"
-            # A dispatch really deploys production only from main: that is the web-only deploy, and
-            # main is what was reviewed and merged. From any other ref it stops here. It does not turn
-            # into a dry run, which would report a deploy that never happened.
-            if [ "$env_name" = "production" ] && [ "$dry" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
-              echo "::error::A production deploy by dispatch runs from main only (got $GITHUB_REF_NAME). Dispatch from main, or keep dry_run on."
+            # A dispatch really deploys only from main: for production that is the web-only deploy,
+            # and main is what was reviewed and merged. Any other ref fails here, so deploy-worker
+            # never starts. The environments' ref rules would refuse a branch only once deploy-worker
+            # starts, and production admits v* tags, so for a dispatch from a tag this is the only
+            # check on the ref. It does not turn into a dry run, which would report a deploy that
+            # never happened.
+            if [ "$dry" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::A deploy by dispatch runs from main only (got $GITHUB_REF_NAME). Dispatch from main, or keep dry_run on."
               exit 1
             fi
           fi
@@ -157,6 +161,11 @@ jobs:
     needs: [prep, gate, deploy-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A tag push publishes from the npm environment, which holds no secrets and admits only v* tags.
+    # The npm Trusted Publisher names this environment, so npm refuses a publish from a job outside
+    # it, and no run from a branch, main included, can enter it. A dispatch only dry-runs the
+    # publish, so it runs outside any environment.
+    environment: ${{ github.event_name == 'push' && 'npm' || '' }}
     permissions:
       contents: read
       id-token: write # OIDC: Trusted Publishing auth + provenance
@@ -215,9 +224,11 @@ jobs:
     needs: [prep, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    # The Cloudflare secrets live in the staging and production environments, not the repo, so only
+    # main (and v* tags, for production) can read them. A dry run needs no secrets and runs outside
+    # both, from any ref. Only the two steps that talk to Cloudflare read them, Apply D1 migrations
+    # and Deploy, so the install and the build never run with the token in their environment.
+    environment: ${{ needs.prep.outputs.dry_run == 'false' && needs.prep.outputs.environment || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -272,10 +283,16 @@ jobs:
       # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
       - name: Apply D1 migrations
         if: needs.prep.outputs.dry_run == 'false'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: pnpm exec wrangler d1 migrations apply ${{ needs.prep.outputs.db_name }} --env ${{ needs.prep.outputs.environment }} --remote
         working-directory: packages/web
       - name: Deploy
         if: needs.prep.outputs.dry_run == 'false'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: pnpm exec wrangler deploy -c dist/server/wrangler.json
         working-directory: packages/web
       # DRY RUN: validate the env-baked config + bundle without uploading (no secrets required).

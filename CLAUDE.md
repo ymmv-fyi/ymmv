@@ -32,7 +32,10 @@ one of them changes here, update it there too.
   profile changed since the read), so a change there deploys the Worker
   **before** the CLI tag (release.yml already orders it; never roll the Worker
   back behind a published CLI).
-- **Flag every manual step explicitly:** Cloudflare Worker secrets/env, D1
+- **Flag every manual step explicitly:** Cloudflare Worker secrets/env, the
+  `staging`/`production` GitHub environment secrets (`CLOUDFLARE_API_TOKEN`,
+  `CLOUDFLARE_ACCOUNT_ID`; `packages/web/DEPLOY.md`), the npm Trusted Publisher's
+  environment (`npm`), D1
   migrations (new file in `packages/web/migrations` + apply local for tests
   **and** prod on deploy), the `RL_WRITE`/`RL_AUTH` bindings, the zone WAF
   rate-limit rule (`infra/waf-ratelimit.sh`, applied before the Worker deploy

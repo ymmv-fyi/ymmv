@@ -14,8 +14,8 @@ live site (the home page, a `whoami` that reads D1, and a junk-token sign-in tha
 only when `GITHUB_CLIENT_SECRET` is set and right). Nothing goes to npm and no GitHub Release is cut. It
 needs no Cloudflare credentials on your machine.
 
-- It deploys `main`'s HEAD, and only from `main`. From any other ref, `dry_run=false` with
-  `environment=production` fails in `prep`.
+- It deploys `main`'s HEAD, and only from `main`. From any other ref, a dispatch with
+  `dry_run=false` fails in `prep`, for staging as well as production.
 - The run deploys the commit it captured. If `main` has moved by the time it deploys, it stops, so
   a re-run of an old run can't put an old build back. Dispatch again.
 - The commit needs a green CI run first, because e2e runs only in `ci.yml`. Right after a merge,
@@ -30,6 +30,28 @@ needs no Cloudflare credentials on your machine.
   the web deploy again after the release.
 - The Worker-before-CLI rule below holds for a dispatch too: when a web deploy precedes a CLI
   tag, deploy first, tag second.
+
+## Where the deploy credentials live
+
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are secrets of the repo's `staging` and
+`production` environments, not repo secrets. `production` admits `main` and `v*` tags, and
+`staging` admits `main`, so a workflow run from any other ref can't read them. Only the two steps
+that talk to Cloudflare read them, `Apply D1 migrations` and `Deploy`, so the install and the build
+never run with the token. A dry run needs neither secret and runs outside both environments.
+
+The npm Trusted Publisher for `ymmv-cli` names a third environment, `npm`, which holds no secrets
+and admits only `v*` tags. `publish-cli` runs there on a tag push, so no run from a branch, `main`
+included, can publish. Both `npm` and `production` admit any `v*` tag, and the gate's tag check
+runs from the tagged commit's own workflow, so the "Protect release tags" ruleset, which lets only
+admins create, move or delete a `v*` tag, is part of this boundary. So is the "Protect main"
+ruleset, because `staging` and `production` admit `main`.
+
+After rotating the Cloudflare token, set it in both environments:
+
+```sh
+gh secret set CLOUDFLARE_API_TOKEN --env production
+gh secret set CLOUDFLARE_API_TOKEN --env staging
+```
 
 ## By hand (fallback)
 
