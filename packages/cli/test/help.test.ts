@@ -197,3 +197,25 @@ describe("release.yml publishes the CLI only after the Worker deploys", () => {
     expect(release).toContain("github.event_name == 'push'");
   });
 });
+
+// The Cloudflare token and the npm Trusted Publisher are scoped to the staging and production
+// environments, which admit only main and v* tags. A job that drops its environment: line reads no
+// Cloudflare secret, and the npm publish is refused, after the Worker has already deployed.
+describe("release.yml deploys and publishes from an environment", () => {
+  const wf = readFileSync(
+    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const environment = (name: string) =>
+    wf
+      .match(new RegExp(`^ {2}${name}:\n((?:(?: {4}.*)?\n)*)`, "m"))?.[1]
+      ?.match(/^ {4}environment: (.+)$/m)?.[1];
+
+  it("deploy-worker deploys from the target environment", () => {
+    expect(environment("deploy-worker")).toContain("needs.prep.outputs.environment");
+  });
+
+  it("publish-cli publishes a tag push from production", () => {
+    expect(environment("publish-cli")).toContain("github.event_name == 'push' && 'production'");
+  });
+});

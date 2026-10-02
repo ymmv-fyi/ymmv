@@ -31,6 +31,21 @@ needs no Cloudflare credentials on your machine.
 - The Worker-before-CLI rule below holds for a dispatch too: when a web deploy precedes a CLI
   tag, deploy first, tag second.
 
+## Where the deploy credentials live
+
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are secrets of the repo's `staging` and
+`production` environments, not repo secrets. `production` admits `main` and `v*` tags, and
+`staging` admits `main`, so a workflow run from any other ref can't read them. A dry run needs
+neither and runs outside both environments. The npm Trusted Publisher for `ymmv-cli` names the
+`production` environment, so a tag push is the only run that can publish.
+
+After rotating the Cloudflare token, set it in both environments:
+
+```sh
+gh secret set CLOUDFLARE_API_TOKEN --env production
+gh secret set CLOUDFLARE_API_TOKEN --env staging
+```
+
 ## By hand (fallback)
 
 The rest of this file is the manual fallback for the `deploy-worker` job, for when Actions can't

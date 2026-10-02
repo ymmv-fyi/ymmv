@@ -12,7 +12,8 @@ name: Release
 #                              gh workflow run release.yml --ref main -f environment=production -f dry_run=false
 #   • any other workflow_dispatch → rehearsal: pick an environment + dry-run (default: staging,
 #                            dry-run). The "tagged-release dry-run hits staging" check is this, with
-#                            defaults. Staging with dry_run off really deploys staging.
+#                            defaults. A dry run works from any ref. Staging with dry_run off really
+#                            deploys staging, from main only.
 #
 # PRE-TAG CHECKLIST (a `vX.Y.Z` tag deploys STRAIGHT to production — there is no staging gate in the
 # tag path). Sign-in fails CLOSED without its secret, and the gate job below never exercises the mint
@@ -75,11 +76,13 @@ jobs:
             env_name="${{ inputs.environment }}"
             dry="${{ inputs.dry_run }}"
             version="0.0.0-dispatch.${GITHUB_RUN_NUMBER}"
-            # A dispatch really deploys production only from main: that is the web-only deploy, and
-            # main is what was reviewed and merged. From any other ref it stops here. It does not turn
+            # A dispatch really deploys only from main: for production that is the web-only deploy,
+            # and main is what was reviewed and merged. The staging and production environments hold
+            # the Cloudflare token and admit only main (and v* tags, for production), so deploy-worker
+            # would refuse another ref after the whole gate ran. It stops here instead. It does not turn
             # into a dry run, which would report a deploy that never happened.
-            if [ "$env_name" = "production" ] && [ "$dry" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
-              echo "::error::A production deploy by dispatch runs from main only (got $GITHUB_REF_NAME). Dispatch from main, or keep dry_run on."
+            if [ "$dry" != "true" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::A deploy by dispatch runs from main only (got $GITHUB_REF_NAME). Dispatch from main, or keep dry_run on."
               exit 1
             fi
           fi
@@ -157,6 +160,10 @@ jobs:
     needs: [prep, gate, deploy-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A tag push publishes from the production environment, which admits only v* tags and main. The
+    # npm Trusted Publisher names this environment, so npm refuses a publish from a job outside it.
+    # A dispatch only dry-runs the publish, so it runs outside any environment.
+    environment: ${{ github.event_name == 'push' && 'production' || '' }}
     permissions:
       contents: read
       id-token: write # OIDC: Trusted Publishing auth + provenance
@@ -215,6 +222,10 @@ jobs:
     needs: [prep, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The Cloudflare secrets live in the staging and production environments, not the repo, so only
+    # main (and v* tags, for production) can read them. A dry run needs no secrets and runs outside
+    # both, from any ref.
+    environment: ${{ needs.prep.outputs.dry_run == 'false' && needs.prep.outputs.environment || '' }}
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
