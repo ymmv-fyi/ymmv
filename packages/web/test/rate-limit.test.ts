@@ -172,7 +172,7 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
     // Pre-trip the SAME per-identity key the mint handler keys on (post-introspection).
     expect((await exhaust(writeRateLimitKey(GID_MINT_CAP))).denied).toBe(true);
 
-    // Carry a `revoke` too: the retire rides in the token batch, so a 429 must leave it live.
+    // Carry a `revoke` too: the retire rides in the sign-in batch, so a 429 must leave it live.
     const res = await MINT(mintCtx("gho_x", undefined, TOK_FRESH));
     expect(res.status).toBe(429);
     expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
@@ -208,7 +208,7 @@ describe("mint rate limiting (POST /api/v1/auth/token)", () => {
     expect(body.message).toBeTruthy();
     expect(body.message).not.toContain("—");
     expect(fetchFn).not.toHaveBeenCalled(); // IP cap short-circuits before GitHub is ever hit
-    expect(await isLive(TOK_FRESH)).toBe(true); // and before the token batch
+    expect(await isLive(TOK_FRESH)).toBe(true); // and before the sign-in batch
   });
 
   it("a malformed revoke is refused BEFORE the IP cap is consulted (400, not 429, on a tripped IP)", async () => {
