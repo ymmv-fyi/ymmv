@@ -8,7 +8,8 @@ name: Release
 #
 # PRE-TAG CHECKLIST (a `vX.Y.Z` tag deploys STRAIGHT to production — there is no staging gate in the
 # tag path). Sign-in fails CLOSED without its secret, and the gate job below never exercises the mint
-# path, so a missing secret is a SILENT total login outage. Before tagging:
+# path. deploy-worker's smoke does, but only once the Worker is live: it stops the npm publish, not
+# the login outage. Before tagging:
 #   1. Set the Worker secret in BOTH envs (once, and after any rotation):
 #        wrangler secret put GITHUB_CLIENT_SECRET --env staging
 #        wrangler secret put GITHUB_CLIENT_SECRET --env production
@@ -83,6 +84,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tag check below walks history to main
+      # A tag deploys straight to production, so it has to name a commit that is on main and that
+      # the changelog was cut for. The cut lands through a rebase-merged PR, which gives the merged
+      # commit a new sha: a tag on the cut branch's own commit would release code main never got.
+      # A tag with no changelog section is a mistyped version or a release that was never cut.
+      - name: Check the tag names a cut commit on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || { echo "::error::$GITHUB_REF_NAME names $GITHUB_SHA, which is not on main."; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" 'index($0, "## [" ver "]") == 1 { found = 1 } END { exit !found }' CHANGELOG.md \
+            || { echo "::error::CHANGELOG.md has no section for $version."; exit 1; }
+          # This release deploys the tagged commit. If main has web changes past it and a web-only
+          # deploy already put them live, production goes back to the tagged build.
+          git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- packages/web packages/shared \
+            || echo "::warning::main has web changes after $GITHUB_REF_NAME. If they were already deployed, dispatch the web deploy again after this release."
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -146,12 +165,22 @@ jobs:
       - name: Publish to npm (Trusted Publishing + provenance)
         if: github.event_name == 'push' && needs.prep.outputs.dry_run == 'false'
         # No NODE_AUTH_TOKEN: auth is OIDC via the npm Trusted Publisher (id-token: write above).
-        # Provenance is automatic under Trusted Publishing.
-        run: npm publish
+        # Provenance is automatic under Trusted Publishing. A prerelease (v1.2.0-rc.1) goes out under
+        # the `next` dist-tag: npm refuses one without a tag, by which point the Worker is deployed,
+        # and `latest` has to stay on the newest stable release.
+        env:
+          VERSION: ${{ needs.prep.outputs.version }}
+        run: |
+          case "$VERSION" in
+            *-*) npm publish --tag next ;;
+            *) npm publish ;;
+          esac
         working-directory: packages/cli
+      # --tag: a dispatch stamps a prerelease version (0.0.0-dispatch.N), and npm refuses to publish
+      # one without a tag, dry run included. Without it every rehearsal ended red.
       - name: Publish (dry run)
         if: github.event_name != 'push' || needs.prep.outputs.dry_run != 'false'
-        run: npm publish --dry-run
+        run: npm publish --dry-run --tag dispatch
         working-directory: packages/cli
 
   # Deploy the unified Worker. The CLOUDFLARE_ENV build bakes the right name/bindings/routes into the
@@ -221,6 +250,36 @@ jobs:
         if: needs.prep.outputs.dry_run != 'false'
         run: pnpm exec wrangler deploy -c dist/server/wrangler.json --dry-run
         working-directory: packages/web
+      # Production answers, reads D1 and can check a sign-in:
+      #   • whoami with a junk bearer looks the token up in D1 and answers 401 (500 if the read fails).
+      #     No user's profile is read: a profile can be renamed or deleted.
+      #   • a sign-in with a junk token is the check on GITHUB_CLIENT_SECRET that the header asks
+      #     for: 401 only when the secret is set and right (unset answers 500, wrong answers 503).
+      # It runs on a production dry run too, against whatever is live, so the smoke itself can be
+      # rehearsed. A failure stops publish-cli and leaves the new Worker live with the old CLI, the
+      # backward-compatible skew: look at the site, then `gh run rerun <id> --failed`. A GitHub API
+      # incident also fails the sign-in check (503).
+      - name: Smoke production
+        if: needs.prep.outputs.environment == 'production'
+        env:
+          DRY_RUN: ${{ needs.prep.outputs.dry_run }}
+        run: |
+          check() { # check <expected status> <label> <curl args...>
+            want=$1; label=$2; shift 2
+            for attempt in 1 2 3; do
+              got=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$@") || true
+              [ "$got" = "$want" ] && { echo "$label: $got"; return 0; }
+              sleep 5
+            done
+            echo "::error::$label answered $got, expected $want"
+            return 1
+          }
+          # Give a fresh deploy a moment to reach the edge, so the answers come from the new Worker.
+          if [ "$DRY_RUN" = "false" ]; then sleep 15; fi
+          check 200 "home" https://ymmv.fyi/
+          check 401 "whoami with a junk bearer" -H 'authorization: Bearer release-smoke' https://ymmv.fyi/api/v1/auth/whoami
+          check 401 "sign-in with a junk token" -X POST -H 'content-type: application/json' \
+            -d '{"access_token":"release-smoke"}' https://ymmv.fyi/api/v1/auth/token
 
   # Cut a GitHub Release for the tag, with that version's CHANGELOG section as the notes. Runs LAST and
   # only after publish-cli (so transitively after the Worker deploy): a Release is the "fully shipped"
