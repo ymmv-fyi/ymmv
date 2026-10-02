@@ -33,8 +33,12 @@ if [ "$rc" -ne 7 ]; then
 fi
 
 tmp=$(mktemp -d)
+# Where a failed recording is kept: outside the repo, so it can't dirty the tree or be committed,
+# and under one name, so each failed run replaces the last instead of piling up.
+failed=${TMPDIR:-/tmp}/ymmv-demo-failed.gif
 worker=
 cleanup() {
+  local status=$?
   # `set -m` below gives wrangler its own process group, so this also stops its workerd. The group
   # has to be gone before the D1 it writes to is deleted.
   if [ -n "$worker" ]; then
@@ -44,6 +48,21 @@ cleanup() {
       sleep 0.25
     done
     kill -KILL -- "-$worker" 2>/dev/null || true
+  fi
+  # A failed run says why before the temp directory goes: what each `ymmv` exited with, the end of
+  # the Worker's log, and the gif when VHS got as far as writing one. A Wait that timed out writes
+  # none; VHS's own error then quotes the line the terminal was on.
+  if [ "$status" -ne 0 ]; then
+    if [ -s "$tmp/home/statuses" ]; then
+      echo "demo: the recording's ymmv commands exited with: $(tr '\n' ' ' <"$tmp/home/statuses")" >&2
+    fi
+    if [ -s "$tmp/wrangler.log" ]; then
+      echo "demo: the local Worker's log ends with:" >&2
+      tail -n 20 "$tmp/wrangler.log" >&2
+    fi
+    if [ -s "$tmp/demo.gif" ] && mv "$tmp/demo.gif" "$failed"; then
+      echo "demo: the failed recording is at $failed" >&2
+    fi
   fi
   rm -rf "$tmp"
 }
@@ -70,12 +89,11 @@ cd "$root"
 ready() { [ "$(probe /api/v1/u/LottieDottieDa)" = 200 ]; }
 for _ in $(seq 60); do
   ready && break
-  kill -0 "$worker" 2>/dev/null || { cat "$tmp/wrangler.log" >&2; exit 1; }
+  kill -0 "$worker" 2>/dev/null || { echo "demo: the local Worker stopped" >&2; exit 1; }
   sleep 1
 done
 ready || {
   echo "demo: the local Worker didn't answer within 60 seconds" >&2
-  cat "$tmp/wrangler.log" >&2
   exit 1
 }
 
