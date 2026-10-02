@@ -2,6 +2,15 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **`ymmv update` no longer reports success after updating a copy you don't run.** When the npm,
+  pnpm or bun on your `PATH` belongs to a different install than the `ymmv` you ran, the update
+  used to land in that other install and leave yours on the old version. It now updates nothing,
+  prints where your copy runs from and where the update would have gone, and exits with an error.
+  Under WSL, a copy installed on the Windows side is named as one: update it from Windows.
+
 ## [0.15.0] - 2026-10-01
 
 ### Changed

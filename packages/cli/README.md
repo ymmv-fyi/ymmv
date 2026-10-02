@@ -117,7 +117,10 @@ Some of these have more to them:
   when the output is piped or redirected.
 - `ymmv update` runs the matching upgrade for npm, pnpm and bun global
   installs. Under npx it prints the command to use instead. Anything else gets
-  the commands to run by hand.
+  the commands to run by hand. If the npm, pnpm or bun on your `PATH` isn't
+  the one that installed the copy you're running, it updates nothing and
+  prints both locations. Under WSL that is often a copy installed on the
+  Windows side: update that one from Windows.
 
 ## Limits
 
