@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CURATED_KEYS } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { DETECTED_KEYS } from "../src/detect.js";
@@ -198,24 +200,160 @@ describe("release.yml publishes the CLI only after the Worker deploys", () => {
   });
 });
 
-// The Cloudflare token and the npm Trusted Publisher are scoped to the staging and production
-// environments, which admit only main and v* tags. A job that drops its environment: line reads no
-// Cloudflare secret, and the npm publish is refused, after the Worker has already deployed.
+// The Cloudflare token lives in the staging and production environments, and the npm Trusted
+// Publisher names production. Staging admits only main, and production admits main and v* tags.
+// A real deploy outside its environment reads no Cloudflare secret, and npm refuses a publish from
+// outside production, after the Worker has already deployed. A dry run inside one is refused on
+// any other ref. Each expression is pinned whole, because an inverted or dropped condition still
+// names the environment.
 describe("release.yml deploys and publishes from an environment", () => {
   const wf = readFileSync(
     new URL("../../../.github/workflows/release.yml", import.meta.url),
     "utf8",
   );
+  // The expression inside the job-level environment: line's ${{ }}, or undefined.
   const environment = (name: string) =>
     wf
       .match(new RegExp(`^ {2}${name}:\n((?:(?: {4}.*)?\n)*)`, "m"))?.[1]
-      ?.match(/^ {4}environment: (.+)$/m)?.[1];
+      ?.match(/^ {4}environment: \$\{\{ (.+) \}\}$/m)?.[1];
 
-  it("deploy-worker deploys from the target environment", () => {
-    expect(environment("deploy-worker")).toContain("needs.prep.outputs.environment");
+  it("deploy-worker enters the target environment only for a real deploy", () => {
+    expect(environment("deploy-worker")).toBe(
+      "needs.prep.outputs.dry_run == 'false' && needs.prep.outputs.environment || ''",
+    );
   });
 
-  it("publish-cli publishes a tag push from production", () => {
-    expect(environment("publish-cli")).toContain("github.event_name == 'push' && 'production'");
+  it("publish-cli enters production only on a tag push", () => {
+    expect(environment("publish-cli")).toBe("github.event_name == 'push' && 'production' || ''");
+  });
+});
+
+// prep turns a run's trigger and inputs into what the run does. A real dispatch from a branch or a
+// tag fails there, so deploy-worker never starts. The environments' ref rules would refuse a branch
+// only once deploy-worker starts, and production admits v* tags, so for a dispatch from a tag this
+// is the only check on the ref. Each row runs the step's script the way the runner does: bash -e,
+// after the ${{ }} expressions are filled in. An expression this test doesn't fill in fails the row
+// instead of reaching bash as text.
+describe("release.yml prep resolves each way in", () => {
+  const wf = readFileSync(
+    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  // The `- id: x` step's run: | block, dedented.
+  const prep = wf
+    .match(/^ {6}- id: x\n {8}run: \|\n((?:(?: {10}.*)?\n)*)/m)?.[1]
+    ?.replace(/^ {10}/gm, "");
+  // Windows' bash can be WSL's, which gets none of the environment below.
+  const bash = process.platform !== "win32" && !spawnSync("bash", ["-c", ":"]).error;
+
+  /** Runs prep for one trigger. A push has no inputs, so the runner fills them in as "". */
+  const run = (event: "push" | "workflow_dispatch", ref: string, env: string, dry: string) => {
+    expect(prep, "the prep job's `- id: x` step must have a run: | block").toBeTruthy();
+    const script = (prep as string)
+      .replace(/\$\{\{ github\.event_name \}\}/g, event)
+      .replace(/\$\{\{ inputs\.environment \}\}/g, env)
+      .replace(/\$\{\{ inputs\.dry_run \}\}/g, dry);
+    expect(script, "prep reads an expression this test does not fill in").not.toContain("${{");
+    const dir = mkdtempSync(join(tmpdir(), "ymmv-release-prep-"));
+    try {
+      const output = join(dir, "output");
+      writeFileSync(output, "");
+      const res = spawnSync("bash", ["-e", "-c", script], {
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_REF: ref,
+          GITHUB_REF_NAME: ref.replace(/^refs\/(heads|tags)\//, ""),
+          GITHUB_RUN_NUMBER: "42",
+          GITHUB_OUTPUT: output,
+        },
+        encoding: "utf8",
+      });
+      const lines = readFileSync(output, "utf8").split("\n").filter(Boolean);
+      const outputs = Object.fromEntries(
+        lines.map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+      );
+      return { res, outputs };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it.runIf(bash).each([
+    {
+      way: "a tag push deploys production",
+      event: "push" as const,
+      ref: "refs/tags/v1.2.3",
+      env: "",
+      dry: "",
+      outputs: { environment: "production", dry_run: "false", version: "1.2.3", db_name: "ymmv" },
+    },
+    {
+      way: "a production deploy from main runs",
+      event: "workflow_dispatch" as const,
+      ref: "refs/heads/main",
+      env: "production",
+      dry: "false",
+      outputs: {
+        environment: "production",
+        dry_run: "false",
+        version: "0.0.0-dispatch.42",
+        db_name: "ymmv",
+      },
+    },
+    {
+      way: "a staging deploy from main runs",
+      event: "workflow_dispatch" as const,
+      ref: "refs/heads/main",
+      env: "staging",
+      dry: "false",
+      outputs: {
+        environment: "staging",
+        dry_run: "false",
+        version: "0.0.0-dispatch.42",
+        db_name: "ymmv-staging",
+      },
+    },
+    {
+      way: "a staging dry run from a branch runs",
+      event: "workflow_dispatch" as const,
+      ref: "refs/heads/feature",
+      env: "staging",
+      dry: "true",
+      outputs: {
+        environment: "staging",
+        dry_run: "true",
+        version: "0.0.0-dispatch.42",
+        db_name: "ymmv-staging",
+      },
+    },
+    {
+      way: "a production dry run from a branch runs",
+      event: "workflow_dispatch" as const,
+      ref: "refs/heads/feature",
+      env: "production",
+      dry: "true",
+      outputs: {
+        environment: "production",
+        dry_run: "true",
+        version: "0.0.0-dispatch.42",
+        db_name: "ymmv",
+      },
+    },
+  ])("$way", ({ event, ref, env, dry, outputs }) => {
+    const { res, outputs: got } = run(event, ref, env, dry);
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+    expect(got).toEqual(outputs);
+  });
+
+  it.runIf(bash).each([
+    { way: "a production deploy from a branch", ref: "refs/heads/feature", env: "production" },
+    { way: "a staging deploy from a branch", ref: "refs/heads/feature", env: "staging" },
+    { way: "a production deploy from a tag", ref: "refs/tags/v1.2.3", env: "production" },
+  ])("$way stops in prep and resolves nothing", ({ ref, env }) => {
+    const { res, outputs } = run("workflow_dispatch", ref, env, "false");
+    expect(res.status, res.stdout + res.stderr).toBe(1);
+    expect(res.stdout).toContain("::error::");
+    expect(res.stdout).toContain("runs from main only");
+    expect(outputs).toEqual({});
   });
 });
