@@ -222,7 +222,13 @@ afterEach(() => {
 // and its Wait then reads only the wrapped tail on the cursor's row.
 const TAPE_COLUMNS = 67;
 /** The settings TAPE_COLUMNS was measured at. */
-const TAPE_GEOMETRY = ["Set Width 960", "Set FontSize 19", "Set Padding 24", "Set Margin 24"];
+const TAPE_GEOMETRY = [
+  "Set Width 960",
+  'Set FontFamily "IBM Plex Mono"',
+  "Set FontSize 19",
+  "Set Padding 24",
+  "Set Margin 24",
+];
 
 // bash, and paths the demo never records on.
 const posix = process.platform !== "win32";
@@ -354,6 +360,28 @@ describe("docs/demo/shell.sh", () => {
       expect(readFileSync(join(home, "statuses"), "utf8")).toBe("0\n");
     },
   );
+
+  // A bare Wait waits for the line the cursor sits on, trailing blanks trimmed, to match the tape's
+  // WaitPattern. A prompt it doesn't match times out every scene. ${PS1@P} is the prompt as bash
+  // draws it, its \[ and \] as the bytes 1 and 2. It needs bash 4.4, and macOS's /bin/bash is 3.2.
+  const drawsPrompts = posix && bash(`x=y; printf %s "\${x@P}"`, tmpdir(), {}).stdout === "y";
+  it.runIf(drawsPrompts)("draws a prompt the tape's bare Waits match", () => {
+    const { root, home } = fixtureCheckout(scratch);
+    const res = bash(`source docs/demo/shell.sh && printf %s "\${PS1@P}"`, root, {
+      ...recordingShell(scratch),
+      ...demoVars(root, home),
+    });
+    expect(res.stderr).toBe("");
+    const drawn = [...stripVTControlCharacters(res.stdout)]
+      .filter((c) => c.charCodeAt(0) > 2)
+      .join("")
+      .trimEnd();
+    const pattern = tapeLines(demoFile("demo.tape"))
+      .find((l) => l.startsWith("Set WaitPattern "))
+      ?.match(/^Set WaitPattern \/(.*)\/$/)?.[1];
+    if (pattern === undefined) throw new Error("demo.tape sets no WaitPattern");
+    expect(drawn).toMatch(new RegExp(pattern));
+  });
 
   it
     .runIf(posix)
