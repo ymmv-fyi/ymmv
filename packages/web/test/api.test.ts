@@ -720,11 +720,13 @@ describe("GET status matrix", () => {
       .run();
     expect((await GET(getCtx("ghost"))).status).toBe(404);
   });
-  it("404 when the 301 target was deleted", async () => {
+  it("404 when a history row points at an account with no users row", async () => {
     await publish(TOKEN, profile("alice", [{ key: "editor", value: "Vim" }]));
     await bindHandle(GID1, "alice2"); // rename at re-login → history alice→gid1
     await publish(TOKEN, profile("alice2", [{ key: "editor", value: "Vim" }]));
-    await env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(GID1).run(); // hard delete
+    // Hand-built: the delete batch removes the history row too, so no request leaves this state.
+    // resolveProfile must still answer 404 for it rather than throw.
+    await env.DB.prepare("DELETE FROM users WHERE github_id = ?").bind(GID1).run();
     await env.DB.prepare("DELETE FROM profile_entries WHERE github_id = ?").bind(GID1).run();
     expect((await GET(getCtx("alice"))).status).toBe(404);
   });
@@ -739,59 +741,293 @@ function deleteCtx(token: string | null): APIContext {
 }
 const del = (token: string) => DELETE(deleteCtx(token));
 
-describe("DELETE — hard delete + reclaim protection", () => {
+// Every table that keys a row on the account. The delete batch must cover each one, and the
+// /privacy page says it does.
+const ACCOUNT_TABLES = ["handle_history", "profile_entries", "tokens", "users"] as const;
+type AccountRows = Record<(typeof ACCOUNT_TABLES)[number], number>;
+const NO_ROWS: AccountRows = { handle_history: 0, profile_entries: 0, tokens: 0, users: 0 };
+
+/** How many rows each account-keyed table holds for one github_id. */
+async function accountRows(githubId: number): Promise<AccountRows> {
+  const counts = await env.DB.batch<{ n: number }>(
+    ACCOUNT_TABLES.map((table) =>
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE github_id = ?`).bind(githubId),
+    ),
+  );
+  return Object.fromEntries(
+    ACCOUNT_TABLES.map((table, i) => [table, counts[i]?.results[0]?.n]),
+  ) as AccountRows;
+}
+
+describe("DELETE — full erase + reclaim protection", () => {
   it("401 without a token", async () => {
     const res = await DELETE(deleteCtx(null));
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual(UNAUTHORIZED);
   });
 
-  it("removes the profile (404), drops the entries, and revokes the token", async () => {
-    await publish(
-      TOKEN,
-      profile("alice", [{ key: "editor", value: "Neovim" }], [{ label: "L", value: "V" }]),
-    );
-    expect((await GET(getCtx("alice"))).status).toBe(200);
-
-    expect((await del(TOKEN)).status).toBe(200);
-
-    expect((await GET(getCtx("alice"))).status).toBe(404); // gone, not 301
-    const entries = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM profile_entries WHERE github_id = ?",
-    )
-      .bind(GID1)
-      .first<{ n: number }>();
-    expect(entries?.n).toBe(0);
-    // the user row is unpublished + extras cleared (so a later re-login can't resurface stale data)
-    const userRow = await env.DB.prepare("SELECT extras, updated_at FROM users WHERE github_id = ?")
-      .bind(GID1)
-      .first<{ extras: string; updated_at: string | null }>();
-    expect(userRow?.extras).toBe("[]");
-    expect(userRow?.updated_at).toBeNull();
-    // every token for the account is revoked → a follow-up write is unauthorized
-    expect((await publish(TOKEN, profile("alice"))).status).toBe(401);
+  it("the delete batch covers every table that has a github_id column", async () => {
+    // A new table keyed on the account would outlive a delete until the handler names it. This
+    // fails first: add the table to the batch, to ACCOUNT_TABLES and to the /privacy page.
+    const { results } = await env.DB.prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' ORDER BY name",
+    ).all<{ name: string; sql: string | null }>();
+    const keyed = results.filter((t) => /\bgithub_id\b/.test(t.sql ?? "")).map((t) => t.name);
+    expect(keyed).toEqual([...ACCOUNT_TABLES]);
   });
 
-  it("protects the vacated handle from a publish-squat; the owner re-claims it via re-login", async () => {
-    await publish(TOKEN, profile("alice"));
-    await del(TOKEN);
-
-    // a different account cannot grab "alice" via publish — reclaim flows through GitHub-proven login
-    expect((await publish(TOKEN2, profile("alice", [{ key: "os", value: "Arch" }]))).status).toBe(
-      409,
+  it("erases every row keyed to the account, in all four tables", async () => {
+    // One row of every kind: a published profile with entries and extras, a rename (history), a
+    // live token, and a second sign-in's token that was already revoked.
+    await seedToken("erase-tok", 9201);
+    await seedToken("erase-tok-old", 9201, { revoked: true });
+    await bindHandle(9201, "erase-old");
+    await publish("erase-tok", profile("erase-old", [{ key: "editor", value: "Neovim" }]));
+    await bindHandle(9201, "erase-me"); // GitHub rename at re-login → history erase-old → 9201
+    await publish(
+      "erase-tok",
+      profile(
+        "erase-me",
+        [
+          { key: "editor", value: "Neovim" },
+          { key: "shell", value: "fish" },
+        ],
+        [{ label: "L", value: "V" }],
+      ),
     );
+    expect(await accountRows(9201)).toEqual({
+      handle_history: 1,
+      profile_entries: 2,
+      tokens: 2,
+      users: 1,
+    });
+    expect((await GET(getCtx("erase-me"))).status).toBe(200);
 
-    // delete cleared the owner's own bind too, so even THEIR publish needs the re-login first —
-    // which the real flow forces anyway (delete revoked every token). Fresh login = token + bind.
-    await seedToken("alice-fresh", GID1);
+    const res = await del("erase-tok");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    expect(await accountRows(9201)).toEqual(NO_ROWS);
+    expect((await GET(getCtx("erase-me"))).status).toBe(404);
+  });
+
+  it("a statement failing inside the delete batch rolls the whole erase back", async () => {
+    // The erase is one transaction: it lands whole or not at all. Split across two batches, a
+    // failure half-way would sign the account out with its users row still there.
+    await seedToken("half-tok", 9212);
+    await bindHandle(9212, "half-old");
+    await publish("half-tok", profile("half-old", [{ key: "editor", value: "Vim" }]));
+    await bindHandle(9212, "half-new");
+    await publish("half-tok", profile("half-new", [{ key: "editor", value: "Vim" }]));
+    const before = await accountRows(9212);
+    expect(before).toEqual({ handle_history: 1, profile_entries: 1, tokens: 1, users: 1 });
+
+    const realBatch = env.DB.batch.bind(env.DB);
+    let batched = 0;
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      batched = stmts.length;
+      return realBatch([...stmts.slice(0, -1), env.DB.prepare("UPDATE no_such_table SET x = 1")]);
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await del("half-tok");
+    const calls = spy.mock.calls.length; // read before mockRestore, which clears mock.calls
+    spy.mockRestore();
+    errSpy.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(calls).toBe(1);
+    expect(batched).toBe(ACCOUNT_TABLES.length); // one DELETE per table, all in that one batch
+    expect(await accountRows(9212)).toEqual(before);
+    expect((await OWN(ownCtx("half-tok"))).status).toBe(200); // the token still works
+  });
+
+  it("the old token is unknown afterwards: 401 on every authed route", async () => {
+    // Own account, like the tests below: the write limiter counts per github_id for the whole
+    // file, and GID1's budget is nearly spent by here.
+    await seedToken("dead-tok", 9207);
+    await bindHandle(9207, "dead-token");
+    await publish("dead-tok", profile("dead-token", [{ key: "editor", value: "Neovim" }]));
+    expect((await del("dead-tok")).status).toBe(200);
+
+    for (const res of [
+      await publish("dead-tok", profile("dead-token")),
+      await OWN(ownCtx("dead-tok")),
+      await del("dead-tok"),
+    ]) {
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual(UNAUTHORIZED);
+    }
+  });
+
+  it("a rename followed by a delete leaves the old handle at 404, even after signing in and publishing again", async () => {
+    await seedToken("gone-tok", 9203);
+    await bindHandle(9203, "gone-old");
+    await publish("gone-tok", profile("gone-old", [{ key: "editor", value: "Vim" }]));
+    await bindHandle(9203, "gone-new");
+    await publish("gone-tok", profile("gone-new", [{ key: "editor", value: "Vim" }]));
+    expect((await GET(getCtx("gone-old"))).status).toBe(301);
+
+    expect((await del("gone-tok")).status).toBe(200);
+
+    expect((await GET(getCtx("gone-old"))).status).toBe(404);
+    expect((await GET(getCtx("gone-new"))).status).toBe(404);
+
+    // The same account signs in and publishes again. A history row that outlived the delete
+    // would turn the old address back into a 301 here.
+    await seedToken("gone-tok2", 9203);
+    await bindHandle(9203, "gone-new");
     expect(
-      (await publish("alice-fresh", profile("alice", [{ key: "os", value: "macOS" }]))).status,
-    ).toBe(409);
-    await bindHandle(GID1, "alice");
-    expect(
-      (await publish("alice-fresh", profile("alice", [{ key: "os", value: "macOS" }]))).status,
+      (await publish("gone-tok2", profile("gone-new", [{ key: "editor", value: "Vim" }]))).status,
     ).toBe(200);
-    expect((await readProfile("alice")).entries).toEqual([{ key: "os", value: "macOS" }]);
+    expect((await GET(getCtx("gone-new"))).status).toBe(200);
+    expect((await GET(getCtx("gone-old"))).status).toBe(404);
+  });
+
+  it("a delete, then a GitHub rename and a new publish: the deleted handle stays 404", async () => {
+    // The delete writes no history row and leaves no users row for the next sign-in to record a
+    // rename from, so the handle held at the delete never redirects to the account's new one.
+    await seedToken("moved-tok", 9210);
+    await bindHandle(9210, "moved-old");
+    await publish("moved-tok", profile("moved-old", [{ key: "editor", value: "Vim" }]));
+    expect((await del("moved-tok")).status).toBe(200);
+
+    await seedToken("moved-tok2", 9210);
+    await bindHandle(9210, "moved-new");
+    expect(
+      (await publish("moved-tok2", profile("moved-new", [{ key: "editor", value: "Vim" }]))).status,
+    ).toBe(200);
+    expect((await GET(getCtx("moved-new"))).status).toBe(200);
+    expect((await GET(getCtx("moved-old"))).status).toBe(404);
+    expect((await accountRows(9210)).handle_history).toBe(0);
+  });
+
+  it("a sign-in afterwards creates a fresh, unpublished users row", async () => {
+    await seedToken("fresh-tok", 9208);
+    await bindHandle(9208, "fresh-row");
+    await publish(
+      "fresh-tok",
+      profile("fresh-row", [{ key: "editor", value: "Neovim" }], [{ label: "L", value: "V" }]),
+    );
+    expect((await del("fresh-tok")).status).toBe(200);
+    expect(await accountRows(9208)).toEqual(NO_ROWS);
+
+    const signedInAt = new Date().toISOString();
+    await env.DB.batch(handleBindStatements(env.DB, 9208, "fresh-row", signedInAt));
+
+    // Nothing of the deleted profile comes back: no stamp, no extras, no entries, no history row,
+    // and created_at is this sign-in's, not the first one's.
+    const row = await env.DB.prepare(
+      "SELECT handle, handle_lower, extras, updated_at, created_at FROM users WHERE github_id = ?",
+    )
+      .bind(9208)
+      .first();
+    expect(row).toEqual({
+      handle: "fresh-row",
+      handle_lower: "fresh-row",
+      extras: "[]",
+      updated_at: null,
+      created_at: signedInAt,
+    });
+    expect(await accountRows(9208)).toEqual({ ...NO_ROWS, users: 1 });
+    expect((await GET(getCtx("fresh-row"))).status).toBe(404); // bound, not published
+  });
+
+  it("leaves a second account's rows untouched", async () => {
+    // The bystander holds one row of every kind too, so a statement missing its WHERE would show.
+    await seedToken("leaver-tok", 9204);
+    await bindHandle(9204, "leaver");
+    await publish("leaver-tok", profile("leaver", [{ key: "editor", value: "Vim" }]));
+    await seedToken("stay-tok", 9205);
+    await bindHandle(9205, "stay-old");
+    await publish("stay-tok", profile("stay-old", [{ key: "shell", value: "fish" }]));
+    await bindHandle(9205, "stay-new");
+    const stayProfile = profile(
+      "stay-new",
+      [{ key: "shell", value: "fish" }],
+      [{ label: "L", value: "V" }],
+    );
+    await publish("stay-tok", stayProfile);
+    const before = await accountRows(9205);
+    expect(before).toEqual({ handle_history: 1, profile_entries: 1, tokens: 1, users: 1 });
+    const stored = await readProfile("stay-new");
+
+    expect((await del("leaver-tok")).status).toBe(200);
+
+    expect(await accountRows(9204)).toEqual(NO_ROWS);
+    expect(await accountRows(9205)).toEqual(before);
+    expect(await readProfile("stay-new")).toEqual(stored);
+    expect((await GET(getCtx("stay-old"))).status).toBe(301);
+    expect((await publish("stay-tok", stayProfile)).status).toBe(200); // its token still works
+  });
+
+  it("protects the freed handle from a publish-squat; the owner re-claims it via re-login", async () => {
+    await seedToken("squat-tok", 9211);
+    await bindHandle(9211, "squat-me");
+    expect((await publish("squat-tok", profile("squat-me"))).status).toBe(200);
+    expect((await del("squat-tok")).status).toBe(200);
+
+    // a different account cannot grab the handle via publish — reclaim flows through GitHub-proven login
+    expect(
+      (await publish(TOKEN2, profile("squat-me", [{ key: "os", value: "Arch" }]))).status,
+    ).toBe(409);
+
+    // delete removed the owner's users row, bind included, so even THEIR publish needs the
+    // re-login first — which the real flow forces anyway (delete removed every token). A real
+    // sign-in writes the token and the bind in one batch; seeding the token alone here shows the
+    // bound-handle guard refusing an account with no users row.
+    await seedToken("squat-fresh", 9211);
+    expect(
+      (await publish("squat-fresh", profile("squat-me", [{ key: "os", value: "macOS" }]))).status,
+    ).toBe(409);
+    await bindHandle(9211, "squat-me");
+    expect(
+      (await publish("squat-fresh", profile("squat-me", [{ key: "os", value: "macOS" }]))).status,
+    ).toBe(200);
+    expect((await readProfile("squat-me")).entries).toEqual([{ key: "os", value: "macOS" }]);
+  });
+
+  it("a delete landing inside a publish's guard-to-batch window no-ops the publish (409, nothing written)", async () => {
+    // The publish passed auth and the bound-handle guard, then the account was deleted before its
+    // batch ran. Every write statement gates on the users row, so nothing comes back.
+    await seedToken("late-tok", 9206);
+    await bindHandle(9206, "late-pub");
+    const realBatch = env.DB.batch.bind(env.DB);
+    let deleted: number | undefined;
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      deleted = (await del("late-tok")).status;
+      return realBatch(stmts);
+    });
+    const res = await publish("late-tok", profile("late-pub", [{ key: "editor", value: "Vim" }]));
+    spy.mockRestore();
+    expect(deleted).toBe(200);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
+    expect(await accountRows(9206)).toEqual(NO_ROWS);
+  });
+
+  it("the same window with If-Match is 409 too, not 412: the CLI's self-heal keys on it", async () => {
+    // A conditional publish classifies a zero-change batch from its probe row. After a delete
+    // there is no row to probe, which must read as a moved bind, not as a stale stamp.
+    await seedToken("late-cond", 9209);
+    await bindHandle(9209, "late-cond");
+    await publish("late-cond", profile("late-cond", [{ key: "editor", value: "Vim" }]));
+    const tag = (await OWN(ownCtx("late-cond"))).headers.get("etag") as string;
+    const realBatch = env.DB.batch.bind(env.DB);
+    let deleted: number | undefined;
+    const spy = vi.spyOn(env.DB, "batch").mockImplementationOnce(async (stmts) => {
+      deleted = (await del("late-cond")).status;
+      return realBatch(stmts);
+    });
+    const res = await publishIfMatch(
+      "late-cond",
+      profile("late-cond", [{ key: "editor", value: "Helix" }]),
+      tag,
+    );
+    spy.mockRestore();
+    expect(deleted).toBe(200);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("handle_not_bound");
+    expect(await accountRows(9209)).toEqual(NO_ROWS);
   });
 });
 

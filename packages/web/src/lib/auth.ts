@@ -77,8 +77,9 @@ function revokeStatement(db: D1Database, hash: string, now: string): D1PreparedS
  * `handleBindStatements`, or the reserved-username displacement in auth/token.ts). They run in
  * that same batch ahead of the insert, so a sign-in is one transaction. A profile delete
  * (DELETE /api/v1/profile) lands wholly before the sign-in or wholly after it. In two batches, a
- * delete landing between them would revoke the account's tokens and the insert would then leave
- * a live token for the deleted profile. A failed mint also rolls its bind back.
+ * delete landing between them would erase the users row and the insert would then leave a live
+ * token for the erased account. Because `bind` upserts the users row, no sign-in leaves a token
+ * row without one.
  */
 export async function mintToken(
   db: D1Database,

@@ -154,6 +154,8 @@ describe("rate limiting", () => {
     const res = await DELETE(deleteCtx(TOK_DELETE));
     expect(res.status).toBe(429);
     expect(((await res.json()) as { error: string }).error).toBe("rate_limited");
+    // 429 short-circuits before the erase: the delete batch would have removed this token row.
+    expect(await isLive(TOK_DELETE)).toBe(true);
   });
 
   it("a fresh identity under the limit publishes normally (200) — limiter doesn't block real traffic", async () => {

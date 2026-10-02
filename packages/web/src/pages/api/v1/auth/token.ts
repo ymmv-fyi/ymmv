@@ -74,7 +74,7 @@ export const POST: APIRoute = async ({ request }) => {
     const now = new Date().toISOString();
     const { id, login } = user;
     // One batch for the whole sign-in (bind + mint, see mintToken): a profile delete racing it
-    // can't land between the two and leave a live token for the deleted profile.
+    // can't land between the two and leave a token for an account with no users row.
     let handle: string | null;
     let bind: D1PreparedStatement[];
     if (isValidHandle(login) && !isReserved(login.toLowerCase())) {

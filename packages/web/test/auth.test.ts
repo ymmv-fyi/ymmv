@@ -525,9 +525,38 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect(hist?.github_id).toBe(60); // prior handle recorded
   });
 
+  it("sign-in after a delete: a fresh users row, a new token that publishes, and the erased token's retire is revoked:false", async () => {
+    stubGithub(() => introspectOk(4301, "ada"));
+    const first = await mint("t1");
+    await PUBLISH(publishCtx(first.token, "ada", [{ key: "editor", value: "Vim" }]));
+    expect((await DELETE_PROFILE(deleteCtx(first.token))).status).toBe(200);
+    expect(await accountRows(4301)).toEqual({ tokens: 0, users: 0 });
+
+    // A CLI that still holds the erased token sends it as `revoke`. Its row no longer exists, so
+    // the retire changes nothing and answers revoked:false, as it does for an already-revoked
+    // row. The field is still present, which is what the CLI's login parse requires.
+    const res = await MINT(mintCtx({ access_token: "t2", revoke: first.token }));
+    expect(res.status).toBe(200);
+    const second = (await res.json()) as MintBody;
+    expect(second).toMatchObject({ handle: "ada", github_id: 4301, revoked: false });
+    expect(second.token).not.toBe(first.token);
+
+    const user = await env.DB.prepare(
+      "SELECT handle, extras, updated_at FROM users WHERE github_id = ?",
+    )
+      .bind(4301)
+      .first();
+    expect(user).toEqual({ handle: "ada", extras: "[]", updated_at: null });
+    expect((await WHOAMI(whoamiCtx(first.token))).status).toBe(401);
+    expect(await activeTokens(4301)).toBe(1);
+    expect(
+      (await PUBLISH(publishCtx(second.token, "ada", [{ key: "editor", value: "Helix" }]))).status,
+    ).toBe(200);
+  });
+
   it("a sign-in is one batch, for a bound handle and for a reserved username", async () => {
-    // Bind and mint in two batches would let a delete land between them and leave a live token
-    // for the deleted profile.
+    // Bind and mint in two batches would let a delete land between them: it would erase the users
+    // row, and the insert would then leave a live token for the erased account.
     const batchSpy = vi.spyOn(env.DB, "batch");
     try {
       stubGithub(() => introspectOk(4302, "bea"));
@@ -556,6 +585,58 @@ describe("POST /api/v1/auth/token — mint", () => {
     expect((await WHOAMI(whoamiCtx(a.token))).status).toBe(401);
     expect((await mint("t3", a.token)).revoked).toBe(false);
     expect((await mint("t4", "ymmv_never_minted")).revoked).toBe(false);
+  });
+
+  it("a delete landing right after a sign-in's batch never leaves a token without its users row", async () => {
+    // With the bind and the mint in two batches, this delete would land between them: the mint
+    // would then insert a live token for an account with no users row.
+    stubGithub(() => introspectOk(4303, "cleo"));
+    const first = await mint("t1");
+    const realBatch = env.DB.batch.bind(env.DB);
+    let deleted: number | undefined;
+    const batchSpy = vi
+      .spyOn(env.DB, "batch")
+      .mockImplementationOnce(async (stmts: D1PreparedStatement[]) => {
+        const out = await realBatch(stmts);
+        deleted = (await DELETE_PROFILE(deleteCtx(first.token))).status;
+        return out;
+      });
+    let second: MintBody;
+    try {
+      second = await mint("t2");
+    } finally {
+      batchSpy.mockRestore();
+    }
+    expect(deleted).toBe(200);
+    expect(await accountRows(4303)).toEqual({ tokens: 0, users: 0 });
+    expect((await WHOAMI(whoamiCtx(second.token))).status).toBe(401);
+  });
+
+  it("a delete that passed auth before a sign-in and lands after it erases that sign-in too", async () => {
+    // The other order of the same race. The delete's batch runs after the whole sign-in, so it
+    // removes the new users row and the new token with the rest: nothing is left, and the machine
+    // that just signed in is signed out.
+    stubGithub(() => introspectOk(4304, "dot"));
+    const first = await mint("t1");
+    await PUBLISH(publishCtx(first.token, "dot", [{ key: "editor", value: "Vim" }]));
+    const realBatch = env.DB.batch.bind(env.DB);
+    let second: MintBody | undefined;
+    const batchSpy = vi
+      .spyOn(env.DB, "batch")
+      .mockImplementationOnce(async (stmts: D1PreparedStatement[]) => {
+        second = await mint("t2"); // another machine signs in; its batch is the real one
+        return realBatch(stmts);
+      });
+    try {
+      expect((await DELETE_PROFILE(deleteCtx(first.token))).status).toBe(200);
+    } finally {
+      batchSpy.mockRestore();
+    }
+    expect(second?.handle).toBe("dot");
+    expect(await accountRows(4304)).toEqual({ tokens: 0, users: 0 });
+    for (const token of [first.token, second?.token ?? ""]) {
+      expect((await WHOAMI(whoamiCtx(token))).status).toBe(401);
+    }
   });
 
   it("a minted token round-trips a real publish", async () => {
