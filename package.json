@@ -13,7 +13,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome ci .",
     "format": "biome check --write .",
-    "dev": "pnpm --filter @ymmv/web dev"
+    "dev": "pnpm --filter @ymmv/web dev",
+    "demo": "bash docs/demo/record.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5",
