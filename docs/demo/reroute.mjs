@@ -6,6 +6,13 @@
 const SITE = "https://ymmv.fyi";
 const worker = process.env.YMMV_DEMO_WORKER;
 if (!worker) throw new Error("YMMV_DEMO_WORKER is not set. Record with `pnpm demo`.");
+// The login record.sh made goes out with these requests, so they only ever go to this machine.
+// The parsed hostname is compared, not a prefix: http://localhost.example starts with
+// http://localhost. The origin alone is used, so a path or userinfo in the value changes nothing.
+const { origin, hostname } = new URL(worker);
+if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname)) {
+  throw new Error(`demo: YMMV_DEMO_WORKER is ${worker}, not a loopback address`);
+}
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (input, init) => {
@@ -13,7 +20,7 @@ globalThis.fetch = (input, init) => {
   if (url !== SITE && !url.startsWith(`${SITE}/`)) {
     return Promise.reject(new Error(`demo: refused a request to ${url}`));
   }
-  return realFetch(worker + url.slice(SITE.length), {
+  return realFetch(origin + url.slice(SITE.length), {
     ...init,
     redirect: init?.redirect ?? "error",
   });
