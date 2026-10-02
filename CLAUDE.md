@@ -54,7 +54,19 @@ Workers + D1.
   And only **notable** changes - never background/invisible ones.
 - **DB-test parity:** web unit tests run in workerd and apply migrations
   per-suite - a new column needs both a migration **and** the test seed
-  (`packages/web/test/e2e/seed.sql`) updated.
+  (`packages/web/test/e2e/seed.sql`) updated, plus `docs/demo/seed.sql`, which
+  `pnpm demo` applies.
+- **Demo gif:** the release cut re-records `docs/demo.gif`, and a feature PR
+  never commits it. Parallel PRs would conflict on the binary, and the npm page
+  loads the gif from `main`, so it has to match the published CLI. The cut runs
+  `pnpm demo` when the CLI or `docs/demo` changed since the last tag. It records
+  against a local Worker, with no sign-in and nothing sent to ymmv.fyi, and
+  needs VHS 0.10.0, ttyd and ffmpeg. A feature PR that changes the first
+  publish's questions, or what the demo stack detects, updates the `Wait` lines
+  in `docs/demo/demo.tape` or the environment in `docs/demo/shell.sh`.
+  `packages/cli/test/demo-tape.test.ts` fails until they match. A PR that ran
+  `pnpm demo` to check restores the gif before it ships:
+  `git restore --source=HEAD --staged --worktree docs/demo.gif`.
 - **Secrets:** never log the ymmv bearer or the GitHub access_token (regression
   tests must not print tokens).
 
