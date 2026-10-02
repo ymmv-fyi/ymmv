@@ -35,13 +35,16 @@ needs no Cloudflare credentials on your machine.
 
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are secrets of the repo's `staging` and
 `production` environments, not repo secrets. `production` admits `main` and `v*` tags, and
-`staging` admits `main`, so a workflow run from any other ref can't read them. A dry run needs
-neither and runs outside both environments. The npm Trusted Publisher for `ymmv-cli` names the
-`production` environment, and `publish-cli` runs there only on a tag push, so a tag push is the
-only run that can publish. `production` admits any `v*` tag, and the gate's tag check runs from the
-tagged commit's own workflow, so the "Protect release tags" ruleset, which lets only admins create,
-move or delete a `v*` tag, is part of this boundary. So is the "Protect main" ruleset, because both
-environments admit `main`.
+`staging` admits `main`, so a workflow run from any other ref can't read them. Only the two steps
+that talk to Cloudflare read them, `Apply D1 migrations` and `Deploy`, so the install and the build
+never run with the token. A dry run needs neither secret and runs outside both environments.
+
+The npm Trusted Publisher for `ymmv-cli` names a third environment, `npm`, which holds no secrets
+and admits only `v*` tags. `publish-cli` runs there on a tag push, so no run from a branch, `main`
+included, can publish. Both `npm` and `production` admit any `v*` tag, and the gate's tag check
+runs from the tagged commit's own workflow, so the "Protect release tags" ruleset, which lets only
+admins create, move or delete a `v*` tag, is part of this boundary. So is the "Protect main"
+ruleset, because `staging` and `production` admit `main`.
 
 After rotating the Cloudflare token, set it in both environments:
 

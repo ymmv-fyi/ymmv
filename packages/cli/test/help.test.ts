@@ -189,7 +189,8 @@ describe("release.yml publishes the CLI only after the Worker deploys", () => {
 
   it("only a tag push publishes to npm or cuts a GitHub Release", () => {
     // A dispatch from main really deploys production (the web-only deploy), so these two
-    // conditions are all that keep one off npm and out of the releases.
+    // conditions keep one off npm and out of the releases. The npm environment's tag-only rule
+    // backs the first.
     const publish = wf.match(/- name: Publish to npm[^\n]*\n\s+if: (.+)/)?.[1];
     expect(publish, "the npm publish step must carry an if:").toBeTruthy();
     expect(publish).toContain("github.event_name == 'push'");
@@ -201,11 +202,11 @@ describe("release.yml publishes the CLI only after the Worker deploys", () => {
 });
 
 // The Cloudflare token lives in the staging and production environments, and the npm Trusted
-// Publisher names production. Staging admits only main, and production admits main and v* tags.
-// A real deploy outside its environment reads no Cloudflare secret, and npm refuses a publish from
-// outside production, after the Worker has already deployed. A dry run inside one is refused on
-// any other ref. Each expression is pinned whole, because an inverted or dropped condition still
-// names the environment.
+// Publisher names a third, npm. Staging admits only main, production admits main and v* tags, and
+// npm admits only v* tags. A real deploy outside its environment reads no Cloudflare secret, and
+// npm refuses a publish from outside the npm environment, after the Worker has already deployed.
+// A dry run inside one is refused on any other ref. Each expression is pinned whole, because an
+// inverted or dropped condition still names the environment.
 describe("release.yml deploys and publishes from an environment", () => {
   const wf = readFileSync(
     new URL("../../../.github/workflows/release.yml", import.meta.url),
@@ -223,8 +224,21 @@ describe("release.yml deploys and publishes from an environment", () => {
     );
   });
 
-  it("publish-cli enters production only on a tag push", () => {
-    expect(environment("publish-cli")).toBe("github.event_name == 'push' && 'production' || ''");
+  it("publish-cli enters the npm environment only on a tag push", () => {
+    expect(environment("publish-cli")).toBe("github.event_name == 'push' && 'npm' || ''");
+  });
+
+  // A secret in a job-level env: reaches every step, so pnpm install and the build would run a
+  // dependency's code with the Cloudflare token in reach.
+  it("only the two steps that talk to Cloudflare read its secrets", () => {
+    const job = wf.match(/^ {2}deploy-worker:\n((?:(?: {4}.*)?\n)*)/m)?.[1] ?? "";
+    const readers = job
+      .split(/^ {6}- /m)
+      .filter((step) => step.includes("secrets.CLOUDFLARE_"))
+      .map((step) => step.match(/^name: (.+)$/m)?.[1]);
+    expect(readers).toEqual(["Apply D1 migrations", "Deploy"]);
+    // Nowhere else in the workflow either: two secrets, on each of those two steps.
+    expect(wf.match(/secrets\.CLOUDFLARE_/g)).toHaveLength(4);
   });
 });
 

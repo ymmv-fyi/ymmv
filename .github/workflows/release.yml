@@ -161,10 +161,11 @@ jobs:
     needs: [prep, gate, deploy-worker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # A tag push publishes from the production environment, which admits only v* tags and main. The
-    # npm Trusted Publisher names this environment, so npm refuses a publish from a job outside it.
-    # A dispatch only dry-runs the publish, so it runs outside any environment.
-    environment: ${{ github.event_name == 'push' && 'production' || '' }}
+    # A tag push publishes from the npm environment, which holds no secrets and admits only v* tags.
+    # The npm Trusted Publisher names this environment, so npm refuses a publish from a job outside
+    # it, and no run from a branch, main included, can enter it. A dispatch only dry-runs the
+    # publish, so it runs outside any environment.
+    environment: ${{ github.event_name == 'push' && 'npm' || '' }}
     permissions:
       contents: read
       id-token: write # OIDC: Trusted Publishing auth + provenance
@@ -225,11 +226,9 @@ jobs:
     timeout-minutes: 15
     # The Cloudflare secrets live in the staging and production environments, not the repo, so only
     # main (and v* tags, for production) can read them. A dry run needs no secrets and runs outside
-    # both, from any ref.
+    # both, from any ref. Only the two steps that talk to Cloudflare read them, Apply D1 migrations
+    # and Deploy, so the install and the build never run with the token in their environment.
     environment: ${{ needs.prep.outputs.dry_run == 'false' && needs.prep.outputs.environment || '' }}
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -284,10 +283,16 @@ jobs:
       # REAL deploy (tag push, or a dispatch with dry_run=false): migrate D1 then upload.
       - name: Apply D1 migrations
         if: needs.prep.outputs.dry_run == 'false'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: pnpm exec wrangler d1 migrations apply ${{ needs.prep.outputs.db_name }} --env ${{ needs.prep.outputs.environment }} --remote
         working-directory: packages/web
       - name: Deploy
         if: needs.prep.outputs.dry_run == 'false'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: pnpm exec wrangler deploy -c dist/server/wrangler.json
         working-directory: packages/web
       # DRY RUN: validate the env-baked config + bundle without uploading (no secrets required).
