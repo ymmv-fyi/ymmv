@@ -37,21 +37,30 @@ tmp=$(mktemp -d)
 # and under one name, so each failed run replaces the last instead of piling up.
 failed=${TMPDIR:-/tmp}/ymmv-demo-failed.gif
 worker=
+vhs=
+# Stops a job started under `set -m`, which gave it its own process group: wrangler's holds its
+# workerd and VHS's its ttyd. The browser VHS starts is in a group of its own, and VHS closes it
+# when it gets the TERM.
+stop() {
+  [ -n "$1" ] || return 0
+  kill -- "-$1" 2>/dev/null || true
+  for _ in $(seq 20); do
+    kill -0 -- "-$1" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -KILL -- "-$1" 2>/dev/null || true
+}
 cleanup() {
   local status=$?
-  # `set -m` below gives wrangler its own process group, so this also stops its workerd. The group
-  # has to be gone before the D1 it writes to is deleted.
-  if [ -n "$worker" ]; then
-    kill -- "-$worker" 2>/dev/null || true
-    for _ in $(seq 20); do
-      kill -0 -- "-$worker" 2>/dev/null || break
-      sleep 0.25
-    done
-    kill -KILL -- "-$worker" 2>/dev/null || true
-  fi
+  # The Worker's group has to be gone before the D1 it writes to is deleted, and VHS's before the
+  # HOME its shell logs to.
+  stop "$vhs"
+  stop "$worker"
   # A failed run says why before the temp directory goes: what each `ymmv` exited with, the end of
   # the Worker's log, and the gif when VHS got as far as writing one. A Wait that timed out writes
-  # none; VHS's own error then quotes the line the terminal was on.
+  # none; VHS's own error then quotes the line the terminal was on. A TERM or HUP ends the script
+  # with this status at 0, so that run stops what it started and prints nothing more. A Ctrl-C
+  # arrives as 130 and is reported like any failure, with the part of the gif VHS had recorded.
   if [ "$status" -ne 0 ]; then
     if [ -s "$tmp/home/statuses" ]; then
       echo "demo: the recording's ymmv commands exited with: $(tr '\n' ' ' <"$tmp/home/statuses")" >&2
@@ -109,10 +118,16 @@ printf '{"base":"https://ymmv.fyi","token":"%s","handle":"bardisty","github_id":
 chmod 600 "$config/token.json"
 
 # process.execPath, not `command -v node`: a version manager's shim can't find its node under the
-# empty environment shell.sh runs the CLI in.
+# empty environment shell.sh runs the CLI in. VHS runs as a job in its own process group, waited
+# for, so a signal to this script reaches cleanup at once and cleanup can stop VHS with everything
+# it started.
+set -m
 YMMV_DEMO_ROOT=$root YMMV_DEMO_HOME=$tmp/home YMMV_DEMO_NODE=$(node -p process.execPath) \
   YMMV_DEMO_WORKER=http://localhost:$port \
-  vhs docs/demo/demo.tape -o "$tmp/demo.gif"
+  vhs docs/demo/demo.tape -o "$tmp/demo.gif" </dev/null &
+vhs=$!
+set +m
+wait "$vhs"
 
 # VHS 0.12.0 exits 0 without writing anything. And a command that failed still ends at a shell
 # prompt with VHS exiting 0, so the committed gif is replaced only when the publish landed and every
