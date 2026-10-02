@@ -13,6 +13,9 @@ fi
 ymmv_demo_reroute=$("$YMMV_DEMO_NODE" -p 'require("node:url").pathToFileURL(process.argv[1]).href' \
   "$YMMV_DEMO_ROOT/docs/demo/reroute.mjs") || return 1
 
+# The landing's prompt: a `$` in the CLI's faint. demo.tape's WaitPattern looks for it.
+PS1='\[\e[90m\]$\[\e[0m\] '
+
 ymmv() {
   env -i \
     HOME="$YMMV_DEMO_HOME" PATH=/usr/bin:/bin TERM="$TERM" \

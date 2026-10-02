@@ -4,6 +4,7 @@
 # Binary assets — never normalize
 *.woff2 binary
 *.woff binary
+*.ttf binary
 *.png binary
 *.jpg binary
 *.gif binary

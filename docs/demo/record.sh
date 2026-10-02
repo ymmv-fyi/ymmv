@@ -5,7 +5,8 @@
 # The tape runs against a local Worker on a throwaway D1 seeded with a signed-in demo account that
 # has never published, so it records a first publish without signing in or touching ymmv.fyi.
 # Needs VHS 0.10.0 (0.12.0 exits 0 without writing a gif), ttyd and ffmpeg, on Linux, WSL or macOS
-# (VHS on native Windows writes no gif either).
+# (VHS on native Windows writes no gif either). On Linux and WSL also fontconfig's fc-match, and on
+# macOS the fonts in docs/demo/fonts installed.
 set -euo pipefail
 
 port=8790
@@ -18,6 +19,31 @@ unset CLOUDFLARE_ENV
 for tool in vhs ttyd ffmpeg node pnpm curl; do
   command -v "$tool" >/dev/null || { echo "demo: $tool is not installed" >&2; exit 1; }
 done
+
+# The tape's font, IBM Plex Mono from docs/demo/fonts. A browser that can't find it draws the gif in
+# another monospace without a word, so it's checked before anything starts. VHS's browser finds
+# fonts through fontconfig on Linux and WSL, and fonts.conf adds that directory to the system's.
+# On macOS the browser doesn't read fontconfig, so the font has to be installed.
+fontconfig=$root/docs/demo/fonts/fonts.conf
+if [ "$(uname)" = Darwin ]; then
+  # Not grep -q: under pipefail, a grep that quits at the first match can fail the pipe.
+  system_profiler SPFontsDataType 2>/dev/null | grep 'Family: IBM Plex Mono$' >/dev/null || {
+    echo "demo: install the fonts in docs/demo/fonts (open each .ttf in Font Book)" >&2
+    exit 1
+  }
+else
+  command -v fc-match >/dev/null || {
+    echo "demo: fc-match is not installed (it comes with fontconfig)" >&2
+    exit 1
+  }
+  case "$(FONTCONFIG_FILE=$fontconfig fc-match -f '%{family}' 'IBM Plex Mono')" in
+    "IBM Plex Mono"*) ;;
+    *)
+      echo "demo: fontconfig can't find IBM Plex Mono through $fontconfig" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 # One request to the local Worker, printing its status: no ~/.curlrc, no proxy, and a 2-second
 # cap, since a listener that accepts and never answers would otherwise hang the script.
@@ -125,7 +151,7 @@ chmod 600 "$config/token.json"
 # it started.
 set -m
 YMMV_DEMO_ROOT=$root YMMV_DEMO_HOME=$tmp/home YMMV_DEMO_NODE=$(node -p process.execPath) \
-  YMMV_DEMO_WORKER=http://localhost:$port \
+  YMMV_DEMO_WORKER=http://localhost:$port FONTCONFIG_FILE=$fontconfig \
   vhs docs/demo/demo.tape -o "$tmp/demo.gif" </dev/null &
 vhs=$!
 set +m
