@@ -9,6 +9,9 @@ Workers + D1.
 
 ## Global rules (embed in every session)
 
+`CONTRIBUTING.md` restates the contributor-facing rules below for people; when
+one of them changes here, update it there too.
+
 - **Gates, in order:**
   - `pnpm lint` (biome ci)
   - `pnpm -r build` (**`@ymmv/shared` builds first - order matters**)

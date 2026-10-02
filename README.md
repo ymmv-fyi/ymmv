@@ -158,6 +158,11 @@ the tape's `Wait` lines match.
 Versions come from tags. Every `package.json` stays at `0.0.0`, and CI stamps
 the real version from the `vX.Y.Z` tag at publish time. Don't bump anything.
 
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request. Report
+security problems privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## License
 
 [MIT](LICENSE).
