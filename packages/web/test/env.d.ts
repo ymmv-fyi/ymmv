@@ -1,4 +1,4 @@
-/// <reference types="@cloudflare/vitest-pool-workers" />
+/// <reference types="@cloudflare/vitest-plugin/types" />
 
 // `env` from "cloudflare:test" is typed as Cloudflare.Env. The `src` build gets full bindings from
 // the generated worker-configuration.d.ts; tests are excluded from `astro check`, so we declare the

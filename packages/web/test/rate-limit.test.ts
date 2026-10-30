@@ -8,7 +8,7 @@ import { handleBindStatements } from "../src/lib/users.ts";
 import { POST as MINT } from "../src/pages/api/v1/auth/token.ts";
 import { DELETE, POST } from "../src/pages/api/v1/profile.ts";
 
-// The Workers rate-limit binding (RL_WRITE) emulated by miniflare/vitest-pool-workers. Its
+// The Workers rate-limit binding (RL_WRITE) emulated by miniflare/vitest-plugin. Its
 // counter is NOT reset between tests (workers-sdk#14392), so every identity here is unique (90xxx,
 // disjoint from api.test.ts / auth.test.ts) and each test keys a fresh counter — no cross-test bleed.
 const GID_PROBE = 90000;
