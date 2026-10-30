@@ -1,7 +1,7 @@
-import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
-// Runs tests inside workerd via @cloudflare/vitest-pool-workers (0.16 plugin API). Bindings (the
+// Runs tests inside workerd via @cloudflare/vitest-plugin. Bindings (the
 // D1 `DB`) come from wrangler.jsonc; miniflare backs D1 with throwaway SQLite. Tracked migrations
 // are read on the Node side (readD1Migrations) and injected as a binding, then applied per-suite in
 // test/apply-migrations.ts.
