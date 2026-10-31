@@ -542,6 +542,80 @@ describe("renderDiff", () => {
         expect(t).toBe(m);
         expect(t).toMatch(/…$/);
       });
+
+      describe("marks the invisible characters two cells differ by (the web's pairCells)", () => {
+        const FFFD = "\u{fffd}";
+        const RLO = "\u{202e}";
+        const ZWSP = "\u{200b}";
+
+        it("a bidi control: `zsh` against `zsh�`, and the control never prints", () => {
+          for (const color of [false, true]) {
+            const out = renderDiff(pair("zsh", `zsh${RLO}`), { ...OPTS, color });
+            expect(cells(out)).toEqual(["zsh", `zsh${FFFD}`]);
+            expect(out).not.toContain(RLO);
+          }
+          const plain = renderDiff(pair("zsh", `zsh${RLO}`), { ...OPTS, color: false });
+          expect(plain).toMatch(new RegExp(`^~ Dotfiles  zsh +zsh${FFFD}$`, "mu"));
+        });
+
+        it("a zero-width space, which prints as nothing", () => {
+          const out = renderDiff(pair(`Ghost${ZWSP}ty`, "Ghostty"), { ...OPTS, color: false });
+          expect(cells(out)).toEqual([`Ghost${FFFD}ty`, "Ghostty"]);
+          expect(out).not.toContain(ZWSP);
+        });
+
+        it("a URL keeps its shortening and its link to the unmarked address", () => {
+          const url = "https://github.com/me/dots";
+          const out = renderDiff(pair(url, `${url}${ZWSP}`), { ...OPTS, color: true });
+          expect(cells(out)).toEqual(["github.com/me/dots", `github.com/me/dots${FFFD}`]);
+          expect(out).toContain(`${OSC8_OPEN}${url}${ZWSP}${ESC}\\`);
+        });
+
+        it("a cut cell keeps the mark in view", () => {
+          for (const color of [false, true]) {
+            const out = renderDiff(pair(`${BASE_URL}/v1`, `${BASE_URL}/v1${RLO}`), {
+              ...OPTS,
+              color,
+              columns: 80,
+            });
+            const [t, m] = cells(out);
+            expect(t).not.toBe(m);
+            expect(m).toContain(FFFD);
+            expect(out).not.toContain(RLO);
+            for (const l of out.split("\n")) expect(visible(l).length).toBeLessThanOrEqual(80);
+          }
+        });
+
+        it("leaves a same row, a row that differs visibly, and a glyph-shaping join alone", () => {
+          const same: DiffResult = {
+            ...pair(`zsh${ZWSP}`, `zsh${ZWSP}`),
+            rows: [
+              {
+                key: "shell",
+                label: "Shell",
+                theirs: `zsh${ZWSP}`,
+                mine: `zsh${ZWSP}`,
+                status: "same",
+              },
+            ],
+          };
+          const zwj = `\u{1f469}\u{200d}\u{1f4bb}`;
+          for (const d of [same, pair(`fish${ZWSP}`, "zsh"), pair(zwj, "\u{1f469}\u{1f4bb}")]) {
+            expect(renderDiff(d, { ...OPTS, color: false })).not.toContain(FFFD);
+          }
+        });
+
+        it("the card marks nothing (the web's profile page doesn't either)", () => {
+          const p: Profile = {
+            schema_version: 1,
+            handle: "x",
+            entries: [{ key: "shell", value: `zsh${ZWSP}${RLO}` }],
+            extras: [],
+            updated_at: "t",
+          };
+          expect(renderProfile(p, { color: false, site: "ymmv.fyi" })).not.toContain(FFFD);
+        });
+      });
     });
   });
 
