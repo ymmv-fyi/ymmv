@@ -380,6 +380,65 @@ describe("renderDiff", () => {
     expect(out).toContain("Raycast");
     expect(out).toMatch(/2 differ {3}0 shared/);
   });
+
+  it("heads the extras block as uncompared and starts each label at the value column", () => {
+    const d: DiffResult = {
+      rows: [{ key: "editor", label: "Editor", mine: "Zed", theirs: "VS Code", status: "changed" }],
+      extras: {
+        theirs: [
+          { label: "Keyboard", value: "HHKB Pro 2" },
+          { label: "Dotfiles", value: "https://github.com/antfu/dotfiles" },
+        ],
+        mine: [{ label: "Launcher", value: "Raycast" }],
+      },
+      differ: 1,
+      shared: 0,
+    };
+    const plain = renderDiff(d, { color: false, theirsLabel: "antfu", mineLabel: "bardisty" });
+    // `Editor` is shorter than `bardisty`, so the owner column sets the stop for the extras.
+    expect(plain).toContain(
+      [
+        "  extras (not compared)",
+        "  antfu     Keyboard = HHKB Pro 2",
+        "  antfu     Dotfiles = https://github.com/antfu/dotfiles",
+        "  bardisty  Launcher = Raycast",
+      ].join("\n"),
+    );
+    // With color on the whole line is faint and the padding sits inside it, so the codes add no
+    // width and nothing in the block is amber.
+    const color = renderDiff(d, { color: true, theirsLabel: "antfu", mineLabel: "bardisty" });
+    expect(color).toContain(`  ${ESC}[90mextras (not compared)${ESC}[0m`);
+    expect(color).toContain(`  ${ESC}[90mantfu     Keyboard = HHKB Pro 2${ESC}[0m`);
+    expect(color).toContain(`  ${ESC}[90mbardisty  Launcher = Raycast${ESC}[0m`);
+    expect(color.slice(color.indexOf("extras ("))).not.toContain(AMBER);
+  });
+
+  it("starts the extras labels at the rows' value column when the row labels are longer", () => {
+    const d: DiffResult = {
+      rows: [{ key: "shell", label: "Shell", mine: "zsh", theirs: "zsh", status: "same" }],
+      extras: { theirs: [{ label: "WM", value: "Hyprland" }], mine: [] },
+      differ: 0,
+      shared: 1,
+    };
+    // Only the owners with a line count: `bardisty` owns none, so `Shell` sets the stop.
+    const out = renderDiff(d, { color: false, theirsLabel: "x", mineLabel: "bardisty" });
+    expect(out).toContain("= Shell  zsh");
+    expect(out).toContain("  x      WM = Hyprland");
+  });
+
+  it("pads the signed-in diff's owner column to `you` when the handle is shorter", () => {
+    const d: DiffResult = {
+      rows: [],
+      extras: {
+        theirs: [{ label: "WM", value: "Hyprland" }],
+        mine: [{ label: "Launcher", value: "Raycast" }],
+      },
+      differ: 0,
+      shared: 0,
+    };
+    const out = renderDiff(d, { color: false, theirsLabel: "jo", mineLabel: "you" });
+    expect(out).toContain("  jo   WM = Hyprland\n  you  Launcher = Raycast");
+  });
 });
 
 describe("renderProfile", () => {

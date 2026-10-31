@@ -2,6 +2,13 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **The diff's extras line up and say they are not compared.** The block is headed
+  `extras (not compared)` and prints dimmed, as on ymmv.fyi, and each label starts in the diff's
+  value column whatever the length of the handle in front of it.
+
 ## [0.15.2] - 2026-10-30
 
 ### Fixed
