@@ -91,10 +91,16 @@ export interface ExtraDiff {
   theirs: Extra[];
 }
 
-/** The full result of `diff()`. Invariant: `differ + shared === rows.length`. */
+/** The full result of `diff()`, counted per status for the readout's count line
+ *  (`N differ   N shared   N only <theirs>   N only <mine>`). `differ` counts only rows where
+ *  both sides are set and differ: a field one side left empty is not a different tool. Not on
+ *  the wire (each surface diffs locally), so no SCHEMA_VERSION concern.
+ *  Invariant: `differ + shared + onlyTheirs + onlyMine === rows.length`. */
 export interface DiffResult {
   rows: DiffRow[];
   extras: ExtraDiff;
   differ: number;
   shared: number;
+  onlyTheirs: number;
+  onlyMine: number;
 }

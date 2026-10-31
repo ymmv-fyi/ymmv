@@ -49,16 +49,16 @@ describe("diff()", () => {
     expect(result.shared).toBe(0);
   });
 
-  it("4. only-mine — `only_mine`, theirs null", () => {
+  it("4. only-mine — `only_mine`, theirs null, counted apart from differ", () => {
     const result = diff(profile([{ key: "os", value: "macos" }]), profile([]));
     expect(result.rows[0]).toMatchObject({ status: "only_mine", mine: "macos", theirs: null });
-    expect(result.differ).toBe(1);
+    expect(result).toMatchObject({ differ: 0, shared: 0, onlyMine: 1, onlyTheirs: 0 });
   });
 
-  it("5. only-theirs — `only_theirs`, mine null", () => {
+  it("5. only-theirs — `only_theirs`, mine null, counted apart from differ", () => {
     const result = diff(profile([]), profile([{ key: "os", value: "linux" }]));
     expect(result.rows[0]).toMatchObject({ status: "only_theirs", mine: null, theirs: "linux" });
-    expect(result.differ).toBe(1);
+    expect(result).toMatchObject({ differ: 0, shared: 0, onlyMine: 0, onlyTheirs: 1 });
   });
 
   it("6. extras render as a separate block — never rows, never mismatches", () => {
@@ -81,8 +81,8 @@ describe("diff()", () => {
       ]),
     );
     expect(result.rows.every((r) => r.status === "only_theirs")).toBe(true);
-    expect(result.shared).toBe(0);
-    expect(result.differ).toBe(2);
+    // A blank profile has nothing in common, and nothing that differs either.
+    expect(result).toMatchObject({ differ: 0, shared: 0, onlyTheirs: 2, onlyMine: 0 });
   });
 
   it("8. empty theirs — every mine key is only_mine", () => {
@@ -93,8 +93,7 @@ describe("diff()", () => {
   it("9. both empty — no rows, zero counts, empty extras", () => {
     const result = diff(profile([]), profile([]));
     expect(result.rows).toEqual([]);
-    expect(result.differ).toBe(0);
-    expect(result.shared).toBe(0);
+    expect(result).toMatchObject({ differ: 0, shared: 0, onlyTheirs: 0, onlyMine: 0 });
     expect(result.extras).toEqual({ mine: [], theirs: [] });
   });
 
@@ -110,7 +109,7 @@ describe("diff()", () => {
     expect(result.rows.map((r) => r.key)).toEqual(["editor", "shell", "browser"]);
   });
 
-  it("11. counts invariant — differ + shared === rows.length", () => {
+  it("11. counts invariant — differ + shared + onlyTheirs + onlyMine === rows.length", () => {
     const result = diff(
       profile([
         { key: "editor", value: "vim" }, // same
@@ -123,9 +122,10 @@ describe("diff()", () => {
         { key: "terminal", value: "ghostty" }, // only_theirs
       ]),
     );
-    expect(result.differ + result.shared).toBe(result.rows.length);
-    expect(result.shared).toBe(1);
-    expect(result.differ).toBe(3);
+    expect(result.differ + result.shared + result.onlyTheirs + result.onlyMine).toBe(
+      result.rows.length,
+    );
+    expect(result).toMatchObject({ differ: 1, shared: 1, onlyTheirs: 1, onlyMine: 1 });
   });
 
   it("12. purity — inputs unmutated, output stable", () => {

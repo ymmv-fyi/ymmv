@@ -25,7 +25,7 @@
  *
  *     mine.entries ──┐                              ┌── rows[] (CURATED_KEYS order)
  *                    ├─► build lookups ─► compare ──┤
- *     theirs.entries─┘                              └── differ / shared counts
+ *     theirs.entries─┘                              └── counts per status
  *                                  extras ─────────────► carried verbatim (unmatched)
  */
 
@@ -58,8 +58,7 @@ export function diff(mine: Profile, theirs: Profile): DiffResult {
   const theirsLookup = toLookup(theirs.entries);
 
   const rows: DiffRow[] = [];
-  let differ = 0;
-  let shared = 0;
+  const counts: Record<DiffStatus, number> = { same: 0, changed: 0, only_mine: 0, only_theirs: 0 };
 
   for (const key of CURATED_KEYS) {
     const mineValue = mineLookup.get(key) ?? null;
@@ -69,11 +68,7 @@ export function diff(mine: Profile, theirs: Profile): DiffResult {
     }
 
     const status = classify(key, mineValue, theirsValue);
-    if (status === "same") {
-      shared += 1;
-    } else {
-      differ += 1;
-    }
+    counts[status] += 1;
 
     rows.push({ key, label: KEY_LABELS[key], mine: mineValue, theirs: theirsValue, status });
   }
@@ -82,7 +77,9 @@ export function diff(mine: Profile, theirs: Profile): DiffResult {
   return {
     rows,
     extras: { mine: self ? [] : [...mine.extras], theirs: [...theirs.extras] },
-    differ,
-    shared,
+    differ: counts.changed,
+    shared: counts.same,
+    onlyTheirs: counts.only_theirs,
+    onlyMine: counts.only_mine,
   };
 }
