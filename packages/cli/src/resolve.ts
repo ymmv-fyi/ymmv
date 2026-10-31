@@ -35,9 +35,11 @@ export type UnsetTarget =
   | { kind: "curated"; key: CuratedKey; typed?: string }
   | { kind: "extra"; label: string };
 
+type CliVerb = (typeof CLI_VERBS)[number];
+
 export type Command =
   | { kind: "publish"; yes: boolean; resetMarks: boolean }
-  | { kind: "view"; handle: string }
+  | { kind: "view"; handle: string; nearVerb?: CliVerb }
   | { kind: "compare"; theirs: string; mine: string }
   | { kind: "login"; yes: boolean }
   | { kind: "logout" }
@@ -190,6 +192,70 @@ function suggestKeys(head: string): readonly CuratedKey[] {
     }
   }
   return best === undefined ? [] : [best];
+}
+
+/** The verb a bare word was probably meant to be (`lgoin` is login), for the hint view() prints
+ *  under a miss. Never a request and never a refusal: the word is still looked up as a handle, so a
+ *  real profile at the typo still shows. Much stricter than suggestKeys, because the words around a
+ *  verb are real names and words (`logan`, `upset`, `loin`, `deleted`) and a wrong verb under one is
+ *  worse than no hint. So a match is one slip of the fingers, not one edit: two neighbors swapped
+ *  (`lgoin`, `unste`), a letter doubled (`helpp`, `loggin`), a letter changed to the key next to it
+ *  (`updste`, `lpgin`), or, in a verb of six letters or more, a letter dropped (`publsh`, `updte`).
+ *  A dropped letter in a shorter verb leaves a word too often (`loin`, `vie`, `hep`). Fewer than
+ *  three characters is too little to measure, and the three-letter `set` is left out, as
+ *  suggestKeys leaves out `os`. More than one verb matching names none: the CLI never guesses
+ *  between two. */
+export function nearVerb(word: string): CliVerb | undefined {
+  const typed = word.toLowerCase();
+  if (typed.length < 3) return undefined;
+  const near = CLI_VERBS.filter((verb) => verb.length >= 4 && isSlip(typed, verb));
+  return near.length === 1 ? near[0] : undefined;
+}
+
+// QWERTY, row by row; each row sits a little right of the one above, so a key touches the two
+// above it at its own column and the next, and the two below at the column before and its own.
+const KEY_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+
+function areNeighborKeys(a: string, b: string): boolean {
+  const at = (ch: string): [number, number] | undefined => {
+    const row = KEY_ROWS.findIndex((r) => r.includes(ch));
+    return row === -1 ? undefined : [row, KEY_ROWS[row]?.indexOf(ch) ?? -1];
+  };
+  const pa = at(a);
+  const pb = at(b);
+  if (!pa || !pb) return false;
+  const [ra, ca] = pa;
+  const [rb, cb] = pb;
+  if (ra === rb) return Math.abs(ca - cb) === 1;
+  if (rb === ra - 1) return cb === ca || cb === ca + 1;
+  if (rb === ra + 1) return cb === ca - 1 || cb === ca;
+  return false;
+}
+
+/** `typed` is `verb` with one slip of the fingers (nearVerb lists them). */
+function isSlip(typed: string, verb: string): boolean {
+  let i = 0;
+  while (i < typed.length && i < verb.length && typed[i] === verb[i]) i++;
+  if (typed.length === verb.length) {
+    if (i >= typed.length) return false; // the verb itself
+    const changed = typed.slice(i + 1) === verb.slice(i + 1);
+    if (changed) return areNeighborKeys(typed[i] ?? "", verb[i] ?? "");
+    // Swapped neighbors: two changed letters to editDistance, one slip to the fingers.
+    return (
+      typed[i] === verb[i + 1] &&
+      typed[i + 1] === verb[i] &&
+      typed.slice(i + 2) === verb.slice(i + 2)
+    );
+  }
+  if (typed.length === verb.length + 1) {
+    // An added letter counts only as a doubled one: anything else added is a word form too often
+    // (`helps`, `deleted`, `logins`).
+    const doubled = typed[i] === typed[i - 1] || typed[i] === typed[i + 1];
+    return doubled && typed.slice(i + 1) === verb.slice(i);
+  }
+  if (typed.length === verb.length - 1)
+    return verb.length >= 6 && typed.slice(i) === verb.slice(i + 1);
+  return false;
 }
 
 /** The curated unset that both `unset <key>` and `set <key> -` resolve to. */
@@ -412,9 +478,52 @@ export function resolveArg(argv: string[]): Command {
   const versus = versusTail(first, rest);
   if (versus) return versus;
   if (rest.length > 0) {
+    if (DIFF_WORDS.has(first.toLowerCase())) return diffWordError(first, rest);
     return { kind: "error", message: `Unexpected arguments after "${first}". Run \`ymmv help\`.` };
   }
-  return { kind: "view", handle: first };
+  // Only the bare path carries the hint: `ymmv view lgoin` asked to view, like reservedError's
+  // rule. It is printed only after a miss (view()), so a real profile at the typo still shows.
+  const near = nearVerb(first);
+  return near === undefined
+    ? { kind: "view", handle: first }
+    : { kind: "view", handle: first, nearVerb: near };
+}
+
+/** Words people guess for the diff, which is spelled `ymmv <handle>` (against yours, signed in)
+ *  or `ymmv <a> vs <b>`. Not verbs and not reserved: `ymmv diff` alone still views a user named
+ *  diff, and reserving one would take the handle from whoever has it on GitHub, with every shipped
+ *  CLI refusing it locally from then on (RESERVED's note in @ymmv/shared). They get their own
+ *  error only with something after them, where the bare path already refuses without a request. */
+const DIFF_WORDS: ReadonlySet<string> = new Set(["diff", "show", "compare"]);
+
+/** The refusal for `ymmv diff <handle>` and the like: the forms that exist, with the user's own
+ *  handles in them when they are handles that would run as typed (shape-checked, not reserved: a
+ *  `ymmv diff login` must never suggest running `ymmv login`). Anything else gets the
+ *  placeholders. The typed word is echoed sanitized, as every argv echo is. */
+function diffWordError(word: string, rest: readonly string[]): Command {
+  const runnable = (h: string | undefined): h is string =>
+    h !== undefined && isValidHandle(h) && !isReserved(h);
+  const said = `"${sanitizeValue(word)}" is not a command.`;
+  // Two handles, with or without the `vs` between them: name the one command that diffs them.
+  const [a, second, third] = rest;
+  // A trailing `vs` (`ymmv diff antfu vs`) is an unfinished command, not a handle named vs.
+  const b =
+    rest.length === 3 && second === "vs"
+      ? third
+      : rest.length === 2 && second !== "vs"
+        ? second
+        : undefined;
+  if (runnable(a) && runnable(b)) {
+    return { kind: "error", message: `${said} \`ymmv ${a} vs ${b}\` diffs those two.` };
+  }
+  // A line per form, the handle in it once: the wrap stays under 80 columns for most handles.
+  const one = rest.length === 1 && runnable(a) ? a : "<handle>";
+  return {
+    kind: "error",
+    message:
+      `${said}\nSigned in, \`ymmv ${one}\` diffs that profile against yours.\n` +
+      "`ymmv <a> vs <b>` diffs any two.",
+  };
 }
 
 /** `<a> vs <b>`, the CLI's spelling of the web's /<a>/vs/<b>: a tail of exactly `vs` and one

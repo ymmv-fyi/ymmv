@@ -1,6 +1,6 @@
-import { CURATED_KEYS, KEY_LABELS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
+import { CLI_VERBS, CURATED_KEYS, KEY_LABELS, MAX_LABEL, MAX_VALUE } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
-import { FIELD_ALIASES, fieldName, resolveArg, resolveField } from "../src/resolve.js";
+import { FIELD_ALIASES, fieldName, nearVerb, resolveArg, resolveField } from "../src/resolve.js";
 
 // The argument resolution table: bare-handle primary, reserved verbs, `view` fallback.
 describe("resolveArg", () => {
@@ -1000,5 +1000,156 @@ describe("resolveField", () => {
     expect(resolveField("window-")).toBe("window-manager");
     expect(resolveField("keyboard")).toBeUndefined();
     expect(resolveField("   ")).toBeUndefined();
+  });
+});
+
+// A bare word is still a handle lookup; the near verb only rides along for view()'s hint under a
+// miss. These pin which words get one: typing slips do, real-looking handles near a verb don't.
+describe("nearVerb", () => {
+  it.each([
+    ["lgoin", "login"], // two neighbors swapped
+    ["unste", "unset"],
+    ["hlep", "help"],
+    ["helpp", "help"], // a letter doubled
+    ["loggin", "login"],
+    ["updste", "update"], // a letter changed to the key next to it
+    ["lpgin", "login"],
+    ["publsh", "publish"], // a letter dropped, in a verb of six letters or more
+    ["updte", "update"],
+    ["logot", "logout"],
+    ["delet", "delete"],
+    ["Lgoin", "login"], // handles compare case-blind
+  ])("%s → %s", (word, verb) => {
+    expect(nearVerb(word)).toBe(verb);
+  });
+
+  it.each([
+    // A changed letter that is not the next key over: real names and words.
+    "logan",
+    "logic",
+    "upset",
+    "onset",
+    "delate",
+    "kelp",
+    "held",
+    // A letter dropped from a verb under six letters leaves a word.
+    "loin",
+    "vie",
+    "hep",
+    // Any other added letter is a word form.
+    "helps",
+    "whelp",
+    "views",
+    "deleted",
+    "updated",
+    "versions",
+    "logins",
+    "unsets",
+    // Two edits that are not a swap.
+    "delta",
+    "vision",
+    "hello",
+    // `set` is left out: every three-letter word near it is a word.
+    "sat",
+    "seth",
+    "lo", // too short to measure
+    "antfu",
+    "login", // a verb is not near itself (and never reaches view: it is reserved)
+  ])("%s → nothing", (word) => {
+    expect(nearVerb(word)).toBeUndefined();
+  });
+
+  it("never names a verb the word is not near", () => {
+    // Every one-letter slip of every verb it considers (all but the three-letter `set`, whose
+    // slips include unset's: `nset`) names that verb or nothing. No slip is near two verbs today,
+    // so the tie rule has nothing to break yet; this keeps it that way as verbs are added.
+    const abc = "abcdefghijklmnopqrstuvwxyz0123456789-";
+    for (const verb of CLI_VERBS.filter((v) => v.length >= 4)) {
+      for (let i = 0; i <= verb.length; i++) {
+        const slips = [verb.slice(0, i) + verb.slice(i + 1)];
+        for (const ch of abc) {
+          slips.push(
+            verb.slice(0, i) + ch + verb.slice(i),
+            verb.slice(0, i) + ch + verb.slice(i + 1),
+          );
+        }
+        for (const slip of slips) {
+          const near = nearVerb(slip);
+          if (near !== undefined && slip !== near) expect([slip, near]).toEqual([slip, verb]);
+        }
+      }
+    }
+  });
+
+  it("only the bare path carries it: `ymmv view lgoin` asked to view", () => {
+    expect(resolveArg(["lgoin"])).toStrictEqual({
+      kind: "view",
+      handle: "lgoin",
+      nearVerb: "login",
+    });
+    expect(resolveArg(["view", "lgoin"])).toStrictEqual({ kind: "view", handle: "lgoin" });
+    expect(resolveArg(["antfu"])).toStrictEqual({ kind: "view", handle: "antfu" });
+    // `<typo> vs <b>` is a compare, untouched.
+    expect(resolveArg(["lgoin", "vs", "antfu"])).toStrictEqual({
+      kind: "compare",
+      theirs: "lgoin",
+      mine: "antfu",
+    });
+  });
+});
+
+// The guessed diff words name the forms that exist; alone, each is still a handle.
+describe("diff, show and compare", () => {
+  const two = "\n`ymmv <a> vs <b>` diffs any two.";
+  it("alone, each still views a user by that name (none is reserved)", () => {
+    for (const word of ["diff", "show", "compare"]) {
+      expect(resolveArg([word])).toStrictEqual({ kind: "view", handle: word });
+    }
+    expect(resolveArg(["diff", "vs", "antfu"])).toEqual({
+      kind: "compare",
+      theirs: "diff",
+      mine: "antfu",
+    });
+  });
+
+  it("with one handle: that handle against yours, and the two-profile form", () => {
+    expect(resolveArg(["diff", "bardisty"])).toEqual({
+      kind: "error",
+      message:
+        '"diff" is not a command.\nSigned in, `ymmv bardisty` diffs that profile against yours.' +
+        two,
+    });
+    expect(resolveArg(["Show", "bardisty"])).toEqual({
+      kind: "error",
+      message:
+        '"Show" is not a command.\nSigned in, `ymmv bardisty` diffs that profile against yours.' +
+        two,
+    });
+  });
+
+  it("with two handles, `vs` or not: the one command that diffs them", () => {
+    const vs = {
+      kind: "error",
+      message: '"compare" is not a command. `ymmv antfu vs bardisty` diffs those two.',
+    };
+    expect(resolveArg(["compare", "antfu", "bardisty"])).toEqual(vs);
+    expect(resolveArg(["compare", "antfu", "vs", "bardisty"])).toEqual(vs);
+  });
+
+  it("a handle that would not run as typed is never echoed into a command", () => {
+    const generic = {
+      kind: "error",
+      message:
+        '"diff" is not a command.\nSigned in, `ymmv <handle>` diffs that profile against yours.' +
+        two,
+    };
+    expect(resolveArg(["diff", "login"])).toEqual(generic); // `ymmv login` would log in
+    expect(resolveArg(["diff", "bad_handle"])).toEqual(generic);
+    expect(resolveArg(["diff", "a", "b", "c"])).toEqual(generic);
+    expect(resolveArg(["diff", "antfu", "vs"])).toEqual(generic); // never `ymmv antfu vs vs`
+    expect(resolveArg(["diff", "antfu", "login"])).toEqual(generic);
+    const esc = String.fromCharCode(27);
+    const cmd = resolveArg(["diff", `x${esc}[31m`]);
+    expect(cmd.kind === "error" && cmd.message.includes(esc)).toBe(false);
   });
 });

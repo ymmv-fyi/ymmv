@@ -13,6 +13,15 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   `ymmv <handle>` open with the address of the same diff on ymmv.fyi, such as
   `ymmv.fyi/antfu/vs/bardisty`, above the heading. On a terminal with color it is a link.
 
+### Changed
+- **A mistyped command gets a suggestion.** `ymmv lgoin` still looks up a profile named `lgoin`,
+  and when there is none it now adds `Did you mean: ymmv login?` on stderr. A profile at that
+  name still shows, with no hint.
+- **`ymmv diff <handle>`, `ymmv show <handle>` and `ymmv compare <a> <b>` name the commands that
+  diff.** They used to say only that the arguments were unexpected. `ymmv bardisty` diffs
+  bardisty against your profile when you're signed in, and `ymmv antfu vs bardisty` diffs any
+  two. `ymmv diff` alone still views a user named diff.
+
 ### Fixed
 - **The diff's extras line up and say they are not compared.** The block is headed
   `extras (not compared)` and prints dimmed, as on ymmv.fyi, and each label starts in the diff's
