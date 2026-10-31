@@ -11,7 +11,7 @@ import {
   view,
 } from "./commands.js";
 import { baseProblem, credentialEnvProblem, isSameServer, serverOrigin } from "./config.js";
-import { retirable } from "./device-flow.js";
+import { README_URL, retirable } from "./device-flow.js";
 import { dismissalsPath } from "./dismissals.js";
 import { isTimeoutError, NetworkError, RedirectError } from "./http.js";
 import { makePrompter } from "./prompt.js";
@@ -30,14 +30,16 @@ import {
 
 // Styled at print time; with color off the output is byte-identical to the historic plain text
 // (pinned by the help snapshot test). The curated key names must stay LITERAL in this source —
-// help.test.ts greps this file to keep the list in sync with CURATED_KEYS.
+// help.test.ts greps this file to keep the list in sync with CURATED_KEYS. Every line fits 80
+// columns (a test checks). The Environment lines are the README's "Environment variables" meanings
+// in a line each; help.test.ts checks the two name the same variables.
 export const help = (
   c: Codes,
 ): string => `${c.bold}ymmv${c.reset}: terminal-native developer tool-stack profiles (ymmv.fyi)
 
 ${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
-  ymmv -y                   publish without prompts (required when piped or redirected)
+  ymmv -y                   skip the prompts (required when piped or redirected)
   ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
@@ -46,14 +48,23 @@ ${c.faint}Usage:${c.reset}
   ymmv set --extra "L=V"    set a free-form extra (-e works too)
   ymmv unset <key>          remove one curated key (ymmv set <key> - works too)
   ymmv unset --extra "L"    remove a free-form extra
-  ymmv delete [-y]          delete your profile (permanent; -y skips the confirm)
-  ymmv login [-y]           log in with GitHub, or see who you are (-y logs in again)
+  ymmv delete [-y]          delete your profile for good (-y skips the confirm)
+  ymmv login [-y]           log in, or see who you are (-y logs in again)
   ymmv logout               log out
   ymmv update               update ymmv-cli to the latest release
   ymmv help | version
 
 ${c.faint}Curated keys:${c.reset} editor, os, shell, prompt, terminal, browser, window-manager,
-              font, theme, multiplexer, version-manager, dotfiles, ai-tool`;
+              font, theme, multiplexer, version-manager, dotfiles, ai-tool
+
+${c.faint}Environment:${c.reset}
+  YMMV_TOKEN                sign in without a browser, for CI and scripts
+  YMMV_HANDLE               the GitHub username the token belongs to (optional)
+  YMMV_API                  point the CLI at a different Worker
+  NO_COLOR                  turn color off (FORCE_COLOR=0 works too)
+  YMMV_NO_UPDATE_CHECK      turn off the startup check for newer releases
+
+${c.faint}Docs:${c.reset} ${README_URL}`;
 
 // `ymmv logout` — revoke server-side, THEN delete the local file while it still holds that token
 // (a login that wrote a fresh one during the revoke keeps it). If the revoke fails, KEEP the

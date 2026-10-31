@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,7 +13,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 // Tests the BUILT bin, so it needs `tsup` to have run (CI builds before `pnpm test`; locally run
 // `pnpm --filter ymmv-cli build` first). Guards the regression where `npm i -g` was silently broken
@@ -115,6 +116,50 @@ describe("built bin entry", () => {
     );
     expect(res.stderr.endsWith("\n\n")).toBe(true);
     expect(res.stdout).toBe("");
+  });
+
+  // A CI job with no stored login: stdin is no terminal, so the sign-in refuses before any request,
+  // and the refusal is where the job learns about YMMV_TOKEN. An empty home keeps a real login out.
+  describe("without a terminal or a login", () => {
+    const home = mkdtempSync(join(tmpdir(), "ymmv-ci-"));
+    afterAll(() => rmSync(home, { recursive: true, force: true }));
+    const env = {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
+      APPDATA: join(home, "AppData"),
+      YMMV_API: "http://127.0.0.1:1",
+    };
+    const tokenless = { ...env, YMMV_TOKEN: "" };
+
+    it.each([[["-y"]], [["set", "editor", "vim"]]])(
+      "`ymmv %s` names YMMV_TOKEN and the README's CI section on stderr",
+      (args) => {
+        const res = spawnSync(process.execPath, [binPath, ...args], {
+          encoding: "utf8",
+          env: tokenless,
+        });
+        expect(res.status).toBe(1);
+        expect(res.stdout).toBe("");
+        expect(res.stderr).toBe(
+          "\n  GitHub sign-in needs an interactive terminal. Run `ymmv login` in one.\n" +
+            "  In CI or a script, set YMMV_TOKEN to the token from a local login instead:\n" +
+            "  https://github.com/ymmv-fyi/ymmv/blob/main/packages/cli/README.md#publishing-from-ci\n\n",
+        );
+      },
+    );
+
+    // YMMV_TOKEN set signs every command but `ymmv login` in with it: no device flow, so no hint.
+    it("with YMMV_TOKEN set, `ymmv set` never reaches the sign-in or its hint", () => {
+      const res = spawnSync(process.execPath, [binPath, "set", "editor", "vim"], {
+        encoding: "utf8",
+        env: { ...env, YMMV_TOKEN: "ci-test-token" },
+      });
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("Can't reach http://127.0.0.1:1"); // went to the server instead
+      expect(res.stderr).not.toContain("interactive terminal");
+      expect(res.stderr).not.toContain("ci-test-token");
+    });
   });
 
   // A reader that stops early (`ymmv <handle> | head -1`) closes the pipe, and the next write

@@ -12,6 +12,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **The diff names the web page it mirrors.** `ymmv antfu vs bardisty` and a signed-in
   `ymmv <handle>` open with the address of the same diff on ymmv.fyi, such as
   `ymmv.fyi/antfu/vs/bardisty`, above the heading. On a terminal with color it is a link.
+- **`ymmv help` lists the environment variables and links to the docs.** It ends with
+  `YMMV_TOKEN`, `YMMV_HANDLE`, `YMMV_API`, `NO_COLOR` and `YMMV_NO_UPDATE_CHECK`, a line each,
+  and the address of the CLI README.
 
 ### Changed
 - **A mistyped command gets a suggestion.** `ymmv lgoin` still looks up a profile named `lgoin`,
@@ -21,6 +24,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   diff.** They used to say only that the arguments were unexpected. `ymmv bardisty` diffs
   bardisty against your profile when you're signed in, and `ymmv antfu vs bardisty` diffs any
   two. `ymmv diff` alone still views a user named diff.
+- **A sign-in that can't run says how CI signs in.** Without a terminal, `ymmv -y`, `ymmv set`
+  and the other commands that need a login stop because GitHub's sign-in needs one. The message
+  now adds that CI and scripts set `YMMV_TOKEN` to the token from a local login, and links to the
+  README's "Publishing from CI" section, which says where that token is.
 
 ### Fixed
 - **The diff's extras line up and say they are not compared.** The block is headed
