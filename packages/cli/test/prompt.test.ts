@@ -641,6 +641,29 @@ describe("makePrompter: keys typed before the first question", () => {
     }
   });
 
+  it("echoes nothing between questions either: an Enter during the POST moves no cursor", async () => {
+    // A slow request's waiting line (http.ts) is taken back by erasing the row the cursor is on.
+    // An echoed line end would move the cursor off that row and leave the line on screen above
+    // the result. The next question still draws, with what was typed after its prompt.
+    const { input, output } = nextInterface();
+    const shown = capture(output);
+    const { prompter, settleQuiet } = clockedPrompter();
+    const confirmed = prompter.confirm("Publish to ymmv.fyi/me?", true);
+    await settleQuiet();
+    input.write(`y${CR}`);
+    expect(await confirmed).toBe(true);
+    shown(); // the question and the answer's own line end
+    input.write(`${CR}ab`); // an Enter, then text, while the POST runs
+    await tick();
+    expect(shown()).toBe("");
+    const next = prompter.ask("Font");
+    await tick();
+    expect(shown()).toContain("Font: ab");
+    input.write(CR);
+    expect(await next).toBe("ab");
+    prompter.close();
+  });
+
   it("only the first question clears: a paste still answers two in a row", async () => {
     const { input } = nextInterface();
     const { prompter, settleQuiet } = clockedPrompter();
