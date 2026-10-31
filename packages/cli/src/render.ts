@@ -328,7 +328,8 @@ export function renderProfile(
     ...rows.map((r) => r.label.length),
     ...extras.map((x) => x.label.length),
   );
-  const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color) : v);
+  const term = opts.term ?? process.env.TERM;
+  const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color, term) : v);
   // A marked row's value column up to the incoming value: the gutter, then `old → ` unless it
   // would not read (see above). A URL is shortened with color on, to sit beside the shortened
   // incoming link.
@@ -345,7 +346,7 @@ export function renderProfile(
   const page = opts.color && !preview && opts.page !== undefined ? opts.page : undefined;
   const lines: string[] = [
     "",
-    `  ${page === undefined ? crumb : hyperlink(sanitizeValue(page), crumb, opts.term ?? process.env.TERM)}`,
+    `  ${page === undefined ? crumb : hyperlink(sanitizeValue(page), crumb, term)}`,
   ];
   if (rows.length) {
     lines.push("");
