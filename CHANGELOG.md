@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.15.2] - 2026-10-30
 
 ### Fixed
 - **`ymmv update` recognizes a pnpm 11 global install.** pnpm 11 and pnpm 12.16 keep a global
@@ -585,6 +585,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.15.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.2
 [0.15.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.0
 [0.14.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.14.1
