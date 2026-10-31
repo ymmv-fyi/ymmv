@@ -23,7 +23,10 @@ for (const stream of [process.stdout, process.stderr]) {
   let gone = false;
   stream.on("error", (err: NodeJS.ErrnoException) => {
     if (gone) return;
-    // Any other stream error behaves as it did with no listener: thrown, so Node reports and exits.
+    // Any other stream error is thrown, so Node reports it and exits 1, as it did for a raw write
+    // with no listener. One narrow change: an async error from a console write (say ECONNRESET on
+    // a socket stdout) used to vanish into console's own no-op listener, which it only adds when
+    // the stream has none; with this one in place it is thrown too.
     if (err.code !== "EPIPE") throw err;
     gone = true;
     // console.log swallows a failed write on its own, but a raw write (the closing blank below,
