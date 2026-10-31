@@ -35,13 +35,18 @@ describe("built bin entry", () => {
     expect(existsSync(binPath), `build the CLI first — dist/cli.js missing at ${binPath}`).toBe(
       true,
     );
-    const link = join(mkdtempSync(join(tmpdir(), "ymmv-bin-")), "ymmv");
-    symlinkSync(binPath, link);
-    // `node <symlink> help` recreates the broken case: argv[1] is the symlink, import.meta.url the
-    // realpath. main() must still run and print help.
-    const res = spawnSync(process.execPath, [link, "help"], { encoding: "utf8" });
-    expect(res.status).toBe(0);
-    expect(res.stdout).toContain("ymmv");
+    const dir = mkdtempSync(join(tmpdir(), "ymmv-bin-"));
+    try {
+      const link = join(dir, "ymmv");
+      symlinkSync(binPath, link);
+      // `node <symlink> help` recreates the broken case: argv[1] is the symlink, import.meta.url
+      // the realpath. main() must still run and print help.
+      const res = spawnSync(process.execPath, [link, "help"], { encoding: "utf8" });
+      expect(res.status).toBe(0);
+      expect(res.stdout).toContain("ymmv");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // The output convention's closing blank (cli.ts .finally) and the wrapped .catch/error prints
@@ -202,9 +207,9 @@ describe("built bin entry", () => {
         res.end(JSON.stringify({ error: "not_found" }));
       });
       await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+      const home = mkdtempSync(join(tmpdir(), "ymmv-pipe-"));
       try {
         const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        const home = mkdtempSync(join(tmpdir(), "ymmv-pipe-"));
         const config = join(home, ".config");
         mkdirSync(join(config, "ymmv"), { recursive: true });
         // macOS keeps env-paths' config under ~/Library/Preferences; both point into `home`.
@@ -241,6 +246,7 @@ describe("built bin entry", () => {
         expect(res.stderr).toBe(""); // no stack trace, no "write EPIPE"
         expect(res.status).toBe(0);
       } finally {
+        rmSync(home, { recursive: true, force: true });
         await new Promise<void>((done) => server.close(() => done()));
       }
     },
