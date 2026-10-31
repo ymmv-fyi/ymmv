@@ -375,12 +375,24 @@ function extrasBlock(
   extras: ExtraDiff,
   theirsLabel: string,
   mineLabel: string,
+  labelW: number,
   c: Codes,
 ): string[] {
   if (!extras.theirs.length && !extras.mine.length) return [];
-  const out: string[] = ["", `  ${c.faint}extras${c.reset}`];
+  // The web's heading: extras are listed, never diffed, so two `Keyboard` lines are not a pair.
+  const out: string[] = ["", `  ${c.faint}extras (not compared)${c.reset}`];
+  // The owner sits in the rows' label column and `label = value` starts at the value column, one
+  // tab stop for the whole readout as on the web (`--label-col`) and the card. A longer owner
+  // pushes it out for every extras line alike. Padded as plain text before the faint codes go
+  // around it, or the codes would count. The whole line is faint: uncompared, so dimmed like the
+  // web's `.extras-dim` and never amber.
+  const whoW = Math.max(
+    labelW,
+    extras.theirs.length ? theirsLabel.length : 0,
+    extras.mine.length ? mineLabel.length : 0,
+  );
   const line = (who: string, label: string, value: string): string =>
-    `  ${c.faint}${who}${c.reset}  ${sanitizeValue(label)} = ${sanitizeValue(value)}`;
+    `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${sanitizeValue(value)}${c.reset}`;
   for (const x of extras.theirs) out.push(line(theirsLabel, x.label, x.value));
   for (const x of extras.mine) out.push(line(mineLabel, x.label, x.value));
   return out;
@@ -436,7 +448,7 @@ export function renderDiff(
     }
   }
 
-  lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, c));
+  lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c));
   lines.push("", `  ${c.faint}${result.differ} differ   ${result.shared} shared${c.reset}`);
   return lines.join("\n");
 }
