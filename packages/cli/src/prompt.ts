@@ -293,8 +293,12 @@ export function makePrompter(after: Schedule = schedule): Prompter {
       await settle((face as unknown as { input: NodeJS.ReadableStream }).input, signal, after);
       clearIdleInput(face);
     }
-    unmute?.();
-    unmute = null;
+    // Only this interface's own mute: a close() during the settle above leaves `unmute` to the
+    // next interface, which must stay muted while it idles.
+    if (rl === face) {
+      unmute?.();
+      unmute = null;
+    }
     try {
       return await face.question(query, { signal });
     } catch (e) {
