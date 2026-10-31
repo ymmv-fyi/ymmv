@@ -141,6 +141,70 @@ describe("detectInstallMethod", () => {
   it("no path at all → unknown", () => {
     expect(detectInstallMethod(undefined)).toBe("unknown");
   });
+
+  // pnpm 11 (and 12.16): the shim runs a path in pnpm's global dir, whose `<hash>` links into the
+  // store. Both halves are evidence; either one alone is not.
+  const P11_RAW = "/home/u/.local/share/pnpm/global/v11/575c/node_modules/ymmv-cli/dist/cli.js";
+  const P11_REAL =
+    "/home/u/.local/share/pnpm/store/v11/links/@/ymmv-cli/0.15.1/3bd1/node_modules/ymmv-cli/dist/cli.js";
+  it.each([
+    { label: "pnpm 11 global", raw: P11_RAW, real: P11_REAL, expected: "pnpm-global" },
+    {
+      label: "pnpm 11 global on Windows",
+      raw: "C:\\Users\\b\\AppData\\Local\\pnpm\\global\\v11\\575c\\node_modules\\ymmv-cli\\dist\\cli.js",
+      real: "C:\\Users\\b\\AppData\\Local\\pnpm\\store\\v11\\links\\@\\ymmv-cli\\0.15.1\\3bd1\\node_modules\\ymmv-cli\\dist\\cli.js",
+      expected: "pnpm-global",
+    },
+    // a project that installs through pnpm's global virtual store: store realpath, no global dir
+    {
+      label: "store realpath from a project",
+      raw: "/repo/node_modules/ymmv-cli/dist/cli.js",
+      real: P11_REAL,
+      expected: "unknown",
+    },
+    // the store realpath alone (what the classifier saw before the raw path was passed)
+    { label: "store realpath alone", raw: P11_REAL, real: P11_REAL, expected: "unknown" },
+    // a raw path in the global dir keeps today's verdict for whatever its realpath is
+    {
+      label: "global dir raw path, realpath not resolved",
+      raw: P11_RAW,
+      real: P11_RAW,
+      expected: "pnpm-global",
+    },
+    {
+      label: "global dir raw path, npm realpath",
+      raw: P11_RAW,
+      real: "/usr/local/lib/node_modules/ymmv-cli/dist/cli.js",
+      expected: "npm-global",
+    },
+    {
+      label: "global dir raw path, realpath somewhere unrelated",
+      raw: P11_RAW,
+      real: "/opt/tools/ymmv-cli/dist/cli.js",
+      expected: "unknown",
+    },
+    // the raw path must sit in pnpm's own global dir, ymmv-cli directly under global/v<N>/<hash>
+    {
+      label: "store realpath, raw path not in pnpm's global dir",
+      raw: "/home/u/global/v11/575c/node_modules/ymmv-cli/dist/cli.js",
+      real: P11_REAL,
+      expected: "unknown",
+    },
+    {
+      label: "store realpath, raw path nested deeper in the global dir",
+      raw: "/home/u/.local/share/pnpm/global/v11/575c/x/node_modules/ymmv-cli/dist/cli.js",
+      real: P11_REAL,
+      expected: "unknown",
+    },
+    {
+      label: "global dir raw path, realpath in a store without links",
+      raw: P11_RAW,
+      real: "/home/u/.local/share/pnpm/store/v11/files/ab/node_modules/ymmv-cli/dist/cli.js",
+      expected: "unknown",
+    },
+  ] as const)("$label → $expected", ({ raw, real, expected }) => {
+    expect(detectInstallMethod({ raw, real })).toBe(expected);
+  });
 });
 
 describe("formatUpdateNotice", () => {
@@ -610,6 +674,17 @@ describe("runUpdate", () => {
       "Run the update with the pnpm that installed this copy.",
     ],
     [
+      // pnpm 11's copy is named by the global dir it runs from, not by its store path.
+      "pnpm 11",
+      {
+        raw: "/home/u/.local/share/pnpm/global/v11/575c/node_modules/ymmv-cli/dist/cli.js",
+        real: "/home/u/.local/share/pnpm/store/v11/links/@/ymmv-cli/0.15.1/3bd1/node_modules/ymmv-cli/dist/cli.js",
+      },
+      "/opt/pnpm/global/v11",
+      "This ymmv runs from /home/u/.local/share/pnpm/global/v11/575c/node_modules/ymmv-cli, but `pnpm add -g ymmv-cli@latest` installs under /opt/pnpm/global/v11.",
+      "Run the update with the pnpm that installed this copy.",
+    ],
+    [
       "bun",
       "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
       "/opt/.bun/bin",
@@ -770,6 +845,100 @@ describe("runUpdate", () => {
         binPath: realpathSync(binPath),
       });
       expect(spawn).toHaveBeenCalledWith("bun add -g ymmv-cli@latest", SPAWN_OPTS);
+    });
+
+    /** pnpm 11's layout under `<dir>/<home>`: the package in the store (`<dir>/<store>/store`),
+     *  a hash-named link in the global dir pointing at the install dir that links the package.
+     *  Returns the path the shim runs (what Node puts in argv[1]). */
+    const pnpm11Install = (home: string, store = home): string => {
+      const pkg = join(dir, store, "store", "v11", "links", "@", "ymmv-cli", "0.15.1", "3bd1");
+      const pkgDir = join(pkg, "node_modules", "ymmv-cli");
+      mkdirSync(join(pkgDir, "dist"), { recursive: true });
+      writeFileSync(join(pkgDir, "dist", "cli.js"), "");
+      const installDir = join(dir, home, "global", "v11", "2bbbf8-1a19");
+      mkdirSync(join(installDir, "node_modules"), { recursive: true });
+      symlinkSync(pkgDir, join(installDir, "node_modules", "ymmv-cli"));
+      symlinkSync(installDir, join(dir, home, "global", "v11", "575c"));
+      return join(dir, home, "global", "v11", "575c", "node_modules", "ymmv-cli", "dist", "cli.js");
+    };
+    const pnpm11Bin = (raw: string) => ({ raw, real: realpathSync(raw) });
+
+    it("pnpm 11: pnpm prints the global dir the running copy runs from, so it spawns", async () => {
+      const raw = pnpm11Install("pnpm");
+      const spawn = spawnThat("exit", 0);
+      await runUpdate({
+        spawn,
+        where: where(`${join(dir, "pnpm", "global", "v11")}\n`),
+        binPath: pnpm11Bin(raw),
+      });
+      expect(spawn).toHaveBeenCalledWith("pnpm add -g ymmv-cli@latest", SPAWN_OPTS);
+      expect(errs).toEqual([]);
+    });
+
+    it("pnpm 11: another global dir is refused", async () => {
+      const raw = pnpm11Install("pnpm");
+      const spawn = vi.fn();
+      const other = join(dir, "other", "pnpm", "global", "v11");
+      await runUpdate({ spawn, where: where(`${other}\n`), binPath: pnpm11Bin(raw) });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(errs.join("\n")).toContain(
+        `This ymmv runs from ${dirname(dirname(raw))}, but \`pnpm add -g ymmv-cli@latest\` installs under ${other}.`,
+      );
+      expect(process.exitCode).toBe(1);
+    });
+
+    it.each([
+      ["its own store", join("second", "pnpm")],
+      // Both homes' links then end at the very same file, so only the global dir tells them apart.
+      ["the same store", "pnpm"],
+    ] as const)(
+      "pnpm 11: another PNPM_HOME with the same version in %s is refused",
+      async (_label, store) => {
+        const raw = pnpm11Install("pnpm");
+        pnpm11Install(join("second", "pnpm"), store);
+        const spawn = vi.fn();
+        await runUpdate({
+          spawn,
+          where: where(`${join(dir, "second", "pnpm", "global", "v11")}\n`),
+          binPath: pnpm11Bin(raw),
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(process.exitCode).toBe(1);
+      },
+    );
+
+    it.each([
+      ["the running path goes through it", "alias", "data"],
+      ["pnpm prints the path through it", "data", "alias"],
+    ] as const)(
+      "pnpm 11: a PNPM_HOME behind a symlink still owns the copy (%s)",
+      async (_label, runVia, printVia) => {
+        pnpm11Install(join("data", "pnpm"));
+        mkdirSync(join(dir, "alias"));
+        symlinkSync(join(dir, "data", "pnpm"), join(dir, "alias", "pnpm"));
+        const raw = join(dir, runVia, "pnpm", "global", "v11", "575c", "node_modules", "ymmv-cli");
+        const spawn = spawnThat("exit", 0);
+        await runUpdate({
+          spawn,
+          where: where(`${join(dir, printVia, "pnpm", "global", "v11")}\n`),
+          binPath: pnpm11Bin(join(raw, "dist", "cli.js")),
+        });
+        expect(spawn).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("pnpm 11: the DEFAULT bin paths keep argv[1] unresolved for the classifier", async () => {
+      const raw = pnpm11Install("pnpm");
+      const argv1 = process.argv[1];
+      process.argv[1] = raw;
+      try {
+        const spawn = spawnThat("exit", 0);
+        // NO binPath: exercise the default resolution
+        await runUpdate({ spawn, where: where(`${join(dir, "pnpm", "global", "v11")}\n`) });
+        expect(spawn).toHaveBeenCalledWith("pnpm add -g ymmv-cli@latest", SPAWN_OPTS);
+      } finally {
+        process.argv[1] = argv1;
+      }
     });
 
     it("bun with its bin dir moved and no link to the running copy is refused", async () => {

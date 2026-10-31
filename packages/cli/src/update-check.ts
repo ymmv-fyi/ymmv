@@ -84,8 +84,9 @@ export interface UpdateCheckDeps {
   /** Pass null to mean "could not be determined" (readFileSync threw). `undefined` = read it. */
   currentVersion?: string | null;
   stderrIsTTY?: boolean;
-  /** The bin script's (real)path — NOT Node's process.execPath (the node binary). */
-  binPath?: string;
+  /** The bin script's path — NOT Node's process.execPath (the node binary). A string stands for
+   *  both the path Node was given and its realpath; see binPaths. */
+  binPath?: string | BinPaths;
 }
 
 /** This build's version from the packaged package.json, or null when unreadable. `0.0.0` is what
@@ -161,18 +162,61 @@ async function writeCache(path: string, cache: UpdateCache): Promise<void> {
   }
 }
 
-/** The bin script's realpath (npm global bins are symlinks — the TARGET is what carries the
- *  install-layout evidence). Falls back to the raw path when realpath fails. Shared with
- *  runUpdate: both surfaces MUST classify identically or the notice's "run ymmv update" and the
- *  command's own verdict contradict each other. */
-export function binRealpath(): string | undefined {
+/** The bin script as Node was given it (`raw`, process.argv[1]: absolute, but no symlink
+ *  followed) and its realpath (`real`, the raw path when realpath fails). Most layouts are judged
+ *  by the realpath: npm global bins are symlinks, and the TARGET carries the install evidence.
+ *  pnpm 11 and later need both, since the global dir only links into pnpm's store (see
+ *  pnpmGlobalLink). */
+export interface BinPaths {
+  raw: string;
+  real: string;
+}
+
+/** The running bin's paths. `given` is a test override: a string stands for both paths. Shared
+ *  with runUpdate: both surfaces MUST classify identically or the notice's "run ymmv update" and
+ *  the command's own verdict contradict each other. */
+export function binPaths(given?: string | BinPaths): BinPaths | undefined {
+  if (typeof given === "string") return { raw: given, real: given };
+  if (given) return given;
   const raw = process.argv[1];
   if (!raw) return undefined;
   try {
-    return realpathSync(raw);
+    return { raw, real: realpathSync(raw) };
   } catch {
-    return raw;
+    return { raw, real: raw };
   }
+}
+
+const pathSegments = (p: string): string[] => p.split(/[\\/]+/).filter(Boolean);
+const PNPM_LAYOUT_RE = /^v\d+$/;
+
+/**
+ * A pnpm global install that lives in pnpm's store (pnpm 11, and 12 as of 12.16): the shim runs
+ * `$PNPM_HOME/global/v11/<dir>/node_modules/ymmv-cli/…` (`<dir>` is a hash-named link to the
+ * install dir in later releases, the install dir itself in 11.0), and the realpath lands in
+ * `<store>/v11/links/…`. Both halves are required. A store realpath alone is also what a
+ * project install through pnpm's global virtual store looks like, and a raw path in the global
+ * dir proves nothing about where the copy really is. Returns the raw path's segments below
+ * `global/v<N>` (`<dir>/node_modules/ymmv-cli/…`, case kept), which runUpdate strips off to
+ * find the global dir the copy runs from; null when this isn't that layout.
+ */
+export function pnpmGlobalLink(bin: BinPaths): string[] | null {
+  const raw = pathSegments(bin.raw);
+  const low = raw.map((s) => s.toLowerCase());
+  const i = low.findIndex(
+    (s, j) =>
+      s === "pnpm" &&
+      low[j + 1] === "global" &&
+      PNPM_LAYOUT_RE.test(low[j + 2] ?? "") &&
+      low[j + 4] === "node_modules" &&
+      low[j + 5] === "ymmv-cli",
+  );
+  if (i === -1) return null;
+  const real = pathSegments(bin.real).map((s) => s.toLowerCase());
+  const inStore = real.some(
+    (s, j) => s === "store" && PNPM_LAYOUT_RE.test(real[j + 1] ?? "") && real[j + 2] === "links",
+  );
+  return inStore ? raw.slice(i + 3) : null;
 }
 
 /** Directory names that legitimately precede `lib/node_modules` in an npm GLOBAL prefix:
@@ -189,20 +233,21 @@ const VERSIONISH_RE = /^v?\d+(\.\d+)*$/;
  * nest under manager dirs (`~/.npm/_npx`, pnpm's `dlx`, bunx temp dirs, `~/.bun/install/cache`),
  * so runners are ruled out before their parent manager can claim the path, and disqualifiers
  * (volta owns its installs; a `.pnpm` store is project territory unless pnpm's own global dir
- * anchors it) are ruled out before npm can. Global evidence is POSITIVE and ANCHORED:
+ * anchors it) are ruled out before npm can. Global evidence is POSITIVE and ANCHORED, and read
+ * from the realpath except where noted:
  *   npm-global   <known-prefix>/lib/node_modules/ymmv-cli/… or …\npm\node_modules\ymmv-cli\…
- *   pnpm-global  pnpm's OWN global dir — an adjacent `pnpm/global` pair ($PNPM_HOME/global/5/…)
+ *   pnpm-global  pnpm's OWN global dir — an adjacent `pnpm/global` pair ($PNPM_HOME/global/5/…,
+ *                pnpm 9 and 10, and early 12's global/v11/<hash>/node_modules/.pnpm/…) — or the
+ *                store layout, which needs the raw path too (pnpmGlobalLink)
  *   bun-global   under .bun's global install or its bin dir (~/.bun/install/global, ~/.bun/bin)
  * Anchoring matters because a wrong `-global` verdict SPAWNS an installer: a project checked out
  * under a directory literally named `lib/`, or a pnpm project with a stray `global` path segment,
  * must classify `unknown` (prints the manual commands), never npm/pnpm-global.
  */
-export function detectInstallMethod(binPath: string | undefined): InstallMethod {
-  if (!binPath) return "unknown";
-  const segs = binPath
-    .split(/[\\/]+/)
-    .filter(Boolean)
-    .map((s) => s.toLowerCase());
+export function detectInstallMethod(given: string | BinPaths | undefined): InstallMethod {
+  const bin = typeof given === "string" ? binPaths(given) : given;
+  if (!bin?.real) return "unknown";
+  const segs = pathSegments(bin.real).map((s) => s.toLowerCase());
   const has = (name: string): boolean => segs.includes(name);
 
   // Ephemeral runner caches first.
@@ -218,6 +263,7 @@ export function detectInstallMethod(binPath: string | undefined): InstallMethod 
   // pnpm-global: ONLY pnpm's own global dir (adjacent pnpm→global). `has(pnpm) && has(global)`
   // false-positived on any pnpm PROJECT under a path containing a `global` segment.
   if (segs.some((s, i) => s === "pnpm" && segs[i + 1] === "global")) return "pnpm-global";
+  if (pnpmGlobalLink(bin)) return "pnpm-global";
   if (has(".pnpm")) return "unknown"; // a pnpm store outside pnpm's global dir = project install
   // npm-global: the node_modules must directly contain ymmv-cli AND sit in a recognized global
   // prefix — <known-root>/lib/node_modules (POSIX / version managers) or npm/node_modules
@@ -330,7 +376,7 @@ export function startUpdateCheck(deps: UpdateCheckDeps = {}): {
 
   const cachePath = deps.cachePath ?? updateCachePath();
   const doFetch = deps.fetch ?? globalThis.fetch;
-  const method = detectInstallMethod(deps.binPath ?? binRealpath());
+  const method = detectInstallMethod(binPaths(deps.binPath));
   const color = useColor(env, stderrIsTTY);
   const term = env.TERM;
 
