@@ -408,12 +408,13 @@ function extrasBlock(
     extras.theirs.length ? theirsLabel.length : 0,
     extras.mine.length ? mineLabel.length : 0,
   );
-  // A URL value is a link, as on the card and in the web's extras (amber there too: links are the
-  // other thing amber marks). It comes last on the line, so link()'s reset ends the faint run.
+  // A URL value is a link with color on, shortened as on the card, but faint like the rest of
+  // the line: in the diff amber says "differs", and a terminal shows no underline to tell a link
+  // apart (the web's extras link is amber, but underlined).
   const line = (who: string, label: string, value: string): string => {
     const v = sanitizeValue(value);
-    const shown = color && isHttpUrl(v) ? link(v, true, term) : `${v}${c.reset}`;
-    return `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${shown}`;
+    const shown = color && isHttpUrl(v) ? hyperlink(v.trim(), displayUrl(v), term) : v;
+    return `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${shown}${c.reset}`;
   };
   for (const x of extras.theirs) out.push(line(theirsLabel, x.label, x.value));
   for (const x of extras.mine) out.push(line(mineLabel, x.label, x.value));
@@ -425,26 +426,32 @@ const ELLIPSIS = "…";
 // cut, so the diff prints full values and lets the terminal wrap, as it did before any cap.
 const MIN_CELL = 6;
 
-/** `s` cut to `w` columns with a trailing `…` (`fromEnd`: a leading one, keeping the tail). Cuts
- *  between code points, never inside a surrogate pair. Measures `.length` like the padding does:
- *  a wide character (CJK, emoji) takes two columns on screen and is under-counted by both. */
-function cut(s: string, w: number, fromEnd = false): string {
+/** `s` cut to `w` columns, ending in `…` when it doesn't fit. Cuts between code points, never
+ *  inside a surrogate pair. Measures `.length` like the padding does: a wide character (CJK,
+ *  emoji) takes two columns on screen and is under-counted by both. */
+function cut(s: string, w: number): string {
   if (s.length <= w) return s;
-  const cps = [...s];
-  if (fromEnd) cps.reverse();
   let kept = "";
-  for (const ch of cps) {
+  for (const ch of s) {
     if (kept.length + ch.length > w - ELLIPSIS.length) break;
-    kept = fromEnd ? ch + kept : kept + ch;
+    kept += ch;
   }
-  return fromEnd ? ELLIPSIS + kept : kept + ELLIPSIS;
+  return kept + ELLIPSIS;
+}
+
+/** The part of `cps` (a value's code points) from `start`, in `w` columns: a leading `…` when
+ *  it starts past the beginning, a trailing one when it still doesn't fit. */
+function windowAt(cps: string[], start: number, w: number): string {
+  if (start === 0) return cut(cps.join(""), w);
+  return ELLIPSIS + cut(cps.slice(start).join(""), w - ELLIPSIS.length);
 }
 
 /** The two value columns' widths. Without `columns` (stdout not a terminal) both keep their
  *  longest value: a script reads full values. On a terminal the row (gutter, label, two values,
  *  their gaps) has to fit, so the longer column gives way first: a column that fits in half the
- *  room keeps its width and the other takes the rest, else both get half. Too little room for
- *  MIN_CELL in a column being cut and nothing is cut. */
+ *  room keeps its width and the other takes the rest, else both get the same half (an odd column
+ *  left over goes unused: two cuts of one value at different widths would look different on an
+ *  `=` row). Too little room for MIN_CELL in a column being cut and nothing is cut. */
 function valueWidths(
   labelW: number,
   theirs: number,
@@ -460,7 +467,7 @@ function valueWidths(
       ? [theirs, room - theirs]
       : mine <= room - half
         ? [room - mine, mine]
-        : [half, room - half];
+        : [half, half];
   // Only a column that is cut needs the room; one keeping its own width may be narrower.
   const tooNarrow = (w: number, own: number): boolean => w < own && w < MIN_CELL;
   return tooNarrow(t, theirs) || tooNarrow(m, mine) ? [theirs, mine] : [t, m];
@@ -468,13 +475,17 @@ function valueWidths(
 
 /**
  * The shown text of a row's two cells. A URL shortens like the card's (displayUrl) with color on,
- * where it is also a link to the full address; with color off it stays the full URL, link()'s
- * rule. Then each cell is cut to its column. A differing row must never show two equal-looking
- * cells (the web's pairCells rule, packages/web/src/lib/diff-cells.ts): shortening can make two
- * URLs match (https://x vs x, user@host vs host, GitHub.com vs github.com, all of which dotfiles
- * compares verbatim), and so can a cut (two long URLs that differ past it). So the row drops the
- * shortening when the shortened forms match, keeps the tails when the cut heads match, and prints
- * both cells whole when the tails match too: that one row wraps rather than lie.
+ * where it is also a link to the full address. With color off it stays the full URL (link()'s
+ * rule: a terminal can still detect it), unless it is about to be cut, which loses that anyway.
+ * Then each cell is cut to its column.
+ *
+ * A differing row must never show two equal-looking cells (the web's pairCells rule,
+ * packages/web/src/lib/diff-cells.ts). Shortening can make two URLs match (https://x vs x,
+ * user@host vs host, GitHub.com vs github.com, all of which dotfiles compares verbatim): the row
+ * then drops the shortening. A cut can too (two long URLs that differ past it): checked at the
+ * narrower column, the row then shows both cells from the same point a little before the first
+ * character that differs, `…/editor/v1` against `…/editor/v2`, so the difference is in view.
+ * What a terminal shows alike past that (invisible characters) is not caught, as before.
  */
 function pairShown(
   theirs: string | null,
@@ -484,15 +495,22 @@ function pairShown(
   color: boolean,
 ): [string, string] {
   const both = differ && theirs !== null && mine !== null;
-  const short = (v: string | null): string =>
-    v === null ? MISSING : color && isHttpUrl(v) ? displayUrl(v) : v;
-  let [t, m] = [short(theirs), short(mine)];
-  if (both && t === m) [t, m] = [theirs, mine];
+  const short = (v: string | null, w: number): string =>
+    v === null ? MISSING : isHttpUrl(v) && (color || v.length > w) ? displayUrl(v) : v;
   const [tw, mw] = widths;
-  const head: [string, string] = [cut(t, tw), cut(m, mw)];
-  if (!both || head[0] !== head[1]) return head;
-  const tail: [string, string] = [cut(t, tw, true), cut(m, mw, true)];
-  return tail[0] !== tail[1] ? tail : [t, m];
+  let [t, m] = [short(theirs, tw), short(mine, mw)];
+  if (both && t === m) [t, m] = [theirs, mine];
+  const w = Math.min(tw, mw);
+  if (!both || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
+  const [tc, mc] = [[...t], [...m]];
+  let i = 0;
+  while (i < tc.length && tc[i] === mc[i]) i++;
+  // Half the window before the difference, or as much as the longer value's end leaves room for.
+  const start = Math.max(
+    0,
+    Math.min(i - Math.floor(w / 2), Math.max(tc.length, mc.length) - w + 1),
+  );
+  return [windowAt(tc, start, w), windowAt(mc, start, w)];
 }
 
 /**

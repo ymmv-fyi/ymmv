@@ -353,10 +353,9 @@ describe("renderDiff", () => {
     it("color off at 80 columns: every row fits and the long cell ends in …", () => {
       const out = renderDiff(LONGDIFF, { ...OPTS, color: false, columns: 80 });
       for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(80);
-      // No URL shortening with color off (link()'s rule): the full URL, cut.
-      expect(out).toMatch(
-        /^~ Dotfiles {9}https:\/\/github\.com\/antfu\/dotfiles-but-wi\S*… {2}—$/m,
-      );
+      // Color off keeps a URL whole when it fits (a terminal can detect it); one being cut
+      // loses that anyway, so it drops `https://` first, as with color on.
+      expect(out).toMatch(/^~ Dotfiles {9}github\.com\/antfu\/dotfiles-but-wi\S*… {2}—$/m);
       expect(out).toMatch(/^~ Editor {11}VS Code {2,}Zed$/m);
       expect(out).toMatch(/^= OS {15}macOS 15\.2 {2,}macOS 15\.2$/m);
     });
@@ -386,7 +385,7 @@ describe("renderDiff", () => {
       };
       const out = renderDiff(d, { ...OPTS, color: false, columns: 60 });
       for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(60);
-      expect(out).toMatch(/^~ Dotfiles {2}— {6}https:\/\/github\.com\S*…$/m);
+      expect(out).toMatch(/^~ Dotfiles {2}— {6}github\.com\S*…$/m);
     });
 
     it("cuts a column head that is longer than its column", () => {
@@ -459,12 +458,60 @@ describe("renderDiff", () => {
         }
       });
 
-      it("prints both whole when the heads and the tails both match", () => {
+      it("shows the middle when the heads and the tails both match", () => {
         const a = `${BASE_URL}/a/${"y".repeat(60)}`;
         const b = `${BASE_URL}/b/${"y".repeat(60)}`;
-        const out = renderDiff(pair(a, b), { ...OPTS, color: false, columns: 80 });
-        expect(out).toContain(a);
-        expect(out).toContain(b);
+        for (const color of [false, true]) {
+          const out = renderDiff(pair(a, b), { ...OPTS, color, columns: 80 });
+          const [t, m] = cells(out);
+          expect(t).toMatch(/^…x+\/a\/y+…$/);
+          expect(m).toMatch(/^…x+\/b\/y+…$/);
+          expect(t?.length).toBe(m?.length);
+          for (const l of out.split("\n")) expect(visible(l).length).toBeLessThanOrEqual(80);
+        }
+      });
+
+      it("compares two cut cells at the same width when the room is odd", () => {
+        // `Version Manager` makes the room 80 - 15 - 6 = 59: both columns get 29.
+        const d: DiffResult = {
+          rows: [
+            {
+              key: "version-manager",
+              label: "Version Manager",
+              theirs: "mise",
+              mine: "mise",
+              status: "same",
+            },
+            {
+              key: "dotfiles",
+              label: "Dotfiles",
+              theirs: "https://github.com/acme-corp/dotfiles/tree/main/hosts/alice-laptop",
+              mine: "https://github.com/acme-corp/dotfiles/tree/main/hosts/bob-desktop",
+              status: "changed",
+            },
+            {
+              key: "font",
+              label: "Font",
+              theirs: "JetBrains Mono Nerd Font Propo",
+              mine: "JetBrains Mono Nerd Font Propo",
+              status: "same",
+            },
+          ],
+          extras: { mine: [], theirs: [] },
+          differ: 1,
+          shared: 2,
+        };
+        for (const columns of [80, 81]) {
+          const out = renderDiff(d, { ...OPTS, color: false, columns });
+          const dot = out.split("\n").find((l) => l.startsWith("~ Dotfiles")) ?? "";
+          expect(dot).toContain("alice");
+          expect(dot).toContain("bob");
+          // An `=` row's two cuts of one value look the same.
+          const font = out.split("\n").find((l) => l.startsWith("= Font")) ?? "";
+          const [ft, fm] = font.replace(/^= Font\s+/, "").split(/ {2,}/);
+          expect(ft).toBe(fm);
+          for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(columns);
+        }
       });
 
       it("a row the diff calls same may cut both sides alike", () => {
@@ -671,7 +718,7 @@ describe("renderDiff", () => {
       ].join("\n"),
     );
     // With color on the whole line is faint and the padding sits inside it, so the codes add no
-    // width. The one amber in the block is the URL value's: a link, as on the card and the web.
+    // width. A URL value is a link, shortened, but faint: in the diff amber means "differs".
     const color = renderDiff(d, {
       color: true,
       theirsLabel: "antfu",
@@ -684,9 +731,9 @@ describe("renderDiff", () => {
     expect(color).toContain(`  ${ESC}[90mbardisty  Launcher = Raycast${ESC}[0m`);
     expect(color).toContain(
       `  ${ESC}[90mantfu     Dotfiles = ${OSC8_OPEN}https://github.com/antfu/dotfiles${ESC}\\` +
-        `${AMBER}github.com/antfu/dotfiles${ESC}[0m${OSC8_OPEN}${ESC}\\`,
+        `github.com/antfu/dotfiles${OSC8_OPEN}${ESC}\\${ESC}[0m`,
     );
-    expect(color.slice(color.indexOf("extras (")).split(AMBER)).toHaveLength(2);
+    expect(color.slice(color.indexOf("extras ("))).not.toContain(AMBER);
   });
 
   it("starts the extras labels at the rows' value column when the row labels are longer", () => {
