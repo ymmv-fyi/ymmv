@@ -64,7 +64,12 @@ symmetric: both differing values go amber plus the row dot; same rows recede to 
 
 CLI parity: the CLI renders the same semantics with ANSI bright yellow (`packages/cli/src/render.ts`)
 — amber-only-on-difference, em-dash for a missing side, "N differ / N shared" wording, "how X
-differs from Y" heading. Change one surface, mirror the other.
+differs from Y" heading. Change one surface, mirror the other. A long value is the one place the
+two part ways, because a terminal can't break a cell between path segments the way the web's
+narrow column does: on a terminal the CLI caps both value columns to the width and ends a longer
+cell in `…`. Both surfaces keep the same rule for a differing row: its two cells never look
+alike. If shortening or cutting would make them look alike, the CLI drops the shortening, keeps
+the tails, or prints both whole. A piped diff is never cut.
 
 The CLI's publish preview compares the card against the live profile and marks each differing
 row in the gutter: `~` changed, `+` new, `-` cleared. That is the no-color vocabulary plus two
