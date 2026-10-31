@@ -47,6 +47,7 @@ import {
 import { PromptAborted, type Prompter } from "./prompt.js";
 import {
   colorEnabled,
+  diffPageUrl,
   link,
   linkForm,
   message,
@@ -1035,8 +1036,15 @@ export async function view(handle: string): Promise<void> {
       return null;
     });
     if (mine && mine.handle.toLowerCase() !== theirs.handle.toLowerCase()) {
+      // The column says `you`; the page needs the viewer's handle as stored. mine.handle, not
+      // cred.handle: the login's copy goes stale after a rename, which the fetch followed.
       console.log(
-        renderDiff(diff(mine, theirs), { color: c, theirsLabel: theirs.handle, mineLabel: "you" }),
+        renderDiff(diff(mine, theirs), {
+          color: c,
+          theirsLabel: theirs.handle,
+          mineLabel: "you",
+          page: diffPageUrl(BASE, theirs.handle, mine.handle),
+        }),
       );
       return;
     }
@@ -1087,7 +1095,12 @@ export async function compare(theirsHandle: string, mineHandle: string): Promise
   }
   noteRename(mineHandle, mine);
   console.log(
-    renderDiff(diff(mine, theirs), { color, theirsLabel: theirs.handle, mineLabel: mine.handle }),
+    renderDiff(diff(mine, theirs), {
+      color,
+      theirsLabel: theirs.handle,
+      mineLabel: mine.handle,
+      page: diffPageUrl(BASE, theirs.handle, mine.handle),
+    }),
   );
 }
 

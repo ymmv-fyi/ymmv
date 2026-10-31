@@ -207,8 +207,23 @@ export function link(url: string, color: boolean, term = process.env.TERM, label
   const clean = sanitizeValue(url).trim();
   if (!color) return clean;
   const text = `${CODES.amber}${label ? sanitizeValue(label) : displayUrl(clean)}${CODES.reset}`;
+  return hyperlink(clean, text, term);
+}
+
+/** `text` as an OSC-8 hyperlink to `href`, or `text` alone on a terminal that mishandles one.
+ *  Callers pass a sanitized href and only emit this with color on. */
+function hyperlink(href: string, text: string, term: string | undefined): string {
   if (term !== undefined && NO_OSC8_TERMS.has(term)) return text;
-  return `${OSC}8;;${clean}${ST}${text}${OSC}8;;${ST}`;
+  return `${OSC}8;;${href}${ST}${text}${OSC}8;;${ST}`;
+}
+
+/** The web page a diff mirrors. /<a>/vs/<b> diffs mine = b against theirs = a, so theirs comes
+ *  first. Callers pass the handles as stored (the fetched profiles, after any rename), never a
+ *  typed argument and never the `you` the signed-in diff heads its column with. Each segment is
+ *  encoded like Diff.astro's swap link: a stored handle needs none, but wire data is untrusted. */
+export function diffPageUrl(base: string, theirs: string, mine: string): string {
+  const seg = (h: string): string => encodeURIComponent(sanitizeValue(h));
+  return `${base}/${seg(theirs)}/vs/${seg(mine)}`;
 }
 
 /**
@@ -403,10 +418,15 @@ function extrasBlock(
  * BOTH value columns amber with a leading amber dot (a difference is symmetric, neither side is the
  * "wrong" one — mirrors the web diff); same rows are muted. With color off, a leading `~`/`=`
  * symbol carries the same information so it reads on any terminal.
+ *
+ * `page` is the web page this readout mirrors (diffPageUrl). It heads the diff where the card
+ * puts its `ymmv.fyi/<handle>` breadcrumb, in the card's form: no `https://` in either color mode,
+ * so a piped diff and a piped card name their pages alike. With color on it is faint (an address,
+ * not a difference, so never amber) and an OSC-8 link to the full URL.
  */
 export function renderDiff(
   result: DiffResult,
-  opts: { color: boolean; theirsLabel: string; mineLabel: string },
+  opts: { color: boolean; theirsLabel: string; mineLabel: string; page: string; term?: string },
 ): string {
   const c = palette(opts.color);
   const theirsLabel = sanitizeValue(opts.theirsLabel);
@@ -422,8 +442,11 @@ export function renderDiff(
   // Column heads are the handles as stored, faint, like the web diff's (DESIGN.md, Diff session).
   const theirsW = Math.max(theirsLabel.length, ...cells.map((r) => r.theirs.length));
 
+  const page = sanitizeValue(opts.page);
+  const pageText = `${c.faint}${displayUrl(page)}${c.reset}`;
   const lines: string[] = [
     "",
+    `  ${opts.color ? hyperlink(page, pageText, opts.term ?? process.env.TERM) : pageText}`,
     // The web diff's h1, collapsed to one line — information (which side is which), not decoration,
     // so it prints in both color modes.
     `  ${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset} ${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,

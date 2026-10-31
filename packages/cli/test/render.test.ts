@@ -1,6 +1,7 @@
 import { type CuratedKey, type DiffResult, MAX_VALUE, type Profile } from "@ymmv/shared";
 import { describe, expect, it, vi } from "vitest";
 import {
+  diffPageUrl,
   isHttpUrl,
   link,
   linkForm,
@@ -287,6 +288,8 @@ const DIFF: DiffResult = {
   shared: 1,
 };
 
+const PAGE = "https://ymmv.fyi/antfu/vs/me";
+
 describe("renderDiff", () => {
   it("never shortens a URL cell, so a userinfo-only difference stays visibly different", () => {
     const d: DiffResult = {
@@ -303,43 +306,154 @@ describe("renderDiff", () => {
       differ: 1,
       shared: 0,
     };
-    const out = renderDiff(d, { color: true, theirsLabel: "antfu", mineLabel: "you" });
+    const out = renderDiff(d, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+      term: "xterm-256color",
+    });
     expect(out).toContain("https://good.com@evil.com");
     expect(out).toContain("https://evil.com");
+    // The page line above the heading is the only link.
+    expect(out.match(new RegExp(`${ESC}\\]8;;https?:`, "g"))).toHaveLength(1);
+    expect(out).toContain(`${OSC8_OPEN}${PAGE}`);
+  });
+
+  it("heads the diff with the web page it mirrors, schemeless in both color modes", () => {
+    const plain = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
+    expect(plain.startsWith("\n  ymmv.fyi/antfu/vs/me\n  how antfu differs from you\n\n")).toBe(
+      true,
+    );
+    const color = renderDiff(DIFF, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+      term: "xterm-256color",
+    });
+    // Faint, never amber (an address, not a difference), and a link to the full URL.
+    expect(color).toContain(
+      `\n  ${OSC8_OPEN}${PAGE}${ESC}\\${ESC}[90mymmv.fyi/antfu/vs/me${ESC}[0m${OSC8_OPEN}${ESC}\\\n`,
+    );
+  });
+
+  it("drops the page line's OSC-8 on a terminal that mishandles it, keeping the faint text", () => {
+    const out = renderDiff(DIFF, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+      term: "linux",
+    });
     expect(out).not.toContain(OSC8_OPEN);
+    expect(out).toContain(`\n  ${ESC}[90mymmv.fyi/antfu/vs/me${ESC}[0m\n`);
+  });
+
+  it("names a local Worker's page with its http scheme, as the card does", () => {
+    const out = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: diffPageUrl("http://localhost:8791", "antfu", "me"),
+    });
+    expect(out).toContain("\n  http://localhost:8791/antfu/vs/me\n");
+  });
+
+  it("sanitizes the page before it reaches the terminal", () => {
+    const out = renderDiff(DIFF, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: `https://ymmv.fyi/a${ESC}]8;;https://evil.example${ESC}\\/vs/b`,
+      term: "xterm-256color",
+    });
+    // Only our own link's open and close: the smuggled sequence lost its escape bytes.
+    expect(out.split(`${ESC}]`)).toHaveLength(3);
+  });
+});
+
+describe("diffPageUrl", () => {
+  it("follows the web's route: theirs first, then mine", () => {
+    expect(diffPageUrl("https://ymmv.fyi", "antfu", "bardisty")).toBe(
+      "https://ymmv.fyi/antfu/vs/bardisty",
+    );
+  });
+  it("keeps the stored casing and encodes each segment like the web's swap link", () => {
+    expect(diffPageUrl("https://ymmv.fyi", "OctoCat", "a b/c")).toBe(
+      "https://ymmv.fyi/OctoCat/vs/a%20b%2Fc",
+    );
+  });
+  it("strips control bytes from a handle before encoding it", () => {
+    expect(diffPageUrl("https://ymmv.fyi", `x${ESC}[2Jy`, "me")).toBe("https://ymmv.fyi/xy/vs/me");
   });
   it("color mode: amber marks BOTH values of the differing row; footer is the thesis line", () => {
-    const out = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
+    const out = renderDiff(DIFF, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
     expect(out).toContain(`${AMBER}fish`); // theirs column ambers too — a difference is symmetric
     expect(out).toContain(`${AMBER}zsh`);
     expect(out).toMatch(/1 differ {3}1 shared/);
   });
 
   it("NO_COLOR mode: zero ANSI; `~`/`=` symbols carry which rows differ", () => {
-    const out = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    const out = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
     expect(out).not.toContain(ESC);
     expect(out).toMatch(/^~ Shell/m);
     expect(out).toMatch(/^= Editor/m);
   });
 
   it("opens with the web's title line in both color modes", () => {
-    const plain = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    const plain = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
     expect(plain).toContain("  how antfu differs from you");
-    const color = renderDiff(DIFF, { color: true, theirsLabel: "antfu", mineLabel: "you" });
+    const color = renderDiff(DIFF, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
     expect(color).toContain(`${ESC}[1mantfu${ESC}[0m`);
     expect(color).toMatch(/how/);
     expect(color).toMatch(/differs from/);
   });
 
   it("prints the column heads as the handles are stored (web parity), leaving row values untouched", () => {
-    const out = renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    const out = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "you",
+      page: PAGE,
+    });
     expect(out).toMatch(/antfu\s+you/);
     expect(out).not.toMatch(/ANTFU|YOU/);
     expect(out).toContain("fish"); // values keep their case
   });
 
   it("keeps the display casing of a mixed-case handle in its column head", () => {
-    const out = renderDiff(DIFF, { color: false, theirsLabel: "OctoCat", mineLabel: "you" });
+    const out = renderDiff(DIFF, {
+      color: false,
+      theirsLabel: "OctoCat",
+      mineLabel: "you",
+      page: PAGE,
+    });
     // The heading line above prints the handle with its casing; the head must not disagree.
     expect(out).toMatch(/how OctoCat differs from you/);
     expect(out).toMatch(/OctoCat\s+you/);
@@ -355,7 +469,7 @@ describe("renderDiff", () => {
       differ: 1,
       shared: 0,
     };
-    const out = renderDiff(evil, { color: false, theirsLabel: "x", mineLabel: "you" });
+    const out = renderDiff(evil, { color: false, theirsLabel: "x", mineLabel: "you", page: PAGE });
     expect(out).not.toContain(ESC);
     expect(out).toContain("boom");
   });
@@ -373,7 +487,7 @@ describe("renderDiff", () => {
       differ: 2,
       shared: 0,
     };
-    const out = renderDiff(d, { color: false, theirsLabel: "antfu", mineLabel: "you" });
+    const out = renderDiff(d, { color: false, theirsLabel: "antfu", mineLabel: "you", page: PAGE });
     expect(out).toContain("—"); // the absent-side placeholder
     expect(out).toMatch(/extras/);
     expect(out).toContain("Hyprland");
@@ -394,7 +508,12 @@ describe("renderDiff", () => {
       differ: 1,
       shared: 0,
     };
-    const plain = renderDiff(d, { color: false, theirsLabel: "antfu", mineLabel: "bardisty" });
+    const plain = renderDiff(d, {
+      color: false,
+      theirsLabel: "antfu",
+      mineLabel: "bardisty",
+      page: PAGE,
+    });
     // `Editor` is shorter than `bardisty`, so the owner column sets the stop for the extras.
     expect(plain).toContain(
       [
@@ -406,7 +525,12 @@ describe("renderDiff", () => {
     );
     // With color on the whole line is faint and the padding sits inside it, so the codes add no
     // width and nothing in the block is amber.
-    const color = renderDiff(d, { color: true, theirsLabel: "antfu", mineLabel: "bardisty" });
+    const color = renderDiff(d, {
+      color: true,
+      theirsLabel: "antfu",
+      mineLabel: "bardisty",
+      page: PAGE,
+    });
     expect(color).toContain(`  ${ESC}[90mextras (not compared)${ESC}[0m`);
     expect(color).toContain(`  ${ESC}[90mantfu     Keyboard = HHKB Pro 2${ESC}[0m`);
     expect(color).toContain(`  ${ESC}[90mbardisty  Launcher = Raycast${ESC}[0m`);
@@ -421,7 +545,12 @@ describe("renderDiff", () => {
       shared: 1,
     };
     // Only the owners with a line count: `bardisty` owns none, so `Shell` sets the stop.
-    const out = renderDiff(d, { color: false, theirsLabel: "x", mineLabel: "bardisty" });
+    const out = renderDiff(d, {
+      color: false,
+      theirsLabel: "x",
+      mineLabel: "bardisty",
+      page: PAGE,
+    });
     expect(out).toContain("= Shell  zsh");
     expect(out).toContain("  x      WM = Hyprland");
   });
@@ -436,7 +565,7 @@ describe("renderDiff", () => {
       differ: 0,
       shared: 0,
     };
-    const out = renderDiff(d, { color: false, theirsLabel: "jo", mineLabel: "you" });
+    const out = renderDiff(d, { color: false, theirsLabel: "jo", mineLabel: "you", page: PAGE });
     expect(out).toContain("  jo   WM = Hyprland\n  you  Launcher = Raycast");
   });
 });
@@ -780,7 +909,7 @@ describe("output units (spacing convention)", () => {
           ["shell", "zsh"],
         ]),
       }),
-      renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you" }),
+      renderDiff(DIFF, { color: false, theirsLabel: "antfu", mineLabel: "you", page: PAGE }),
       nudge(false),
       notFound("ghost"),
     ];

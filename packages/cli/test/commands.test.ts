@@ -211,6 +211,7 @@ describe("view — the 3 branches", () => {
     await view("antfuold");
     expect(errs).toEqual(["\n  (antfuold is now antfu)"]);
     expect(logs.join("\n")).toMatch(/how antfu differs from you/);
+    expect(logs[0]).toContain("  ymmv.fyi/antfu/vs/me\n");
   });
 
   it("a handle typed in another case is no rename", async () => {
@@ -227,10 +228,13 @@ describe("view — the 3 branches", () => {
       vi
         .fn()
         .mockResolvedValueOnce(jsonRes(prof("antfu", [{ key: "shell", value: "fish" }]))) // theirs
-        .mockResolvedValueOnce(jsonRes(prof("me", [{ key: "shell", value: "zsh" }]))), // mine
+        // mine, stored as "Me": the login's copy says "me"
+        .mockResolvedValueOnce(jsonRes(prof("Me", [{ key: "shell", value: "zsh" }]))),
     );
     await view("antfu");
     expect(logs.join("\n")).toMatch(/differs from/); // the diff title line
+    // The page names the viewer by the fetched handle, never the `you` the column heads with.
+    expect(logs[0]).toMatch(/^\n {2}ymmv\.fyi\/antfu\/vs\/Me\n {2}how antfu differs from you\n/);
   });
 
   it("logged in WITHOUT a profile → plain view + amber nudge", async () => {
@@ -311,7 +315,7 @@ describe("compare: ymmv <a> vs <b>", () => {
     expect(JSON.stringify(fetchFn.mock.calls)).not.toMatch(/authorization|Bearer/i);
     expect(logs).toHaveLength(1);
     // The web's /antfu/vs/bardisty: theirs = antfu (left column), mine = bardisty.
-    expect(logs[0]).toContain("how antfu differs from bardisty");
+    expect(logs[0]).toContain("  ymmv.fyi/antfu/vs/bardisty\n  how antfu differs from bardisty");
     expect(logs[0]).toMatch(/^~ Editor\s+VS Code\s+Zed$/m);
     expect(logs[0]).toMatch(/^= Shell\s+zsh\s+zsh$/m);
     expect(errs).toEqual([]);
@@ -321,7 +325,7 @@ describe("compare: ymmv <a> vs <b>", () => {
   it("the column heads are the handles as stored, whatever was typed", async () => {
     vi.stubGlobal("fetch", serve({ ANTFU: A, BarDisty: B }));
     await compare("ANTFU", "BarDisty");
-    expect(logs[0]).toContain("how antfu differs from bardisty");
+    expect(logs[0]).toContain("  ymmv.fyi/antfu/vs/bardisty\n  how antfu differs from bardisty");
     expect(errs).toEqual([]); // a case difference is no rename
   });
 
@@ -329,7 +333,8 @@ describe("compare: ymmv <a> vs <b>", () => {
     vi.stubGlobal("fetch", serve({ antfuold: A, bardisty: B }));
     await compare("antfuold", "bardisty");
     expect(errs).toEqual(["\n  (antfuold is now antfu)"]);
-    expect(logs[0]).toContain("how antfu differs from bardisty");
+    // The page is the new handle's: the old one would only redirect.
+    expect(logs[0]).toContain("  ymmv.fyi/antfu/vs/bardisty\n  how antfu differs from bardisty");
   });
 
   it("a missing first side is a miss, like `ymmv a`", async () => {

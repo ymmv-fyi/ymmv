@@ -35,6 +35,7 @@ Sign in, then view someone's profile. The CLI lines their stack up against
 yours:
 
 ```
+  ymmv.fyi/bardisty/vs/<you>
   how bardisty differs from you
 
           bardisty  you

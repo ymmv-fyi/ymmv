@@ -9,6 +9,9 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   used to sit on a blank terminal for up to 30 seconds per request before its error. It now shows
   `reaching ymmv.fyi… (Ctrl+C to cancel)` on stderr until the request finishes, then removes the
   line. Nothing prints when stderr isn't a terminal.
+- **The diff names the web page it mirrors.** `ymmv antfu vs bardisty` and a signed-in
+  `ymmv <handle>` open with the address of the same diff on ymmv.fyi, such as
+  `ymmv.fyi/antfu/vs/bardisty`, above the heading. On a terminal with color it is a link.
 
 ### Fixed
 - **The diff's extras line up and say they are not compared.** The block is headed
