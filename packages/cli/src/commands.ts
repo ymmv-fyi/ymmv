@@ -54,6 +54,7 @@ import {
   notFound,
   nudge,
   palette,
+  profilePageUrl,
   relTime,
   renderDiff,
   renderProfile,
@@ -1002,7 +1003,13 @@ export async function view(handle: string, nearVerb?: string): Promise<void> {
   // render. Faint, never amber: it repeats on every degraded view. A short fragment is wrapped in
   // parens; an error message (whole sentences, often with parens of its own) is not.
   const plainCard = (note?: string, wrap = true): void => {
-    console.log(renderProfile(theirs, { color: c, site: displayUrl(BASE) }));
+    console.log(
+      renderProfile(theirs, {
+        color: c,
+        site: displayUrl(BASE),
+        page: profilePageUrl(BASE, theirs.handle),
+      }),
+    );
     if (note) {
       const codes = palette(c);
       console.error(message(`${codes.faint}${wrap ? `(${note})` : note}${codes.reset}`));
@@ -1101,7 +1108,13 @@ export async function compare(theirsHandle: string, mineHandle: string): Promise
   }
   noteRename(theirsHandle, theirs);
   if (!mine) {
-    console.log(renderProfile(theirs, { color, site: displayUrl(BASE) }));
+    console.log(
+      renderProfile(theirs, {
+        color,
+        site: displayUrl(BASE),
+        page: profilePageUrl(BASE, theirs.handle),
+      }),
+    );
     noteOnStderr(`(no diff: no ymmv profile for "${sanitizeValue(mineHandle)}" yet)`);
     return;
   }
