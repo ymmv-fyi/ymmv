@@ -954,9 +954,12 @@ test.describe("the 3-column diff", () => {
     const res = await page.goto("/antfu/vs/bardisty");
     // both sides live → the long-lived edge policy (the nudge test pins the short side)
     expect(res?.headers()["cache-control"]).toContain("s-maxage=30");
-    // 13-key taxonomy: theme + version-manager differ, prompt shared (seed.sql arithmetic)
-    await expect(page.locator(".foot")).toContainText("8 differ");
+    // 13-key taxonomy: theme + version-manager differ, prompt shared, and dotfiles is antfu's
+    // alone, counted apart (seed.sql arithmetic)
+    await expect(page.locator(".foot")).toContainText("7 differ");
     await expect(page.locator(".foot")).toContainText("5 shared");
+    await expect(page.locator(".foot")).toContainText("1 only antfu");
+    await expect(page.locator(".foot")).not.toContainText("only bardisty");
 
     const changedYours = page.locator("tr.changed .yours").first();
     const changedTheirs = page.locator("tr.changed .theirs").first();
@@ -967,6 +970,24 @@ test.describe("the 3-column diff", () => {
     expect(changedColor).toBe("rgb(255, 171, 46)"); // amber on a difference
     expect(theirsColor).toBe(changedColor); // a difference is symmetric — both sides amber
     expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
+
+    // A field only one side filled in is no difference: a faint dot, the value in ink, no amber.
+    const one = page.locator("tr.one").filter({ hasText: "Dotfiles" });
+    await expect(one.locator(".sr-only")).toHaveText("only antfu:");
+    const oneDot = await one.locator(".dot").evaluate((el) => getComputedStyle(el).backgroundColor);
+    const oneValue = await one.locator(".theirs").evaluate((el) => getComputedStyle(el).color);
+    const changedDot = await page
+      .locator("tr.changed .dot")
+      .first()
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(oneDot).not.toBe(changedDot);
+    expect(oneValue).not.toBe(changedColor);
+    expect(await one.locator(".dot").evaluate((el) => getComputedStyle(el).visibility)).toBe(
+      "visible",
+    );
+    // The minimap speaks the CLI's gutter: ~ differ, = same, ? one side only, in row order.
+    await expect(page.locator(".diff-map")).toHaveText(/^[~=?]{13}$/);
+    await expect(page.locator(".diff-map .one")).toHaveText("?");
   });
 
   test("links both handles, offers a swap, and lists extras uncompared", async ({ page }) => {
@@ -991,7 +1012,7 @@ test.describe("the 3-column diff", () => {
     await expect(extras).toContainText("Keyboard = HHKB Pro 2");
     await expect(extras).toContainText("Launcher = Raycast");
     // diff cells strip the https scheme for display but keep the full URL in the title
-    const urlSpan = page.locator('tr.changed .theirs span[title^="https://"]').first();
+    const urlSpan = page.locator('tr.one .theirs span[title^="https://"]').first();
     await expect(urlSpan).toHaveText(/^github\.com\/antfu/);
     await expect(urlSpan).toHaveAttribute(
       "title",

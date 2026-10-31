@@ -486,10 +486,11 @@ a {
 .diff-foot .diff-map i {
   font-style: normal;
 }
-.diff-foot .diff-map .d {
+.diff-foot .diff-map .changed {
   color: var(--accent);
 }
-.diff-foot .diff-map .s {
+.diff-foot .diff-map .same,
+.diff-foot .diff-map .one {
   color: var(--faint);
 }
 /* secondary "make your own" CTA under the profile foot — dimmer than the contextual command
@@ -717,6 +718,11 @@ table.diff th:last-child {
    label column stays aligned. Same rows also carry a visually-hidden "same:" prefix for screen readers. */
 .diff .same .dot {
   visibility: hidden;
+}
+/* a row only one side filled in: not a different tool, so no amber. The dot stays (it is not a
+   shared row) but faint, and the one value keeps the default ink; the empty side is .missing. */
+.diff .one .dot {
+  background: var(--faint);
 }
 /* extras under the diff — informational only: free-form labels don't diff, so they render
    dimmed, uncounted, and never amber. Session dress: the handle column is the diff's label column
