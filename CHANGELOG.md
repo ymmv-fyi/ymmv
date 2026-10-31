@@ -4,6 +4,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 
 ## [Unreleased]
 
+### Added
+- **A request that takes more than a second says so.** On a slow or dead network, a command
+  used to sit on a blank terminal for up to 30 seconds per request before its error. It now shows
+  `reaching ymmv.fyi… (Ctrl+C to cancel)` on stderr until the request finishes, then removes the
+  line. Nothing prints when stderr isn't a terminal.
+
 ### Fixed
 - **The diff's extras line up and say they are not compared.** The block is headed
   `extras (not compared)` and prints dimmed, as on ymmv.fyi, and each label starts in the diff's

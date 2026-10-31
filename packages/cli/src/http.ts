@@ -1,5 +1,5 @@
-import { hasVisibleContent } from "@ymmv/shared";
-import { sanitizeValue } from "./render.js";
+import { displayUrl, hasVisibleContent } from "@ymmv/shared";
+import { palette, sanitizeValue, useColor } from "./render.js";
 
 // The one place a network-level fetch failure becomes words. Every fetch that surfaces its own
 // network error goes through safeFetch so "TypeError: fetch failed" (or a TLS/proxy/DNS throw)
@@ -191,11 +191,74 @@ export function redirectError(res: Response, base: string): RedirectError | null
   );
 }
 
+/** A request still pending after this long shows the waiting line. A normal request settles well
+ *  under it, so the line appears only on a slow or dead network, where the 30-second timeout
+ *  would otherwise be 30 seconds of blank terminal. */
+export const WAIT_LINE_MS = 1_000;
+
+// The waiting line, shared by every request in flight: compare() runs two safeFetches at once,
+// and they must show one line (see waitEnd for when it goes). `waitShown` is the width it takes
+// on screen (0 = nothing shown), for the erase a dumb terminal needs.
+let waitPending = 0;
+let waitTimer: ReturnType<typeof setTimeout> | undefined;
+let waitShown = 0;
+
+const ERASE_LINE = `${String.fromCharCode(27)}[K`;
+
+/** One request started. Only a terminal stderr gets the line: stdout stays the readout alone, and
+ *  a pipe or CI log would keep the line (it is never ended) glued to whatever prints next. The
+ *  timer is unref'd for the reason the request signal is: a request the timeout already failed
+ *  must not be held open by the line that announced it. */
+function waitBegin(reach: string): void {
+  waitPending++;
+  if (waitPending > 1 || !process.stderr.isTTY) return;
+  waitTimer = setTimeout(() => showWaitLine(reach), WAIT_LINE_MS);
+  waitTimer.unref();
+}
+
+/** Written at column 0, unended, so waitEnd can take it back. Every request starts at column 0:
+ *  output ends its lines, and readline (publish, delete and login keep it open across their
+ *  requests) ends its own, a withdrawn sign-in offer included. The leading \r only guards
+ *  that. Cut to the terminal's width: a wrapped line would leave its first row behind, since the
+ *  erase reaches only the row the cursor is on. `reach` is the API base (YMMV_API, user input)
+ *  or a fixed GitHub label, shown the way the readout shows the site. */
+function showWaitLine(reach: string): void {
+  const text = `  reaching ${sanitizeValue(displayUrl(reach))}… (Ctrl+C to cancel)`;
+  const cols = process.stderr.columns || 80;
+  const fit = [...text].slice(0, cols - 1).join("");
+  // stderr is a terminal here, so color follows only NO_COLOR, FORCE_COLOR and TERM=dumb.
+  const c = palette(useColor(process.env, true));
+  process.stderr.write(`\r${c.faint}${fit}${c.reset}`);
+  waitShown = [...fit].length;
+}
+
+/** One request settled. The last one out takes the line back before its caller prints anything:
+ *  the response's readout or the error (a timeout's "Can't reach" line lands on the row the
+ *  waiting line held). A failure takes it back at once, timer included, even with another request
+ *  still in flight: compare()'s Promise.all prints the first rejection's error while the other
+ *  is pending, and the line must neither stay above that error nor appear under it. A dumb
+ *  terminal ignores the erase sequence, so it gets spaces. */
+function waitEnd(failed: boolean): void {
+  waitPending--;
+  if (waitPending > 0 && !failed) return;
+  clearTimeout(waitTimer);
+  waitTimer = undefined;
+  if (waitShown === 0) return;
+  const erase = process.env.TERM === "dumb" ? `${" ".repeat(waitShown)}\r` : ERASE_LINE;
+  process.stderr.write(`\r${erase}`);
+  waitShown = 0;
+}
+
 /**
  * fetch, but ANY thrown failure (undici TypeError, TLS, proxy, bad URL — deliberately not just
  * TypeError) becomes an actionable "can't reach" error carrying the underlying cause. HTTP
  * responses of every status pass through untouched — status handling stays with the caller.
  * `fetchFn` is injectable for tests (mirrors device-flow's PollDeps).
+ *
+ * A request pending past WAIT_LINE_MS shows the waiting line (see waitBegin) until it settles. It
+ * settles on the response HEADERS: a body that stalls after them still waits out the timeout in
+ * silence, as before. The bodies here are small JSON from the same server that just answered,
+ * so that gap is left.
  */
 export async function safeFetch(
   url: string,
@@ -203,17 +266,22 @@ export async function safeFetch(
   reach: string,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<Response> {
+  waitBegin(reach);
+  let res: Response;
   try {
     // Default timeout so a dead-but-open connection fails with words instead of hanging. An
     // explicit caller signal wins (the mint-refusal revoke in auth-http.ts passes REVOKE_CAP_MS);
     // Node >=22 unrefs the timer, so the signal never holds the process open.
-    return await fetchFn(url, {
+    res = await fetchFn(url, {
       ...init,
       signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
+    waitEnd(true);
     throw new NetworkError(`Can't reach ${reach}. Check your connection (${causeText(err)})`, {
       cause: err,
     });
   }
+  waitEnd(false);
+  return res;
 }

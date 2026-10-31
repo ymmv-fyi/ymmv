@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   causeText,
   displayError,
@@ -8,6 +8,7 @@ import {
   redirectError,
   safeFetch,
   serverMessage,
+  WAIT_LINE_MS,
   wireBody,
   wireErrorBody,
   wireText,
@@ -99,6 +100,183 @@ describe("safeFetch", () => {
     await expect(safeFetch("https://x", undefined, "https://x", fetchFn)).rejects.toThrow(
       /Can't reach https:\/\/x\./,
     );
+  });
+});
+
+describe("safeFetch waiting line", () => {
+  const ESC = String.fromCharCode(27);
+  const LINE = "  reaching ymmv.fyi… (Ctrl+C to cancel)";
+  // The stream's own descriptors, put back after each case: vitest's worker stderr is no TTY, and
+  // a leaked flag would print the line into every later suite's output.
+  const saved = (["isTTY", "columns"] as const).map(
+    (k) => [k, Object.getOwnPropertyDescriptor(process.stderr, k)] as const,
+  );
+  let written: string[] = [];
+  let stdoutWrites: ReturnType<typeof vi.spyOn>;
+
+  const terminal = (isTTY: boolean, columns = 80) => {
+    Object.defineProperty(process.stderr, "isTTY", { value: isTTY, configurable: true });
+    Object.defineProperty(process.stderr, "columns", { value: columns, configurable: true });
+  };
+  /** A fetch that settles only when the test says so: `res()` answers, `fail()` rejects. */
+  const held = () => {
+    let res!: () => void;
+    let fail!: (e: unknown) => void;
+    const fetchFn = vi.fn(
+      () =>
+        new Promise<Response>((ok, no) => {
+          res = () => ok(new Response("ok"));
+          fail = no;
+        }),
+    );
+    return { fetchFn, res: () => res(), fail: (e: unknown) => fail(e) };
+  };
+  const call = (fetchFn: typeof globalThis.fetch, reach = "https://ymmv.fyi") =>
+    safeFetch(`${reach}/api/v1/u/x`, undefined, reach, fetchFn);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubEnv("NO_COLOR", undefined);
+    vi.stubEnv("FORCE_COLOR", undefined);
+    vi.stubEnv("TERM", "xterm-256color");
+    written = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+    stdoutWrites = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    terminal(true);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    for (const [k, desc] of saved) {
+      if (desc) Object.defineProperty(process.stderr, k, desc);
+      else Reflect.deleteProperty(process.stderr, k);
+    }
+  });
+
+  it("shows one faint line on a terminal stderr after the threshold, and takes it back", async () => {
+    expect(WAIT_LINE_MS).toBe(1_000);
+    const f = held();
+    const p = call(f.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS - 1);
+    expect(written).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(written).toEqual([`\r${ESC}[90m${LINE}${ESC}[0m`]);
+    f.res();
+    await expect(p).resolves.toBeInstanceOf(Response);
+    expect(written).toEqual([`\r${ESC}[90m${LINE}${ESC}[0m`, `\r${ESC}[K`]);
+    expect(stdoutWrites).not.toHaveBeenCalled();
+  });
+
+  it("prints nothing for a request that settles under the threshold", async () => {
+    const f = held();
+    const p = call(f.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS - 1);
+    f.res();
+    await p;
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS * 5);
+    expect(written).toEqual([]);
+  });
+
+  it("never prints when stderr is not a terminal (a pipe, CI, 2>file)", async () => {
+    terminal(false);
+    const f = held();
+    const p = call(f.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS * 5);
+    f.res();
+    await p;
+    expect(written).toEqual([]);
+  });
+
+  it("two requests in flight share one line, taken back when the last settles", async () => {
+    const a = held();
+    const b = held();
+    const pa = call(a.fetchFn);
+    const pb = call(b.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS * 2);
+    expect(written).toHaveLength(1);
+    a.res();
+    await pa;
+    expect(written).toHaveLength(1); // b is still pending: the line stays
+    b.res();
+    await pb;
+    expect(written).toEqual([`\r${ESC}[90m${LINE}${ESC}[0m`, `\r${ESC}[K`]);
+  });
+
+  it("a failure takes the line back at once, though the other request is still pending", async () => {
+    // compare()'s Promise.all prints the first rejection while the other request is in flight:
+    // the line must not stay above that error, nor appear under it later.
+    const a = held();
+    const b = held();
+    const pa = call(a.fetchFn).catch(() => "failed");
+    const pb = call(b.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS);
+    a.fail(timeoutErr());
+    expect(await pa).toBe("failed");
+    expect(written).toEqual([`\r${ESC}[90m${LINE}${ESC}[0m`, `\r${ESC}[K`]);
+    b.res();
+    await pb;
+    expect(written).toHaveLength(2);
+  });
+
+  it("a failure before the threshold cancels the line for the request still pending", async () => {
+    const a = held();
+    const b = held();
+    const pa = call(a.fetchFn).catch(() => "failed");
+    const pb = call(b.fetchFn);
+    a.fail(new TypeError("fetch failed"));
+    await pa;
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS * 5);
+    b.res();
+    await pb;
+    expect(written).toEqual([]);
+  });
+
+  it("takes the line back before a timeout's can't-reach error surfaces, message unchanged", async () => {
+    const f = held();
+    const p = call(f.fetchFn);
+    const settled = p.catch((e: Error) => [e.message, written.length] as const);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS);
+    f.fail(timeoutErr());
+    const [msg, writesAtThrow] = await settled;
+    expect(msg).toBe("Can't reach https://ymmv.fyi. Check your connection (request timed out)");
+    expect(writesAtThrow).toBe(2);
+    expect(written[1]).toBe(`\r${ESC}[K`);
+  });
+
+  it("arms an unref'd timer, so a pending line never holds the process open", async () => {
+    const spy = vi.spyOn(globalThis, "setTimeout");
+    const f = held();
+    const p = call(f.fetchFn);
+    const timer = spy.mock.results[0]?.value as NodeJS.Timeout;
+    expect(timer.hasRef()).toBe(false);
+    f.res();
+    await p;
+  });
+
+  it("is plain under NO_COLOR, and a dumb terminal is erased with spaces", async () => {
+    vi.stubEnv("NO_COLOR", "1");
+    vi.stubEnv("TERM", "dumb");
+    const f = held();
+    const p = call(f.fetchFn);
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS);
+    f.res();
+    await p;
+    expect(written).toEqual([`\r${LINE}`, `\r${" ".repeat([...LINE].length)}\r`]);
+  });
+
+  it("names the reach the way the readout shows a site, cut to the terminal's width", async () => {
+    terminal(true, 24);
+    vi.stubEnv("NO_COLOR", "1");
+    const f = held();
+    const p = call(f.fetchFn, "http://localhost:8794");
+    await vi.advanceTimersByTimeAsync(WAIT_LINE_MS);
+    f.res();
+    await p;
+    // 23 columns: one short of the width, so the line never wraps past the row the erase clears.
+    expect(written[0]).toBe("\r  reaching http://local");
   });
 });
 
