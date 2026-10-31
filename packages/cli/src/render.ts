@@ -392,6 +392,8 @@ function extrasBlock(
   mineLabel: string,
   labelW: number,
   c: Codes,
+  color: boolean,
+  term: string | undefined,
 ): string[] {
   if (!extras.theirs.length && !extras.mine.length) return [];
   // The web's heading: extras are listed, never diffed, so two `Keyboard` lines are not a pair.
@@ -406,11 +408,109 @@ function extrasBlock(
     extras.theirs.length ? theirsLabel.length : 0,
     extras.mine.length ? mineLabel.length : 0,
   );
-  const line = (who: string, label: string, value: string): string =>
-    `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${sanitizeValue(value)}${c.reset}`;
+  // A URL value is a link with color on, shortened as on the card, but faint like the rest of
+  // the line: in the diff amber says "differs", and a terminal shows no underline to tell a link
+  // apart (the web's extras link is amber, but underlined).
+  const line = (who: string, label: string, value: string): string => {
+    const v = sanitizeValue(value);
+    const shown = color && isHttpUrl(v) ? hyperlink(v.trim(), displayUrl(v), term) : v;
+    return `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${shown}${c.reset}`;
+  };
   for (const x of extras.theirs) out.push(line(theirsLabel, x.label, x.value));
   for (const x of extras.mine) out.push(line(mineLabel, x.label, x.value));
   return out;
+}
+
+const ELLIPSIS = "…";
+// The narrowest a capped value column gets. Below it a cut cell says too little to be worth the
+// cut, so the diff prints full values and lets the terminal wrap, as it did before any cap.
+const MIN_CELL = 6;
+
+/** `s` cut to `w` columns, ending in `…` when it doesn't fit. Cuts between code points, never
+ *  inside a surrogate pair. Measures `.length` like the padding does: a wide character (CJK,
+ *  emoji) takes two columns on screen and is under-counted by both. */
+function cut(s: string, w: number): string {
+  if (s.length <= w) return s;
+  let kept = "";
+  for (const ch of s) {
+    if (kept.length + ch.length > w - ELLIPSIS.length) break;
+    kept += ch;
+  }
+  return kept + ELLIPSIS;
+}
+
+/** The part of `cps` (a value's code points) from `start`, in `w` columns: a leading `…` when
+ *  it starts past the beginning, a trailing one when it still doesn't fit. */
+function windowAt(cps: string[], start: number, w: number): string {
+  if (start === 0) return cut(cps.join(""), w);
+  return ELLIPSIS + cut(cps.slice(start).join(""), w - ELLIPSIS.length);
+}
+
+/** The two value columns' widths. Without `columns` (stdout not a terminal) both keep their
+ *  longest value: a script reads full values. On a terminal the row (gutter, label, two values,
+ *  their gaps) has to fit, so the longer column gives way first: a column that fits in half the
+ *  room keeps its width and the other takes the rest, else both get the same half (an odd column
+ *  left over goes unused: two cuts of one value at different widths would look different on an
+ *  `=` row). Too little room for MIN_CELL in a column being cut and nothing is cut. */
+function valueWidths(
+  labelW: number,
+  theirs: number,
+  mine: number,
+  columns: number | undefined,
+): [number, number] {
+  if (columns === undefined) return [theirs, mine];
+  const room = columns - labelW - 6;
+  if (theirs + mine <= room) return [theirs, mine];
+  const half = Math.floor(room / 2);
+  const [t, m] =
+    theirs <= half
+      ? [theirs, room - theirs]
+      : mine <= room - half
+        ? [room - mine, mine]
+        : [half, half];
+  // Only a column that is cut needs the room; one keeping its own width may be narrower.
+  const tooNarrow = (w: number, own: number): boolean => w < own && w < MIN_CELL;
+  return tooNarrow(t, theirs) || tooNarrow(m, mine) ? [theirs, mine] : [t, m];
+}
+
+/**
+ * The shown text of a row's two cells. A URL shortens like the card's (displayUrl) with color on,
+ * where it is also a link to the full address. With color off it stays the full URL (link()'s
+ * rule: a terminal can still detect it), unless it is about to be cut, which loses that anyway.
+ * Then each cell is cut to its column.
+ *
+ * A differing row must never show two equal-looking cells (the web's pairCells rule,
+ * packages/web/src/lib/diff-cells.ts). Shortening can make two URLs match (https://x vs x,
+ * user@host vs host, GitHub.com vs github.com, all of which dotfiles compares verbatim): the row
+ * then drops the shortening. A cut can too (two long URLs that differ past it): checked at the
+ * narrower column, the row then shows both cells from the same point a little before the first
+ * character that differs, `…/editor/v1` against `…/editor/v2`, so the difference is in view.
+ * What a terminal shows alike past that (invisible characters) is not caught, as before.
+ */
+function pairShown(
+  theirs: string | null,
+  mine: string | null,
+  differ: boolean,
+  widths: [number, number],
+  color: boolean,
+): [string, string] {
+  const both = differ && theirs !== null && mine !== null;
+  const short = (v: string | null, w: number): string =>
+    v === null ? MISSING : isHttpUrl(v) && (color || v.length > w) ? displayUrl(v) : v;
+  const [tw, mw] = widths;
+  let [t, m] = [short(theirs, tw), short(mine, mw)];
+  if (both && t === m) [t, m] = [theirs, mine];
+  const w = Math.min(tw, mw);
+  if (!both || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
+  const [tc, mc] = [[...t], [...m]];
+  let i = 0;
+  while (i < tc.length && tc[i] === mc[i]) i++;
+  // Half the window before the difference, or as much as the longer value's end leaves room for.
+  const start = Math.max(
+    0,
+    Math.min(i - Math.floor(w / 2), Math.max(tc.length, mc.length) - w + 1),
+  );
+  return [windowAt(tc, start, w), windowAt(mc, start, w)];
 }
 
 /**
@@ -424,55 +524,89 @@ function extrasBlock(
  * drops `https://` in both color modes, so a piped diff and a piped card name their pages alike.
  * It is faint throughout, handles included: the heading right under it bolds them already. An
  * address, not a difference, so never amber; with color on it is an OSC-8 link to the full URL.
+ *
+ * `columns` is the terminal's width when stdout is one (the caller reads it; this stays pure).
+ * With it, the value columns are capped so a row fits and a longer cell ends in `…` (valueWidths,
+ * pairShown); one long dotfiles URL no longer wraps every row. Without it nothing is cut, so piped
+ * output keeps every value whole. Widths are measured on the plain text, and color and links go
+ * around it afterwards, so escape bytes never count as columns.
  */
 export function renderDiff(
   result: DiffResult,
-  opts: { color: boolean; theirsLabel: string; mineLabel: string; page: string; term?: string },
+  opts: {
+    color: boolean;
+    theirsLabel: string;
+    mineLabel: string;
+    page: string;
+    columns?: number;
+    term?: string;
+  },
 ): string {
   const c = palette(opts.color);
+  const term = opts.term ?? process.env.TERM;
   const theirsLabel = sanitizeValue(opts.theirsLabel);
   const mineLabel = sanitizeValue(opts.mineLabel);
 
-  const cells = result.rows.map((r) => ({
+  const rows = result.rows.map((r) => ({
     label: r.label,
-    theirs: r.theirs === null ? MISSING : sanitizeValue(r.theirs),
-    mine: r.mine === null ? MISSING : sanitizeValue(r.mine),
+    theirs: r.theirs === null ? null : sanitizeValue(r.theirs),
+    mine: r.mine === null ? null : sanitizeValue(r.mine),
     differ: r.status !== "same",
   }));
-  const labelW = Math.max(3, ...cells.map((r) => r.label.length));
-  // Column heads are the handles as stored, faint, like the web diff's (DESIGN.md, Diff session).
-  const theirsW = Math.max(theirsLabel.length, ...cells.map((r) => r.theirs.length));
+  const labelW = Math.max(3, ...rows.map((r) => r.label.length));
+  // Natural widths, of the form each cell shows uncut: column heads (the handles as stored, faint,
+  // like the web diff's: DESIGN.md, Diff session) and values, shortened where pairShown would.
+  const natural = rows.map((r) =>
+    pairShown(r.theirs, r.mine, r.differ, [Infinity, Infinity], opts.color),
+  );
+  const widths = valueWidths(
+    labelW,
+    Math.max(theirsLabel.length, ...natural.map(([t]) => t.length)),
+    Math.max(mineLabel.length, ...natural.map(([, m]) => m.length)),
+    opts.columns,
+  );
+  const [theirsW, mineW] = widths;
+  // A shown cell, linked to its full URL with color on. Padded after the link closes, so the
+  // padding is neither underlined nor clickable.
+  const cell = (shown: string, raw: string | null, w?: number): string => {
+    const pad = w === undefined ? "" : " ".repeat(Math.max(0, w - shown.length));
+    const linked =
+      opts.color && raw !== null && isHttpUrl(raw) ? hyperlink(raw.trim(), shown, term) : shown;
+    return linked + pad;
+  };
 
   const page = sanitizeValue(opts.page);
   const pageText = `${c.faint}${displayUrl(page)}${c.reset}`;
   const lines: string[] = [
     "",
-    `  ${opts.color ? hyperlink(page, pageText, opts.term ?? process.env.TERM) : pageText}`,
+    `  ${opts.color ? hyperlink(page, pageText, term) : pageText}`,
     // The web diff's h1, collapsed to one line — information (which side is which), not decoration,
     // so it prints in both color modes.
     `  ${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset} ${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,
     "",
   ];
   lines.push(
-    `  ${c.faint}${"".padEnd(labelW)}  ${theirsLabel.padEnd(theirsW)}  ${mineLabel}${c.reset}`,
+    `  ${c.faint}${"".padEnd(labelW)}  ${cut(theirsLabel, theirsW).padEnd(theirsW)}  ${cut(mineLabel, mineW)}${c.reset}`,
   );
-  for (const r of cells) {
+  for (const r of rows) {
+    const [ts, ms] = pairShown(r.theirs, r.mine, r.differ, widths, opts.color);
     if (!opts.color) {
       const sym = r.differ ? "~" : "=";
-      lines.push(`${sym} ${r.label.padEnd(labelW)}  ${r.theirs.padEnd(theirsW)}  ${r.mine}`);
+      lines.push(`${sym} ${r.label.padEnd(labelW)}  ${ts.padEnd(theirsW)}  ${ms}`);
     } else if (r.differ) {
       lines.push(
         `${c.amber}•${c.reset} ${r.label.padEnd(labelW)}  ` +
-          `${c.amber}${r.theirs.padEnd(theirsW)}${c.reset}  ${c.amber}${r.mine}${c.reset}`,
+          `${c.amber}${cell(ts, r.theirs)}${c.reset}${" ".repeat(Math.max(0, theirsW - ts.length))}  ` +
+          `${c.amber}${cell(ms, r.mine)}${c.reset}`,
       );
     } else {
       lines.push(
-        `  ${c.faint}${r.label.padEnd(labelW)}  ${r.theirs.padEnd(theirsW)}  ${r.mine}${c.reset}`,
+        `  ${c.faint}${r.label.padEnd(labelW)}  ${cell(ts, r.theirs, theirsW)}  ${cell(ms, r.mine)}${c.reset}`,
       );
     }
   }
 
-  lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c));
+  lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c, opts.color, term));
   lines.push("", `  ${c.faint}${result.differ} differ   ${result.shared} shared${c.reset}`);
   return lines.join("\n");
 }

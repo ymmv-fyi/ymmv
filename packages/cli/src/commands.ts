@@ -1049,6 +1049,7 @@ export async function view(handle: string, nearVerb?: string): Promise<void> {
           theirsLabel: theirs.handle,
           mineLabel: "you",
           page: diffPageUrl(BASE, theirs.handle, mine.handle),
+          columns: diffColumns(),
         }),
       );
       return;
@@ -1066,6 +1067,12 @@ export async function view(handle: string, nearVerb?: string): Promise<void> {
     // Viewing your own handle: just show it (no self-diff).
   }
   plainCard();
+}
+
+/** The width the diff fits its value columns to: the terminal's when stdout is one, else none, so
+ *  a piped diff keeps every value whole for the script reading it. */
+function diffColumns(): number | undefined {
+  return process.stdout.isTTY ? process.stdout.columns : undefined;
 }
 
 /** A renamed handle answers with the profile under its current one (fetchProfileJson follows the
@@ -1105,6 +1112,7 @@ export async function compare(theirsHandle: string, mineHandle: string): Promise
       theirsLabel: theirs.handle,
       mineLabel: mine.handle,
       page: diffPageUrl(BASE, theirs.handle, mine.handle),
+      columns: diffColumns(),
     }),
   );
 }

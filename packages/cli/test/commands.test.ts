@@ -405,6 +405,36 @@ describe("compare: ymmv <a> vs <b>", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("fits a terminal's width, and keeps every value whole when stdout is piped", async () => {
+    const long = `https://github.com/bardisty/${"d".repeat(90)}`;
+    const withLong = prof("bardisty", [...B.entries, { key: "dotfiles", value: long }]);
+    vi.stubEnv("NO_COLOR", "1");
+    const saved = {
+      tty: Object.getOwnPropertyDescriptor(process.stdout, "isTTY"),
+      cols: Object.getOwnPropertyDescriptor(process.stdout, "columns"),
+    };
+    try {
+      vi.stubGlobal("fetch", serve({ antfu: A, bardisty: withLong }));
+      await compare("antfu", "bardisty"); // vitest's stdout is not a terminal
+      expect(logs[0]).toContain(long);
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdout, "columns", { value: 60, configurable: true });
+      await compare("antfu", "bardisty");
+      expect(logs[1]).not.toContain(long);
+      expect(logs[1]).toMatch(/^~ Dotfiles\s+—\s+github\.com\/bardisty\/d+…$/m);
+      for (const l of logs[1]?.split("\n") ?? []) expect(l.length).toBeLessThanOrEqual(60);
+    } finally {
+      for (const [k, d] of [
+        ["isTTY", saved.tty],
+        ["columns", saved.cols],
+      ] as const) {
+        if (d) Object.defineProperty(process.stdout, k, d);
+        else delete (process.stdout as unknown as Record<string, unknown>)[k];
+      }
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a handle against itself is the all-same diff the web shows, each extra listed once", async () => {
     const withExtras = prof("antfu", A.entries, [{ label: "Keyboard", value: "HHKB Pro 2" }]);
     vi.stubGlobal("fetch", serve({ antfu: withExtras, AntFu: withExtras }));

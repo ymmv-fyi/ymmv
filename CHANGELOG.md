@@ -38,6 +38,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   writing, and ymmv printed a Node `EPIPE` error and exited 1. It now stops writing to that
   stream, finishes the command and exits with the command's own status, so `ymmv -y | head -1`
   still publishes.
+- **One long value no longer makes every row of the diff wrap.** On a terminal, the diff fits
+  its value columns to the width and ends a longer value with `…`. When two values differ only
+  past the cut, both show the part where they differ. With color on, a URL is shortened and
+  links to the full address, as on a profile. Output piped to another command is never cut.
 
 ## [0.15.2] - 2026-10-30
 

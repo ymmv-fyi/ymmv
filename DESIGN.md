@@ -66,6 +66,17 @@ CLI parity: the CLI renders the same semantics with ANSI bright yellow (`package
 — amber-only-on-difference, em-dash for a missing side, "N differ / N shared" wording, "how X
 differs from Y" heading. Change one surface, mirror the other.
 
+Long values part ways, because a terminal can't break a cell between path segments the way the
+web's narrow column does. On a terminal the CLI caps both value columns to the width. A cut cell
+ends in `…`, and a URL being cut drops `https://` first. Two cut columns get the same width, so an
+`=` row never shows two different-looking cuts. A piped diff is never cut. With color on, a URL
+cell is shortened and is an OSC 8 link to the full address. The link takes the row's color,
+because in the diff amber means "differs". That includes extras, whose links stay faint (the web's
+extras link is amber, but the web underlines it). Both surfaces keep one rule for a differing row:
+its two cells never look the same because of a shortening or a cut. When they would, the CLI drops
+the shortening, or shows both cells from just before the first character that differs. The web
+also marks invisible characters. The CLI does not.
+
 The CLI's publish preview compares the card against the live profile and marks each differing
 row in the gutter: `~` changed, `+` new, `-` cleared. That is the no-color vocabulary plus two
 glyphs. The glyph prints in both color modes, since three kinds cannot share the amber dot. The

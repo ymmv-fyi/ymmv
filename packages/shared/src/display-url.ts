@@ -19,8 +19,8 @@
  * the scheme is accepted ("https:/x", "https:\\x", "https:///x" all parse to host "x").
  * Hrefs, titles and stored values always keep the full URL: this never feeds comparison or output.
  * Host normalization makes new display collisions possible (GitHub.com vs github.com, user@host
- * vs host); the web diff guards by comparing what each cell will show, and the CLI diff never
- * shortens.
+ * vs host); both diffs guard by comparing what each cell will show (the web's pairCells, the
+ * CLI's pairShown) and render a differing row's URLs whole when the shortened forms match.
  */
 
 const PARSER_STRIPS = /[\t\n\r]/g;

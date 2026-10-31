@@ -291,7 +291,7 @@ const DIFF: DiffResult = {
 const PAGE = "https://ymmv.fyi/antfu/vs/me";
 
 describe("renderDiff", () => {
-  it("never shortens a URL cell, so a userinfo-only difference stays visibly different", () => {
+  it("shows a URL whole when shortening would make a differing row's cells match", () => {
     const d: DiffResult = {
       rows: [
         {
@@ -313,11 +313,220 @@ describe("renderDiff", () => {
       page: PAGE,
       term: "xterm-256color",
     });
-    expect(out).toContain("https://good.com@evil.com");
-    expect(out).toContain("https://evil.com");
-    // The page line above the heading is the only link.
-    expect(out.match(new RegExp(`${ESC}\\]8;;https?:`, "g"))).toHaveLength(1);
-    expect(out).toContain(`${OSC8_OPEN}${PAGE}`);
+    // Both shorten to `evil.com`, so neither does; each is still a link to its own address.
+    expect(out).toContain(`${OSC8_OPEN}https://good.com@evil.com${ESC}\\https://good.com@evil.com`);
+    expect(out).toContain(`${OSC8_OPEN}https://evil.com${ESC}\\https://evil.com${OSC8_OPEN}`);
+  });
+
+  describe("on a terminal (columns)", () => {
+    const LONG = "https://github.com/antfu/dotfiles-but-with-a-very-long-path/blob/main/config";
+    const LONGDIFF: DiffResult = {
+      rows: [
+        { key: "editor", label: "Editor", theirs: "VS Code", mine: "Zed", status: "changed" },
+        { key: "os", label: "OS", theirs: "macOS 15.2", mine: "macOS 15.2", status: "same" },
+        {
+          key: "version-manager",
+          label: "Version Manager",
+          theirs: "mise",
+          mine: "fnm",
+          status: "changed",
+        },
+        { key: "dotfiles", label: "Dotfiles", theirs: LONG, mine: null, status: "only_theirs" },
+      ],
+      extras: { mine: [], theirs: [] },
+      differ: 3,
+      shared: 1,
+    };
+    const OPTS = { theirsLabel: "antfu", mineLabel: "bardisty", page: PAGE, term: "xterm" };
+    // What the terminal shows: the line with its SGR codes and OSC-8 wrappers taken out.
+    const visible = (line: string): string =>
+      line
+        .replace(new RegExp(`${ESC}\\]8;;[^${ESC}]*${ESC}\\\\`, "g"), "")
+        .replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+    it("without columns (piped) prints every value whole, as before the cap", () => {
+      const out = renderDiff(LONGDIFF, { ...OPTS, color: false });
+      expect(out).toContain(`~ Dotfiles         ${LONG}  —`);
+      expect(out).toContain(`~ Editor           ${"VS Code".padEnd(LONG.length)}  Zed`);
+      expect(out).not.toContain("…");
+    });
+
+    it("color off at 80 columns: every row fits and the long cell ends in …", () => {
+      const out = renderDiff(LONGDIFF, { ...OPTS, color: false, columns: 80 });
+      for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(80);
+      // Color off keeps a URL whole when it fits (a terminal can detect it); one being cut
+      // loses that anyway, so it drops `https://` first, as with color on.
+      expect(out).toMatch(/^~ Dotfiles {9}github\.com\/antfu\/dotfiles-but-wi\S*… {2}—$/m);
+      expect(out).toMatch(/^~ Editor {11}VS Code {2,}Zed$/m);
+      expect(out).toMatch(/^= OS {15}macOS 15\.2 {2,}macOS 15\.2$/m);
+    });
+
+    it("color on at 80 columns: the URL shortens like the card's, links in full, and fits", () => {
+      const out = renderDiff(LONGDIFF, { ...OPTS, color: true, columns: 80 });
+      for (const l of out.split("\n")) expect(visible(l).length).toBeLessThanOrEqual(80);
+      const dot = out.split("\n").find((l) => l.includes("Dotfiles")) ?? "";
+      expect(dot).toContain(`${OSC8_OPEN}${LONG}${ESC}\\github.com/antfu/dotfiles-but-`);
+      expect(visible(dot)).toMatch(/github\.com\/antfu\/dotfiles-but-\S*… {2}—$/);
+      // The padding sits outside the link: no trailing spaces inside the OSC-8 text.
+      expect(dot).not.toContain(`  ${OSC8_OPEN}${ESC}\\`);
+    });
+
+    it("at 120 columns a row that fits is left alone", () => {
+      const out = renderDiff(LONGDIFF, { ...OPTS, color: true, columns: 120 });
+      expect(out).not.toContain("…");
+      expect(out).toContain("github.com/antfu/dotfiles-but-with-a-very-long-path/blob/main/config");
+    });
+
+    it("caps the second column too, keeping a short first column whole", () => {
+      const d: DiffResult = {
+        ...LONGDIFF,
+        rows: [
+          { key: "dotfiles", label: "Dotfiles", theirs: null, mine: LONG, status: "only_mine" },
+        ],
+      };
+      const out = renderDiff(d, { ...OPTS, color: false, columns: 60 });
+      for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(60);
+      expect(out).toMatch(/^~ Dotfiles {2}— {6}github\.com\S*…$/m);
+    });
+
+    it("cuts a column head that is longer than its column", () => {
+      const out = renderDiff(LONGDIFF, {
+        ...OPTS,
+        theirsLabel: "a-very-long-github-handle-indeed",
+        color: false,
+        columns: 50,
+      });
+      for (const l of out.split("\n").slice(3)) expect(l.length).toBeLessThanOrEqual(50);
+      expect(out).toContain("a-very-long-github…");
+      // The heading names the handle in full: only the column head is cut.
+      expect(out).toContain("how a-very-long-github-handle-indeed differs from bardisty");
+    });
+
+    it("never cuts inside a surrogate pair", () => {
+      const emoji = String.fromCodePoint(0x1f680);
+      const d: DiffResult = {
+        ...LONGDIFF,
+        rows: [
+          {
+            key: "theme",
+            label: "Theme",
+            theirs: `ab${emoji.repeat(40)}`,
+            mine: "Gruvbox",
+            status: "changed",
+          },
+        ],
+      };
+      const out = renderDiff(d, { ...OPTS, color: false, columns: 40 });
+      const row = out.split("\n").find((l) => l.startsWith("~ Theme")) ?? "";
+      expect(row).toMatch(/…/);
+      // No lone surrogate: every UTF-16 high surrogate is followed by its low one.
+      expect(row).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    });
+
+    it("too narrow for a useful cut, it prints values whole and lets the terminal wrap", () => {
+      const out = renderDiff(LONGDIFF, { ...OPTS, color: false, columns: 30 });
+      expect(out).toContain(LONG);
+      expect(out).not.toContain("…");
+    });
+
+    describe("a differing row never shows two equal-looking cells", () => {
+      const pair = (theirs: string, mine: string): DiffResult => ({
+        rows: [{ key: "dotfiles", label: "Dotfiles", theirs, mine, status: "changed" }],
+        extras: { mine: [], theirs: [] },
+        differ: 1,
+        shared: 0,
+      });
+      const BASE_URL = `https://github.com/someone/${"x".repeat(80)}`;
+      const cells = (out: string): string[] =>
+        visible(out.split("\n").find((l) => visible(l).includes("Dotfiles")) ?? "")
+          .replace(/^[~•] Dotfiles\s+/, "")
+          .split(/ {2,}/);
+
+      it("keeps the tails when two URLs differ only past the cut", () => {
+        for (const color of [false, true]) {
+          const out = renderDiff(pair(`${BASE_URL}/v1`, `${BASE_URL}/v2`), {
+            ...OPTS,
+            color,
+            columns: 80,
+          });
+          const [t, m] = cells(out);
+          expect(t).not.toBe(m);
+          expect(t).toMatch(/^….*\/v1$/);
+          expect(m).toMatch(/^….*\/v2$/);
+          for (const l of out.split("\n")) expect(visible(l).length).toBeLessThanOrEqual(80);
+        }
+      });
+
+      it("shows the middle when the heads and the tails both match", () => {
+        const a = `${BASE_URL}/a/${"y".repeat(60)}`;
+        const b = `${BASE_URL}/b/${"y".repeat(60)}`;
+        for (const color of [false, true]) {
+          const out = renderDiff(pair(a, b), { ...OPTS, color, columns: 80 });
+          const [t, m] = cells(out);
+          expect(t).toMatch(/^…x+\/a\/y+…$/);
+          expect(m).toMatch(/^…x+\/b\/y+…$/);
+          expect(t?.length).toBe(m?.length);
+          for (const l of out.split("\n")) expect(visible(l).length).toBeLessThanOrEqual(80);
+        }
+      });
+
+      it("compares two cut cells at the same width when the room is odd", () => {
+        // `Version Manager` makes the room 80 - 15 - 6 = 59: both columns get 29.
+        const d: DiffResult = {
+          rows: [
+            {
+              key: "version-manager",
+              label: "Version Manager",
+              theirs: "mise",
+              mine: "mise",
+              status: "same",
+            },
+            {
+              key: "dotfiles",
+              label: "Dotfiles",
+              theirs: "https://github.com/acme-corp/dotfiles/tree/main/hosts/alice-laptop",
+              mine: "https://github.com/acme-corp/dotfiles/tree/main/hosts/bob-desktop",
+              status: "changed",
+            },
+            {
+              key: "font",
+              label: "Font",
+              theirs: "JetBrains Mono Nerd Font Propo",
+              mine: "JetBrains Mono Nerd Font Propo",
+              status: "same",
+            },
+          ],
+          extras: { mine: [], theirs: [] },
+          differ: 1,
+          shared: 2,
+        };
+        for (const columns of [80, 81]) {
+          const out = renderDiff(d, { ...OPTS, color: false, columns });
+          const dot = out.split("\n").find((l) => l.startsWith("~ Dotfiles")) ?? "";
+          expect(dot).toContain("alice");
+          expect(dot).toContain("bob");
+          // An `=` row's two cuts of one value look the same.
+          const font = out.split("\n").find((l) => l.startsWith("= Font")) ?? "";
+          const [ft, fm] = font.replace(/^= Font\s+/, "").split(/ {2,}/);
+          expect(ft).toBe(fm);
+          for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(columns);
+        }
+      });
+
+      it("a row the diff calls same may cut both sides alike", () => {
+        const d: DiffResult = {
+          rows: [{ key: "dotfiles", label: "Dotfiles", theirs: LONG, mine: LONG, status: "same" }],
+          extras: { mine: [], theirs: [] },
+          differ: 0,
+          shared: 1,
+        };
+        const out = renderDiff(d, { ...OPTS, color: false, columns: 60 });
+        const [t, m] = cells(out.replace(/^= /m, "~ "));
+        expect(t).toBe(m);
+        expect(t).toMatch(/…$/);
+      });
+    });
   });
 
   it("heads the diff with the web page it mirrors, schemeless in both color modes", () => {
@@ -509,16 +718,21 @@ describe("renderDiff", () => {
       ].join("\n"),
     );
     // With color on the whole line is faint and the padding sits inside it, so the codes add no
-    // width and nothing in the block is amber.
+    // width. A URL value is a link, shortened, but faint: in the diff amber means "differs".
     const color = renderDiff(d, {
       color: true,
       theirsLabel: "antfu",
       mineLabel: "bardisty",
       page: PAGE,
+      term: "xterm-256color",
     });
     expect(color).toContain(`  ${ESC}[90mextras (not compared)${ESC}[0m`);
     expect(color).toContain(`  ${ESC}[90mantfu     Keyboard = HHKB Pro 2${ESC}[0m`);
     expect(color).toContain(`  ${ESC}[90mbardisty  Launcher = Raycast${ESC}[0m`);
+    expect(color).toContain(
+      `  ${ESC}[90mantfu     Dotfiles = ${OSC8_OPEN}https://github.com/antfu/dotfiles${ESC}\\` +
+        `github.com/antfu/dotfiles${OSC8_OPEN}${ESC}\\${ESC}[0m`,
+    );
     expect(color.slice(color.indexOf("extras ("))).not.toContain(AMBER);
   });
 
