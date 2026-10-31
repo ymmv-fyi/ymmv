@@ -2,7 +2,7 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
-## [Unreleased]
+## [0.16.0] - 2026-10-31
 
 ### Added
 - **A request that takes more than a second says so.** On a slow or dead network, a command
@@ -642,6 +642,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **CI/CD** — every PR is linted, type-checked, and tested (unit + browser e2e); tagging a release
   publishes the CLI with provenance and deploys the site per environment, after a staging dry-run.
 
+[0.16.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.16.0
 [0.15.2]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.2
 [0.15.1]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.1
 [0.15.0]: https://github.com/ymmv-fyi/ymmv/releases/tag/v0.15.0
