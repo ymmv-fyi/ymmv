@@ -362,7 +362,12 @@ async function askToSignIn(
 ): Promise<boolean> {
   const you = "<you>";
   console.log(
-    renderProfile(newProfile(you, entriesFromMap(values), []), { color, site, mode: "preview" }),
+    renderProfile(newProfile(you, entriesFromMap(values), []), {
+      color,
+      site,
+      mode: "preview",
+      columns: diffColumns(),
+    }),
   );
   console.log(message("This is what ymmv found. You confirm again before anything publishes."));
   try {
@@ -529,6 +534,7 @@ export async function publish(io: PublishIO): Promise<void> {
         mode: "preview",
         disagreements,
         changes,
+        columns: diffColumns(),
       }),
     );
     const notes: string[] = [];
@@ -1008,6 +1014,7 @@ export async function view(handle: string, nearVerb?: string): Promise<void> {
         color: c,
         site: displayUrl(BASE),
         page: profilePageUrl(BASE, theirs.handle),
+        columns: diffColumns(),
       }),
     );
     if (note) {
@@ -1077,7 +1084,8 @@ export async function view(handle: string, nearVerb?: string): Promise<void> {
 }
 
 /** The width the diff fits its value columns to: the terminal's when stdout is one, else none, so
- *  a piped diff keeps every value whole for the script reading it. */
+ *  a piped diff keeps every value whole for the script reading it. The card takes it too, to line
+ *  its labels up by display width on a terminal only. */
 function diffColumns(): number | undefined {
   return process.stdout.isTTY ? process.stdout.columns : undefined;
 }
@@ -1113,6 +1121,7 @@ export async function compare(theirsHandle: string, mineHandle: string): Promise
         color,
         site: displayUrl(BASE),
         page: profilePageUrl(BASE, theirs.handle),
+        columns: diffColumns(),
       }),
     );
     noteOnStderr(`(no diff: no ymmv profile for "${sanitizeValue(mineHandle)}" yet)`);
