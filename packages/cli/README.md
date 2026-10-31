@@ -120,7 +120,10 @@ Some of these have more to them:
   the commands to run by hand. If the npm, pnpm or bun on your `PATH` isn't
   the one that installed the copy you're running, it updates nothing and
   prints both locations. Under WSL that is often a copy installed on the
-  Windows side: update that one from Windows.
+  Windows side: update that one from Windows. pnpm 11 and later hold back
+  releases younger than their `minimumReleaseAge` setting (a day by
+  default), so right after a release pnpm may install the one before it.
+  `ymmv update` says so when it does.
 
 ## Limits
 
