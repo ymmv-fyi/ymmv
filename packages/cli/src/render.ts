@@ -526,7 +526,10 @@ function valueWidths(
  * narrower column, the row then shows both cells from the same point a little before the first
  * character that differs, `…/editor/v1` against `…/editor/v2`, so the difference is in view.
  * Two values that differ only by invisible characters come in already marked (lookAlike), so
- * the first character that differs is a U+FFFD and a cut keeps it in view too.
+ * the first character that differs is a U+FFFD and a cut keeps it in view too; two that still
+ * match (the floor lookAlike names) print whole-cut, since no window can tell them apart. An
+ * unmarked invisible in a row that differs visibly past the cut still counts as the difference
+ * here, so the window can stop at it and miss the visible one, as before.
  */
 function pairShown(
   theirs: string | null,
@@ -542,7 +545,7 @@ function pairShown(
   let [t, m] = [short(theirs, tw), short(mine, mw)];
   if (both && t === m) [t, m] = [theirs, mine];
   const w = Math.min(tw, mw);
-  if (!both || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
+  if (!both || t === m || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
   const [tc, mc] = [[...t], [...m]];
   let i = 0;
   while (i < tc.length && tc[i] === mc[i]) i++;
@@ -556,13 +559,17 @@ function pairShown(
 
 /** Would a differing row's two (sanitized) cells still look the same once pairShown has dropped
  *  any shortening that made them match? Asked of the uncut forms, so every width marks alike.
- *  Then renderDiff marks the row's invisibles (the web's pairCells rule): `zsh` against `zsh`
- *  plus a bidi control or a zero-width space shows as `zsh` against `zsh�`. Two values that
+ *  With color off a URL shortens only where it is cut, so either form may show and both are
+ *  asked. Then renderDiff marks the row's invisibles (the web's pairCells rule): `zsh` against
+ *  `zsh` plus a bidi control or a zero-width space shows as `zsh` against `zsh�`. Two values that
  *  differ only by WHICH invisible they carry still look alike; that is the floor of a glyph. */
 function lookAlike(theirs: string, mine: string, color: boolean): boolean {
-  const short = (v: string): string => (color && isHttpUrl(v) ? displayUrl(v) : v);
-  const [t, m] = short(theirs) === short(mine) ? [theirs, mine] : [short(theirs), short(mine)];
-  return t.replace(INVISIBLE_RE, "") === m.replace(INVISIBLE_RE, "");
+  const alike = (short: (v: string) => string): boolean => {
+    const [t, m] = short(theirs) === short(mine) ? [theirs, mine] : [short(theirs), short(mine)];
+    return t.replace(INVISIBLE_RE, "") === m.replace(INVISIBLE_RE, "");
+  };
+  const shortUrl = (v: string): string => (isHttpUrl(v) ? displayUrl(v) : v);
+  return alike(shortUrl) || (!color && alike((v) => v));
 }
 
 /**

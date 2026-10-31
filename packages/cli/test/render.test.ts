@@ -586,6 +586,31 @@ describe("renderDiff", () => {
           }
         });
 
+        it("with color off, a URL shortened only by its cut still marks", () => {
+          const tail = "github.com/someone/dotfiles-long-name";
+          for (const theirs of [
+            `https://user@${tail}`,
+            `https://GitHub.com/someone/dotfiles-long-name`,
+          ]) {
+            const out = renderDiff(pair(`${theirs}${ZWSP}`, `https://${tail}`), {
+              ...OPTS,
+              color: false,
+              columns: 80,
+            });
+            const [t, m] = cells(out);
+            expect(t).not.toBe(m);
+            expect(t).toContain(FFFD);
+          }
+        });
+
+        it("two values alike at the floor print whole when nothing is cut", () => {
+          const out = renderDiff(pair(`longvalue${ZWSP}`, "longvalue\u{2060}"), {
+            ...OPTS,
+            color: false,
+          });
+          expect(cells(out)).toEqual([`longvalue${FFFD}`, `longvalue${FFFD}`]);
+        });
+
         it("leaves a same row, a row that differs visibly, and a glyph-shaping join alone", () => {
           const same: DiffResult = {
             ...pair(`zsh${ZWSP}`, `zsh${ZWSP}`),
