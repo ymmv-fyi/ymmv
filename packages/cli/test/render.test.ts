@@ -16,6 +16,7 @@ import {
   shownValue,
   takeLine,
   useColor,
+  width,
 } from "../src/render.js";
 
 const ESC = String.fromCharCode(27);
@@ -402,13 +403,11 @@ describe("renderDiff", () => {
         color: false,
         columns: 50,
       });
-      // The table rows fit; the page and count lines name handles whole and may wrap.
-      for (const l of out.split("\n").filter((l) => /^[~=?] /.test(l))) {
-        expect(l.length).toBeLessThanOrEqual(50);
-      }
+      for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(50);
       expect(out).toContain("a-very-long-github…");
-      // The heading names the handle in full: only the column head is cut.
-      expect(out).toContain("how a-very-long-github-handle-indeed differs from bardisty");
+      // The heading names the handle in full, broken before `differs from` to fit: only the
+      // column head is cut.
+      expect(out).toContain("  how a-very-long-github-handle-indeed\n  differs from bardisty\n");
     });
 
     it("never cuts inside a surrogate pair", () => {
@@ -958,6 +957,129 @@ describe("renderDiff", () => {
   });
 });
 
+describe("width (terminal columns)", () => {
+  it("counts ASCII one column a character", () => {
+    expect(width("Neovim 0.10")).toBe(11);
+  });
+  it("counts CJK, Hangul and fullwidth forms two", () => {
+    expect(width("ソラリゼド ダーク")).toBe(17);
+    expect(width("配色")).toBe(4);
+    expect(width("한글")).toBe(4);
+    expect(width("\u{ff21}")).toBe(2);
+  });
+  it("counts an emoji ZWJ sequence, a flag and a skin tone as one two-column character", () => {
+    expect(width("\u{1f9d1}\u{200d}\u{1f4bb}")).toBe(2);
+    expect(width("\u{1f1ef}\u{1f1f5}")).toBe(2);
+    expect(width("\u{1f44b}\u{1f3fd}")).toBe(2);
+  });
+  it("counts a text-presentation symbol one, and two when it asks for emoji presentation", () => {
+    expect(width("\u{a9}")).toBe(1);
+    expect(width("\u{a9}\u{fe0f}")).toBe(2);
+  });
+  it("counts combining marks and invisibles nothing", () => {
+    expect(width("e\u{301}")).toBe(1);
+    expect(width("\u{301}")).toBe(0);
+    expect(width("a\u{200b}b")).toBe(2);
+  });
+});
+
+describe("renderDiff fits wide characters (columns)", () => {
+  const CJK_DIFF: DiffResult = {
+    rows: [
+      { key: "editor", label: "Editor", theirs: "VS Code", mine: "Zed", status: "changed" },
+      {
+        key: "theme",
+        label: "Theme",
+        theirs: "ソラリゼド ダーク",
+        mine: "Gruvbox",
+        status: "changed",
+      },
+      {
+        key: "font",
+        label: "Font",
+        theirs: "\u{1f9d1}\u{200d}\u{1f4bb}\u{1f1ef}\u{1f1f5}".repeat(8),
+        mine: "Iosevka",
+        status: "changed",
+      },
+      { key: "os", label: "OS", theirs: "macOS", mine: "macOS", status: "same" },
+    ],
+    extras: {
+      theirs: [{ label: "配色", value: "ソラリゼド ダーク ".repeat(4) }],
+      mine: [{ label: "Desk", value: "\u{1f9d1}\u{200d}\u{1f4bb} setup" }],
+    },
+    differ: 3,
+    shared: 1,
+    onlyTheirs: 2,
+    onlyMine: 3,
+  };
+  const OPTS = { theirsLabel: "ソラ", mineLabel: "bardisty", page: PAGE, term: "xterm" };
+  const strip = (line: string): string =>
+    line
+      .replace(new RegExp(`${ESC}\\]8;;[^${ESC}]*${ESC}\\\\`, "g"), "")
+      .replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+
+  for (const columns of [40, 80]) {
+    for (const color of [false, true]) {
+      it(`every line fits ${columns} columns, color ${color ? "on" : "off"}`, () => {
+        const out = renderDiff(CJK_DIFF, { ...OPTS, color, columns });
+        for (const l of out.split("\n")) expect(width(strip(l))).toBeLessThanOrEqual(columns);
+      });
+    }
+  }
+
+  it("lines the second value column up by columns, not by .length", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: false, columns: 80 });
+    const at = (needle: string): number => {
+      const l = out.split("\n").find((x) => x.includes(needle)) ?? "";
+      return width(l.slice(0, l.indexOf(needle)));
+    };
+    expect(at("Gruvbox")).toBe(at("Zed"));
+    expect(at("Iosevka")).toBe(at("Zed"));
+    const head = out.split("\n")[4] ?? "";
+    expect(width(head.slice(0, head.lastIndexOf("bardisty")))).toBe(at("Zed"));
+  });
+
+  it("cuts between grapheme clusters, never inside an emoji sequence or a flag", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: false, columns: 40 });
+    const font = out.split("\n").find((l) => l.startsWith("~ Font")) ?? "";
+    const cell = font.replace(/^~ Font\s+/, "").split(/ {2,}/)[0] ?? "";
+    expect(cell).toMatch(/…$/);
+    const kept = cell.slice(0, -1);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(
+      kept.replaceAll("\u{1f9d1}\u{200d}\u{1f4bb}", "").replaceAll("\u{1f1ef}\u{1f1f5}", ""),
+    ).toBe("");
+  });
+
+  it("cuts the page line's text but links the whole address", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: true, columns: 20 });
+    const line = out.split("\n")[1] ?? "";
+    expect(line).toContain(`${OSC8_OPEN}${PAGE}${ESC}\\`);
+    expect(strip(line)).toBe(`  ${"ymmv.fyi/antfu/vs/me".slice(0, 17)}…`);
+  });
+
+  it("cuts an extras value, never its owner or label", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: false, columns: 40 });
+    const line = out.split("\n").find((l) => l.includes("配色")) ?? "";
+    expect(line).toMatch(/^ {2}ソラ +配色 = ソラ.*…$/u);
+    expect(width(line)).toBeLessThanOrEqual(40);
+  });
+
+  it("breaks the count line between its segments, never inside a count", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: false, columns: 40 });
+    const tail = out.split("\n").slice(-2);
+    expect(tail).toEqual(["  3 differ   1 shared   2 only ソラ", "  3 only bardisty"]);
+  });
+
+  it("piped: nothing cut, and cells padded by .length as before", () => {
+    const out = renderDiff(CJK_DIFF, { ...OPTS, color: false });
+    expect(out).not.toContain("…");
+    const fontLen = CJK_DIFF.rows[2]?.theirs?.length ?? 0;
+    expect(out).toContain(`~ Theme   ${"ソラリゼド ダーク".padEnd(fontLen)}  Gruvbox`);
+    expect(out).toContain("  3 differ   1 shared   2 only ソラ   3 only bardisty");
+  });
+});
+
 describe("diffPageUrl", () => {
   it("follows the web's route: theirs first, then mine", () => {
     expect(diffPageUrl("https://ymmv.fyi", "antfu", "bardisty")).toBe(
@@ -1087,6 +1209,19 @@ describe("renderProfile", () => {
       const out = renderProfile(FULLISH, { ...opts, page: `${PAGE}${ESC}${BEL}x`, color: true });
       expect(out).toContain(`${OSC8_OPEN}${PAGE}x${ST}`);
     });
+  });
+
+  it("on a terminal, lines a wide extras label up by columns; piped, by .length as before", () => {
+    const p: Profile = {
+      ...FULLISH,
+      extras: [{ label: "配色", value: "Solarized" }],
+    };
+    const tty = renderProfile(p, { color: false, site: SITE, now: at(NOW), columns: 80 });
+    expect(tty).toContain("  配色      Solarized");
+    expect(tty).toContain("  Editor    Zed");
+    const piped = renderProfile(p, { color: false, site: SITE, now: at(NOW) });
+    expect(piped).toContain("  配色        Solarized");
+    expect(piped).toContain("  Editor    Zed");
   });
 
   it("URL values render as amber links (the web rule: amber = links + diffs)", () => {

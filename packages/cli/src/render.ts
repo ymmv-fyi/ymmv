@@ -306,6 +306,10 @@ export function relTime(iso: string, now: () => number = Date.now): string {
  * diff's page line links its page; with color off it prints exactly as without `page`. The
  * preview never links: before a first publish the page is a 404, and on a republish it shows the
  * live profile, not the card being confirmed.
+ *
+ * `columns` is the terminal's width when stdout is one. The card cuts nothing, but on a terminal
+ * it lines its labels up by columns (width), so a CJK extras label keeps the value column; piped,
+ * by `.length` as before.
  */
 export function renderProfile(
   profile: Profile,
@@ -315,6 +319,7 @@ export function renderProfile(
     mode?: "view" | "preview";
     page?: string;
     term?: string;
+    columns?: number;
     now?: () => number;
     disagreements?: ReadonlyMap<CuratedKey, string>;
     changes?: ReadonlyMap<CuratedKey, string | null>;
@@ -343,11 +348,13 @@ export function renderProfile(
     label: sanitizeValue(x.label),
     value: sanitizeValue(x.value),
   }));
+  const measure = opts.columns === undefined ? (v: string): number => v.length : width;
   const labelW = Math.max(
     0,
-    ...rows.map((r) => r.label.length),
-    ...extras.map((x) => x.label.length),
+    ...rows.map((r) => measure(r.label)),
+    ...extras.map((x) => measure(x.label)),
   );
+  const label = (l: string): string => padTo(l, labelW, measure);
   const term = opts.term ?? process.env.TERM;
   const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color, term) : v);
   // A marked row's value column up to the incoming value: the gutter, then `old → ` unless it
@@ -380,22 +387,22 @@ export function renderProfile(
             ? val(r.value)
             : `${c.amber}${r.value ?? MISSING}${c.reset}`;
         lines.push(
-          `${c.amber}${glyph}${c.reset} ${c.faint}${r.label.padEnd(labelW)}` +
+          `${c.amber}${glyph}${c.reset} ${c.faint}${label(r.label)}` +
             `${outgoing(r.from, r.value)}${c.reset}${incoming}${note}`,
         );
         continue;
       }
       if (r.value === null) {
-        lines.push(`  ${c.faint}${r.label.padEnd(labelW)}  ${MISSING}${c.reset}`);
+        lines.push(`  ${c.faint}${label(r.label)}  ${MISSING}${c.reset}`);
         continue;
       }
-      lines.push(`  ${c.faint}${r.label.padEnd(labelW)}${c.reset}  ${val(r.value)}${note}`);
+      lines.push(`  ${c.faint}${label(r.label)}${c.reset}  ${val(r.value)}${note}`);
     }
   }
   if (extras.length) {
     lines.push("");
     for (const x of extras) {
-      lines.push(`  ${c.faint}${x.label.padEnd(labelW)}${c.reset}  ${val(x.value)}`);
+      lines.push(`  ${c.faint}${label(x.label)}${c.reset}  ${val(x.value)}`);
     }
   }
   if (!preview) {
@@ -434,8 +441,11 @@ function extrasBlock(
   c: Codes,
   color: boolean,
   term: string | undefined,
+  fit: boolean,
+  room: number,
 ): string[] {
   if (!extras.theirs.length && !extras.mine.length) return [];
+  const measure = fit ? width : (v: string): number => v.length;
   // The web's heading: extras are listed, never diffed, so two `Keyboard` lines are not a pair.
   const out: string[] = ["", `  ${c.faint}extras (not compared)${c.reset}`];
   // The owner sits in the rows' label column and `label = value` starts at the value column, one
@@ -445,16 +455,24 @@ function extrasBlock(
   // web's `.extras-dim` and never amber.
   const whoW = Math.max(
     labelW,
-    extras.theirs.length ? theirsLabel.length : 0,
-    extras.mine.length ? mineLabel.length : 0,
+    extras.theirs.length ? measure(theirsLabel) : 0,
+    extras.mine.length ? measure(mineLabel) : 0,
   );
   // A URL value is a link with color on, shortened as on the card, but faint like the rest of
   // the line: in the diff amber says "differs", and a terminal shows no underline to tell a link
   // apart (the web's extras link is amber, but underlined).
+  // On a terminal the value is cut to what the line leaves it, a URL shortened first as in a
+  // cell; the owner and the label never are. Too little left (a long label) and nothing is cut.
   const line = (who: string, label: string, value: string): string => {
     const v = sanitizeValue(value);
-    const shown = color && isHttpUrl(v) ? hyperlink(v.trim(), displayUrl(v), term) : v;
-    return `  ${c.faint}${who.padEnd(whoW)}  ${sanitizeValue(label)} = ${shown}${c.reset}`;
+    const l = sanitizeValue(label);
+    const left = room - whoW - width(l) - 5;
+    const fits = !fit || left < MIN_CELL || width(v) <= left;
+    const url = isHttpUrl(v);
+    const text = url && (color || !fits) ? displayUrl(v) : v;
+    const cutText = fits ? text : cut(text, left);
+    const shown = color && url ? hyperlink(v.trim(), cutText, term) : cutText;
+    return `  ${c.faint}${padTo(who, whoW, measure)}  ${l} = ${shown}${c.reset}`;
   };
   for (const x of extras.theirs) out.push(line(theirsLabel, x.label, x.value));
   for (const x of extras.mine) out.push(line(mineLabel, x.label, x.value));
@@ -466,24 +484,66 @@ const ELLIPSIS = "…";
 // cut, so the diff prints full values and lets the terminal wrap, as it did before any cap.
 const MIN_CELL = 6;
 
-/** `s` cut to `w` columns, ending in `…` when it doesn't fit. Cuts between code points, never
- *  inside a surrogate pair. Measures `.length` like the padding does: a wide character (CJK,
- *  emoji) takes two columns on screen and is under-counted by both. */
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// Two columns: the East_Asian_Width W and F ranges of Unicode's EastAsianWidth.txt that hold
+// text (Hangul Jamo, CJK radicals and symbols, Hiragana, Katakana, Bopomofo, CJK Unified and its
+// extensions, Yi, Hangul syllables, compatibility ideographs, CJK compatibility forms, fullwidth
+// forms), checked on a cluster's first code point. Emoji are a cluster with an emoji-presentation
+// code point (a regional indicator, so a flag, included), or a pictograph asking for emoji
+// presentation with U+FE0F: `©` alone is one column, as terminals draw it.
+const WIDE_RE =
+  /^[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{2fffd}\u{30000}-\u{3fffd}]|\p{Emoji_Presentation}|\p{Extended_Pictographic}\ufe0f/u;
+// Zero columns: a cluster of nothing but combining marks and invisibles (INVISIBLE_RE's class,
+// which sanitizeValue leaves in a cell).
+const ZERO_RE = /^[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}]+$/u;
+
+/** The grapheme clusters of `s`: what a terminal draws as one character. */
+function graphemes(s: string): string[] {
+  return Array.from(GRAPHEMES.segment(s), (g) => g.segment);
+}
+
+/** How many terminal columns `s` takes: 0, 1 or 2 per grapheme cluster. Hand-rolled to keep the
+ *  CLI dependency-free; a terminal that disagrees about a rare character is off by a column. */
+export function width(s: string): number {
+  let w = 0;
+  for (const g of graphemes(s)) w += clusterWidth(g);
+  return w;
+}
+
+function clusterWidth(g: string): number {
+  return ZERO_RE.test(g) ? 0 : WIDE_RE.test(g) ? 2 : 1;
+}
+
+/** Two parts of a line as one indented line, or as two when `apart`. */
+function wrapTwo(a: string, b: string, apart: boolean): string[] {
+  return apart ? [`  ${a}`, `  ${b}`] : [`  ${a} ${b}`];
+}
+
+/** `s` padded with spaces to `w` columns as `measure` counts them. */
+function padTo(s: string, w: number, measure: (s: string) => number): string {
+  return s + " ".repeat(Math.max(0, w - measure(s)));
+}
+
+/** `s` cut to `w` columns, ending in `…` when it doesn't fit. Cuts between grapheme clusters, so
+ *  never inside an emoji sequence or a flag, and a wide character that doesn't fit before the `…`
+ *  is dropped whole (the cell comes out a column short rather than a column over). */
 function cut(s: string, w: number): string {
-  if (s.length <= w) return s;
+  if (width(s) <= w) return s;
   let kept = "";
-  for (const ch of s) {
-    if (kept.length + ch.length > w - ELLIPSIS.length) break;
-    kept += ch;
+  let used = 0;
+  for (const g of graphemes(s)) {
+    used += clusterWidth(g);
+    if (used > w - 1) break;
+    kept += g;
   }
   return kept + ELLIPSIS;
 }
 
-/** The part of `cps` (a value's code points) from `start`, in `w` columns: a leading `…` when
+/** The part of `gs` (a value's grapheme clusters) from `start`, in `w` columns: a leading `…` when
  *  it starts past the beginning, a trailing one when it still doesn't fit. */
-function windowAt(cps: string[], start: number, w: number): string {
-  if (start === 0) return cut(cps.join(""), w);
-  return ELLIPSIS + cut(cps.slice(start).join(""), w - ELLIPSIS.length);
+function windowAt(gs: string[], start: number, w: number): string {
+  if (start === 0) return cut(gs.join(""), w);
+  return ELLIPSIS + cut(gs.slice(start).join(""), w - 1);
 }
 
 /** The two value columns' widths. Without `columns` (stdout not a terminal) both keep their
@@ -540,20 +600,29 @@ function pairShown(
 ): [string, string] {
   const both = differ && theirs !== null && mine !== null;
   const short = (v: string | null, w: number): string =>
-    v === null ? MISSING : isHttpUrl(v) && (color || v.length > w) ? displayUrl(v) : v;
+    v === null ? MISSING : isHttpUrl(v) && (color || width(v) > w) ? displayUrl(v) : v;
   const [tw, mw] = widths;
   let [t, m] = [short(theirs, tw), short(mine, mw)];
   if (both && t === m) [t, m] = [theirs, mine];
   const w = Math.min(tw, mw);
   if (!both || t === m || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
-  const [tc, mc] = [[...t], [...m]];
+  const [tc, mc] = [graphemes(t), graphemes(m)];
   let i = 0;
   while (i < tc.length && tc[i] === mc[i]) i++;
-  // Half the window before the difference, or as much as the longer value's end leaves room for.
-  const start = Math.max(
-    0,
-    Math.min(i - Math.floor(w / 2), Math.max(tc.length, mc.length) - w + 1),
-  );
+  // Half the window before the difference, or as much as the longer value's end leaves room for,
+  // counted in columns: back up from each while the clusters passed still fit.
+  const back = (gs: string[], from: number, room: number): number => {
+    let at = from;
+    let used = 0;
+    while (at > 0) {
+      used += clusterWidth(gs[at - 1] ?? "");
+      if (used > room) break;
+      at--;
+    }
+    return at;
+  };
+  const longer = tc.length >= mc.length ? tc : mc;
+  const start = Math.min(back(tc, i, Math.floor(w / 2)), back(longer, longer.length, w - 1));
   return [windowAt(tc, start, w), windowAt(mc, start, w)];
 }
 
@@ -594,7 +663,11 @@ function lookAlike(theirs: string, mine: string, color: boolean): boolean {
  * With it, the value columns are capped so a row fits and a longer cell ends in `…` (valueWidths,
  * pairShown); one long dotfiles URL no longer wraps every row. Without it nothing is cut, so piped
  * output keeps every value whole. Widths are measured on the plain text, and color and links go
- * around it afterwards, so escape bytes never count as columns.
+ * around it afterwards, so escape bytes never count as columns. On a terminal they are measured in
+ * columns (width: a CJK character or an emoji takes two), and the page line, the extras lines and
+ * the count line fit too: the page line's text is cut (its link keeps the whole address), an
+ * extras line cuts its value and never its owner, and the count line breaks between its segments.
+ * Piped, a cell is measured by `.length` as before, so the bytes a script reads don't move.
  */
 export function renderDiff(
   result: DiffResult,
@@ -633,6 +706,9 @@ export function renderDiff(
       one: r.status === "only_theirs" || r.status === "only_mine",
     };
   });
+  const fit = opts.columns !== undefined;
+  const measure = fit ? width : (v: string): number => v.length;
+  const room = Math.max(MIN_CELL, (opts.columns ?? Infinity) - 2);
   const labelW = Math.max(3, ...rows.map((r) => r.label.length));
   // Natural widths, of the form each cell shows uncut: column heads (the handles as stored, faint,
   // like the web diff's: DESIGN.md, Diff session) and values, shortened where pairShown would.
@@ -641,38 +717,46 @@ export function renderDiff(
   );
   const widths = valueWidths(
     labelW,
-    Math.max(theirsLabel.length, ...natural.map(([t]) => t.length)),
-    Math.max(mineLabel.length, ...natural.map(([, m]) => m.length)),
+    Math.max(measure(theirsLabel), ...natural.map(([t]) => measure(t))),
+    Math.max(measure(mineLabel), ...natural.map(([, m]) => measure(m))),
     opts.columns,
   );
-  const [theirsW, mineW] = widths;
+  const [theirsW] = widths;
+  // Where cells are cut: nowhere when piped, where `.length` widths could cut a wide character.
+  const cutAt: [number, number] = fit ? widths : [Infinity, Infinity];
+  const padT = (v: string): string => " ".repeat(Math.max(0, theirsW - measure(v)));
   // A shown cell, linked to its full URL with color on. Padded after the link closes, so the
   // padding is neither underlined nor clickable.
   const cell = (shown: string, raw: string | null, w?: number): string => {
-    const pad = w === undefined ? "" : " ".repeat(Math.max(0, w - shown.length));
+    const pad = w === undefined ? "" : " ".repeat(Math.max(0, w - measure(shown)));
     const linked =
       opts.color && raw !== null && isHttpUrl(raw) ? hyperlink(raw.trim(), shown, term) : shown;
     return linked + pad;
   };
 
   const page = sanitizeValue(opts.page);
-  const pageText = `${c.faint}${displayUrl(page)}${c.reset}`;
+  const pageText = `${c.faint}${cut(displayUrl(page), room)}${c.reset}`;
   const lines: string[] = [
     "",
     `  ${opts.color ? hyperlink(page, pageText, term) : pageText}`,
     // The web diff's h1, collapsed to one line — information (which side is which), not decoration,
-    // so it prints in both color modes.
-    `  ${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset} ${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,
+    // so it prints in both color modes. Too wide for the terminal (two long handles), it breaks
+    // before `differs from` rather than mid-handle; the handles themselves are never cut.
+    ...wrapTwo(
+      `${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset}`,
+      `${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,
+      width(`how ${theirsLabel} differs from ${mineLabel}`) > room,
+    ),
     "",
   ];
   lines.push(
-    `  ${c.faint}${"".padEnd(labelW)}  ${cut(theirsLabel, theirsW).padEnd(theirsW)}  ${cut(mineLabel, mineW)}${c.reset}`,
+    `  ${c.faint}${"".padEnd(labelW)}  ${padTo(cut(theirsLabel, cutAt[0]), theirsW, measure)}  ${cut(mineLabel, cutAt[1])}${c.reset}`,
   );
   for (const r of rows) {
-    const [ts, ms] = pairShown(...r.shown, r.differ, widths, opts.color);
+    const [ts, ms] = pairShown(...r.shown, r.differ, cutAt, opts.color);
     if (!opts.color) {
       const sym = r.one ? "?" : r.differ ? "~" : "=";
-      lines.push(`${sym} ${r.label.padEnd(labelW)}  ${ts.padEnd(theirsW)}  ${ms}`);
+      lines.push(`${sym} ${r.label.padEnd(labelW)}  ${padTo(ts, theirsW, measure)}  ${ms}`);
     } else if (r.one) {
       // Both sides faint (the set one a link when it's a URL), the label in ink: the row recedes
       // like a shared one but its dot and label keep it apart from one.
@@ -680,12 +764,12 @@ export function renderDiff(
         `${c.faint}${raw === null ? shown : cell(shown, raw)}${c.reset}`;
       lines.push(
         `${c.faint}•${c.reset} ${r.label.padEnd(labelW)}  ${side(ts, r.theirs)}` +
-          `${" ".repeat(Math.max(0, theirsW - ts.length))}  ${side(ms, r.mine)}`,
+          `${padT(ts)}  ${side(ms, r.mine)}`,
       );
     } else if (r.differ) {
       lines.push(
         `${c.amber}•${c.reset} ${r.label.padEnd(labelW)}  ` +
-          `${c.amber}${cell(ts, r.theirs)}${c.reset}${" ".repeat(Math.max(0, theirsW - ts.length))}  ` +
+          `${c.amber}${cell(ts, r.theirs)}${c.reset}${padT(ts)}  ` +
           `${c.amber}${cell(ms, r.mine)}${c.reset}`,
       );
     } else {
@@ -695,11 +779,21 @@ export function renderDiff(
     }
   }
 
-  lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c, opts.color, term));
+  lines.push(
+    ...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c, opts.color, term, fit, room),
+  );
   const counts = [`${result.differ} differ`, `${result.shared} shared`];
   if (result.onlyTheirs) counts.push(`${result.onlyTheirs} only ${theirsLabel}`);
   if (result.onlyMine) counts.push(`${result.onlyMine} only ${mineLabel}`);
-  lines.push("", `  ${c.faint}${counts.join("   ")}${c.reset}`);
+  // Segments fill a line and the next starts a new one, so a count is never cut; only a segment
+  // wider than the whole line on its own (a long handle) is.
+  const countLines: string[] = [];
+  for (const seg of counts) {
+    const joined = `${countLines.at(-1)}   ${seg}`;
+    if (countLines.length && width(joined) <= room) countLines[countLines.length - 1] = joined;
+    else countLines.push(cut(seg, room));
+  }
+  lines.push("", ...countLines.map((l) => `  ${c.faint}${l}${c.reset}`));
   return lines.join("\n");
 }
 
