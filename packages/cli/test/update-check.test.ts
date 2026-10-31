@@ -595,6 +595,17 @@ describe("runUpdate", () => {
   /** What `npm root -g` prints for the prefix NPM_PATH lives in. */
   const NPM_ROOT = "/usr/local/lib/node_modules\n";
 
+  /** runUpdate with the post-install pnpm lookup made hermetic: a cold cache, so the lookup never
+   *  runs, and a lookup that rejects in case one does. Tests of the lookup override both. */
+  const run = (d: Parameters<typeof runUpdate>[0] = {}) =>
+    runUpdate({
+      cachePath: join(dir, "absent.json"),
+      list: vi.fn(async () => {
+        throw new Error("unexpected pnpm list");
+      }),
+      ...d,
+    });
+
   /** The package manager's answer to "where do your global installs live". */
   const where = (stdout: string) => vi.fn(async () => stdout);
   /** A spawn whose child fires `event` once runUpdate has attached its listeners. The spawn now
@@ -643,7 +654,7 @@ describe("runUpdate", () => {
     async (_label, binPath, lookup, printed, expected) => {
       const spawn = spawnThat("exit", 0);
       const whereFn = where(`${printed}\n`);
-      await runUpdate({ spawn, where: whereFn, binPath });
+      await run({ spawn, where: whereFn, binPath });
       // cwd is pinned to the home dir: cmd.exe resolves bare names from the CURRENT directory
       // first (CWE-427), so spawning from an untrusted checkout could execute a planted npm.cmd.
       // The lookup runs the same manager, so it gets the same shell and cwd, plus a timeout.
@@ -703,7 +714,7 @@ describe("runUpdate", () => {
     "%s: a manager that doesn't own the running copy is refused, nothing spawns",
     async (_label, binPath, printed, first, second) => {
       const spawn = vi.fn();
-      await runUpdate({ spawn, where: where(`${printed}\n`), binPath });
+      await run({ spawn, where: where(`${printed}\n`), binPath });
       expect(spawn).not.toHaveBeenCalled();
       expect(logs).toEqual([]); // never claims to be "running" anything
       const lines = errs.join("\n").split("\n");
@@ -727,7 +738,7 @@ describe("runUpdate", () => {
     ["prints two paths", async () => "/usr/local/lib/node_modules\n/opt/x\n"],
   ] as const)("a lookup that %s gets the manual commands, nothing spawns", async (_label, fn) => {
     const spawn = vi.fn();
-    await runUpdate({ spawn, where: fn, binPath: NPM_PATH });
+    await run({ spawn, where: fn, binPath: NPM_PATH });
     expect(spawn).not.toHaveBeenCalled();
     const out = errs.join("\n");
     expect(out).toContain("Couldn't check where `npm i -g ymmv-cli@latest` would install.");
@@ -741,7 +752,7 @@ describe("runUpdate", () => {
     ["a notice around the path", "\nnpm notice new version\n/usr/local/lib/node_modules\n\n"],
   ] as const)("the lookup's path line survives %s", async (_label, stdout) => {
     const spawn = spawnThat("exit", 0);
-    await runUpdate({ spawn, where: where(stdout), binPath: NPM_PATH });
+    await run({ spawn, where: where(stdout), binPath: NPM_PATH });
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
@@ -751,11 +762,11 @@ describe("runUpdate", () => {
     const binPath =
       "/srv/3f2b8c1e-0d4a-4b6f-9a7e-2c5d8e1f0a3b/node/lib/node_modules/ymmv-cli/dist/cli.js";
     const spawn = spawnThat("exit", 0);
-    await runUpdate({ spawn, where: where("/srv/***/node/lib/node_modules\n"), binPath });
+    await run({ spawn, where: where("/srv/***/node/lib/node_modules\n"), binPath });
     expect(spawn).toHaveBeenCalledTimes(1);
 
     const refused = vi.fn();
-    await runUpdate({
+    await run({
       spawn: refused,
       where: where("/srv/***/other/lib/node_modules\n"),
       binPath,
@@ -765,7 +776,7 @@ describe("runUpdate", () => {
 
   it("Windows paths that differ only by case and separators are the same place", async () => {
     const spawn = spawnThat("exit", 0);
-    await runUpdate({
+    await run({
       spawn,
       where: where("c:/users/U/AppData/Roaming/npm/node_modules\r\n"),
       binPath: "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\ymmv-cli\\dist\\cli.js",
@@ -776,14 +787,14 @@ describe("runUpdate", () => {
 
   it("POSIX paths that differ by case are different places", async () => {
     const spawn = vi.fn();
-    await runUpdate({ spawn, where: where("/usr/LOCAL/lib/node_modules\n"), binPath: NPM_PATH });
+    await run({ spawn, where: where("/usr/LOCAL/lib/node_modules\n"), binPath: NPM_PATH });
     expect(spawn).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
   it("a Windows mismatch names both locations in their own form", async () => {
     const spawn = vi.fn();
-    await runUpdate({
+    await run({
       spawn,
       where: where("D:\\nodes\\npm\\node_modules\r\n"),
       binPath: "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\ymmv-cli\\dist\\cli.js",
@@ -797,7 +808,7 @@ describe("runUpdate", () => {
   it("the refusal strips control bytes from both paths", async () => {
     // Paths are printed, and a directory name can hold anything.
     const spawn = vi.fn();
-    await runUpdate({
+    await run({
       spawn,
       where: where(`/opt/${ESC}[31mnode/lib/node_modules\n`),
       binPath: `/home/${ESC}[2Ju/node/lib/node_modules/ymmv-cli/dist/cli.js`,
@@ -824,7 +835,7 @@ describe("runUpdate", () => {
       const binPath = realpathSync(npmInstall("real"));
       symlinkSync(join(dir, "real"), join(dir, "current"));
       const spawn = spawnThat("exit", 0);
-      await runUpdate({
+      await run({
         spawn,
         where: where(`${join(dir, "current", "node", "lib", "node_modules")}\n`),
         binPath,
@@ -839,7 +850,7 @@ describe("runUpdate", () => {
       mkdirSync(join(dir, "elsewhere", "bin"), { recursive: true });
       symlinkSync(binPath, join(dir, "elsewhere", "bin", "ymmv"));
       const spawn = spawnThat("exit", 0);
-      await runUpdate({
+      await run({
         spawn,
         where: where(`${join(dir, "elsewhere", "bin")}\n`),
         binPath: realpathSync(binPath),
@@ -866,7 +877,7 @@ describe("runUpdate", () => {
     it("pnpm 11: pnpm prints the global dir the running copy runs from, so it spawns", async () => {
       const raw = pnpm11Install("pnpm");
       const spawn = spawnThat("exit", 0);
-      await runUpdate({
+      await run({
         spawn,
         where: where(`${join(dir, "pnpm", "global", "v11")}\n`),
         binPath: pnpm11Bin(raw),
@@ -879,7 +890,7 @@ describe("runUpdate", () => {
       const raw = pnpm11Install("pnpm");
       const spawn = vi.fn();
       const other = join(dir, "other", "pnpm", "global", "v11");
-      await runUpdate({ spawn, where: where(`${other}\n`), binPath: pnpm11Bin(raw) });
+      await run({ spawn, where: where(`${other}\n`), binPath: pnpm11Bin(raw) });
       expect(spawn).not.toHaveBeenCalled();
       expect(errs.join("\n")).toContain(
         `This ymmv runs from ${dirname(dirname(raw))}, but \`pnpm add -g ymmv-cli@latest\` installs under ${other}.`,
@@ -897,7 +908,7 @@ describe("runUpdate", () => {
         const raw = pnpm11Install("pnpm");
         pnpm11Install(join("second", "pnpm"), store);
         const spawn = vi.fn();
-        await runUpdate({
+        await run({
           spawn,
           where: where(`${join(dir, "second", "pnpm", "global", "v11")}\n`),
           binPath: pnpm11Bin(raw),
@@ -918,7 +929,7 @@ describe("runUpdate", () => {
         symlinkSync(join(dir, "data", "pnpm"), join(dir, "alias", "pnpm"));
         const raw = join(dir, runVia, "pnpm", "global", "v11", "575c", "node_modules", "ymmv-cli");
         const spawn = spawnThat("exit", 0);
-        await runUpdate({
+        await run({
           spawn,
           where: where(`${join(dir, printVia, "pnpm", "global", "v11")}\n`),
           binPath: pnpm11Bin(join(raw, "dist", "cli.js")),
@@ -934,7 +945,7 @@ describe("runUpdate", () => {
       try {
         const spawn = spawnThat("exit", 0);
         // NO binPath: exercise the default resolution
-        await runUpdate({ spawn, where: where(`${join(dir, "pnpm", "global", "v11")}\n`) });
+        await run({ spawn, where: where(`${join(dir, "pnpm", "global", "v11")}\n`) });
         expect(spawn).toHaveBeenCalledWith("pnpm add -g ymmv-cli@latest", SPAWN_OPTS);
       } finally {
         process.argv[1] = argv1;
@@ -944,7 +955,7 @@ describe("runUpdate", () => {
     it("bun with its bin dir moved and no link to the running copy is refused", async () => {
       mkdirSync(join(dir, "elsewhere", "bin"), { recursive: true });
       const spawn = vi.fn();
-      await runUpdate({
+      await run({
         spawn,
         where: where(`${join(dir, "elsewhere", "bin")}\n`),
         binPath: "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
@@ -973,7 +984,7 @@ describe("runUpdate", () => {
       try {
         const spawn = spawnThat("exit", 0);
         // NO binPath: exercise the default resolution
-        await runUpdate({ spawn, where: where(`${dirname(dirname(dirname(target)))}\n`) });
+        await run({ spawn, where: where(`${dirname(dirname(dirname(target)))}\n`) });
         expect(spawn).toHaveBeenCalledWith("npm i -g ymmv-cli@latest", SPAWN_OPTS);
       } finally {
         process.argv[1] = argv1;
@@ -982,7 +993,7 @@ describe("runUpdate", () => {
   );
 
   it("passes a nonzero package-manager exit straight through", async () => {
-    await runUpdate({ spawn: spawnThat("exit", 3), where: where(NPM_ROOT), binPath: NPM_PATH });
+    await run({ spawn: spawnThat("exit", 3), where: where(NPM_ROOT), binPath: NPM_PATH });
     expect(process.exitCode).toBe(3);
     expect(errs).toEqual([]); // the pm already explained itself on inherited stdio
   });
@@ -991,7 +1002,7 @@ describe("runUpdate", () => {
     ["POSIX sh not-found", 127],
     ["cmd.exe not-found", 9009],
   ] as const)("%s exit code gets the manual fallback, exit 1", async (_label, code) => {
-    await runUpdate({ spawn: spawnThat("exit", code), where: where(NPM_ROOT), binPath: NPM_PATH });
+    await run({ spawn: spawnThat("exit", code), where: where(NPM_ROOT), binPath: NPM_PATH });
     expect(process.exitCode).toBe(1);
     const out = errs.join("\n");
     expect(out).toContain("Couldn't run `npm i -g ymmv-cli@latest`");
@@ -999,7 +1010,7 @@ describe("runUpdate", () => {
   });
 
   it("a spawn error event gets the manual fallback, exit 1, never a stack trace", async () => {
-    await runUpdate({
+    await run({
       spawn: spawnThat("error", new Error("EACCES")),
       where: where(NPM_ROOT),
       binPath: NPM_PATH,
@@ -1009,7 +1020,7 @@ describe("runUpdate", () => {
   });
 
   it("a synchronously-throwing spawn gets the same fallback", async () => {
-    await runUpdate({
+    await run({
       spawn: () => {
         throw new Error("spawn EPERM");
       },
@@ -1026,7 +1037,7 @@ describe("runUpdate", () => {
       JSON.stringify({ lastCheckedAt: NOW, ok: true, latest: "0.9.0", latestAt: NOW }),
     );
     const spawn = vi.fn();
-    await runUpdate({
+    await run({
       spawn,
       binPath: NPX_PATH,
       now: () => NOW,
@@ -1046,7 +1057,7 @@ describe("runUpdate", () => {
       JSON.stringify({ lastCheckedAt: NOW, ok: true, latest: "0.8.0", latestAt: NOW }),
     );
     const spawn = vi.fn();
-    await runUpdate({
+    await run({
       spawn,
       binPath: NPX_PATH,
       now: () => NOW,
@@ -1061,7 +1072,7 @@ describe("runUpdate", () => {
   it("ephemeral with a cold cache falls back to @latest", async () => {
     const spawn = vi.fn();
     const whereFn = where(NPM_ROOT);
-    await runUpdate({
+    await run({
       spawn,
       where: whereFn,
       binPath: NPX_PATH,
@@ -1074,10 +1085,151 @@ describe("runUpdate", () => {
     expect(logs.join("\n")).toContain("npx ymmv-cli@latest");
   });
 
+  describe("after a pnpm update exits 0", () => {
+    const PNPM_PATH =
+      "/home/u/.local/share/pnpm/global/5/.pnpm/ymmv-cli@0.14.1/node_modules/ymmv-cli/dist/cli.js";
+    const PNPM_ROOT = "/home/u/.local/share/pnpm/global/5/node_modules\n";
+    /** `pnpm list -g --json` as pnpm 9 to 12 print it, with ymmv-cli at `version`. */
+    const listed = (version: unknown, extra: Record<string, unknown> = {}): string =>
+      JSON.stringify([
+        {
+          path: "/home/u/.local/share/pnpm/global/5",
+          private: false,
+          dependencies: { ...extra, "ymmv-cli": { from: "ymmv-cli", version } },
+        },
+      ]);
+    const cache = (latest: string, latestAt = NOW): void => {
+      writeFileSync(cachePath, JSON.stringify({ lastCheckedAt: NOW, ok: true, latest, latestAt }));
+    };
+    const NOTE =
+      "Installed 0.14.1, not 0.15.1.\n  The pnpm minimumReleaseAge setting (a day by default since pnpm 11) holds back newer releases.";
+    const update = (list: () => Promise<string>, binPath = PNPM_PATH, root = PNPM_ROOT) =>
+      run({
+        spawn: spawnThat("exit", 0),
+        where: where(root),
+        list: vi.fn(list),
+        binPath,
+        cachePath,
+        now: () => NOW,
+      });
+
+    it("names the version pnpm installed when the cached latest is newer, and exits 0", async () => {
+      cache("0.15.1");
+      const list = vi.fn(async () => listed("0.14.1", { "is-number": { version: "7.0.0" } }));
+      await run({
+        spawn: spawnThat("exit", 0),
+        where: where(PNPM_ROOT),
+        list,
+        binPath: PNPM_PATH,
+        cachePath,
+        now: () => NOW,
+      });
+      // Static command, same shell and cwd as the install, with a timeout.
+      expect(list).toHaveBeenCalledWith("pnpm list -g --json", {
+        shell: true,
+        cwd: homedir(),
+        timeout: expect.any(Number),
+      });
+      expect(logs.at(-1)).toBe(`\n  ${NOTE}`);
+      expect(errs).toEqual([]);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it.each([
+      ["the same version", "0.15.1"],
+      ["a newer version than the cache (the cache lags a day)", "0.15.2"],
+    ] as const)("prints nothing when pnpm installed %s", async (_label, version) => {
+      cache("0.15.1");
+      await update(async () => listed(version));
+      expect(logs).toHaveLength(1); // just the "running" line
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it.each([
+      ["cold", () => {}],
+      ["stale (fetched over a week ago)", () => cache("0.15.1", NOW - 8 * DAY)],
+      ["holding a version that isn't a plain triple", () => cache("0.16.0-beta.1")],
+    ] as const)("a %s cache prints nothing and never asks pnpm", async (_label, seed) => {
+      seed();
+      const list = vi.fn(async () => listed("0.14.1"));
+      await run({
+        spawn: spawnThat("exit", 0),
+        where: where(PNPM_ROOT),
+        list,
+        binPath: PNPM_PATH,
+        cachePath,
+        now: () => NOW,
+      });
+      expect(list).not.toHaveBeenCalled();
+      expect(logs).toHaveLength(1);
+    });
+
+    it.each([
+      ["rejects (failed, timed out)", () => Promise.reject(new Error("exit 1"))],
+      ["prints nothing", async () => ""],
+      ["prints something that isn't JSON", async () => "ymmv-cli 0.14.1\n"],
+      ["prints an object, not a list", async () => JSON.stringify({ dependencies: {} })],
+      ["lists no ymmv-cli", async () => JSON.stringify([{ dependencies: {} }])],
+      ["lists a project with no dependencies", async () => JSON.stringify([{ path: "/x" }, null])],
+      [
+        "lists ymmv-cli twice",
+        async () =>
+          JSON.stringify([JSON.parse(listed("0.14.1"))[0], JSON.parse(listed("0.13.0"))[0]]),
+      ],
+      ["lists a prerelease", async () => listed("0.14.1-beta.1")],
+      ["lists a version laced with escapes", async () => listed(`${ESC}[2J0.14.1`)],
+      ["lists a version that isn't a string", async () => listed(14)],
+    ] as const)("a lookup that %s prints nothing", async (_label, list) => {
+      cache("0.15.1");
+      await update(list);
+      expect(logs).toHaveLength(1);
+      expect(errs).toEqual([]);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it("a failed pnpm install never asks what it installed", async () => {
+      cache("0.15.1");
+      const list = vi.fn(async () => listed("0.14.1"));
+      await run({
+        spawn: spawnThat("exit", 1),
+        where: where(PNPM_ROOT),
+        list,
+        binPath: PNPM_PATH,
+        cachePath,
+        now: () => NOW,
+      });
+      expect(list).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    });
+
+    it.each([
+      ["npm", NPM_PATH, NPM_ROOT],
+      [
+        "bun",
+        "/home/u/.bun/install/global/node_modules/ymmv-cli/dist/cli.js",
+        "/home/u/.bun/bin\n",
+      ],
+    ] as const)("%s updates are untouched", async (_label, binPath, root) => {
+      cache("0.15.1");
+      const list = vi.fn(async () => listed("0.14.1"));
+      await run({
+        spawn: spawnThat("exit", 0),
+        where: where(root),
+        list,
+        binPath,
+        cachePath,
+        now: () => NOW,
+      });
+      expect(list).not.toHaveBeenCalled();
+      expect(logs).toHaveLength(1);
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
   it("unknown installs get all three manual commands and exit 0 (doubt never spawns)", async () => {
     const spawn = vi.fn();
     const whereFn = where(NPM_ROOT);
-    await runUpdate({ spawn, where: whereFn, binPath: "/opt/tools/ymmv" });
+    await run({ spawn, where: whereFn, binPath: "/opt/tools/ymmv" });
     expect(whereFn).not.toHaveBeenCalled(); // no manager was picked, so none is asked
     expect(spawn).not.toHaveBeenCalled();
     const out = logs.join("\n");

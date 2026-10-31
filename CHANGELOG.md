@@ -9,6 +9,10 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   package in pnpm's store, and `ymmv update` printed the commands to run by hand instead of running
   `pnpm add -g ymmv-cli@latest`. It now runs the update, after the same check that the pnpm on your
   `PATH` is the one that installed the copy you're running.
+- **`ymmv update` says when pnpm installed an older version than the latest.** pnpm 11 and later
+  hold back releases younger than their `minimumReleaseAge` setting, a day by default, so for a
+  day after a release `pnpm add -g ymmv-cli@latest` installs the one before it. `ymmv update` now
+  prints which version pnpm installed and names the setting. It still exits 0.
 
 ## [0.15.1] - 2026-10-01
 

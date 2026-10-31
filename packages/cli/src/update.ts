@@ -10,6 +10,7 @@ import {
   isNewer,
   npxInvocation,
   ownVersion,
+  parseTriple,
   pnpmGlobalLink,
   readCachedLatest,
 } from "./update-check.js";
@@ -174,10 +175,71 @@ function isInside(dir: string, path: string): boolean {
   return outer.length > 0 && outer.every((seg, i) => same(seg, inner[i]));
 }
 
+/** What pnpm has installed globally, as JSON. A static string, like UPGRADE_COMMANDS. */
+const PNPM_LIST_COMMAND = "pnpm list -g --json";
+
+/** The ymmv-cli version in `pnpm list -g --json` output, or null. pnpm 9 through 12 all print an
+ *  array of projects, each with `dependencies["ymmv-cli"].version`; a global dir is one project.
+ *  Anything else (bad JSON, another shape, no entry or more than one, a version that isn't a
+ *  plain triple) is doubt. The version is rebuilt from the parsed triple, never printed as read. */
+function listedVersion(stdout: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const versions = parsed.flatMap((project: unknown) => {
+    const deps = (project as { dependencies?: Record<string, { version?: unknown }> } | null)
+      ?.dependencies;
+    const version = deps?.["ymmv-cli"]?.version;
+    return typeof version === "string" ? [version] : [];
+  });
+  if (versions.length !== 1) return null;
+  const triple = parseTriple(versions[0] as string);
+  return triple ? triple.join(".") : null;
+}
+
+/**
+ * After pnpm reports success, the note to print when it installed an older version than the
+ * update check last saw, or null. pnpm 11 and later hold back releases younger than their
+ * minimumReleaseAge setting (a day by default), and `@latest` then quietly resolves to the
+ * newest release that is old enough. The cache's latest can itself lag (readCachedLatest takes
+ * one fetched up to a week ago), so only a cached version strictly newer than the installed one
+ * says anything. A cold or stale cache,
+ * a failed lookup and output that can't be read all print nothing. No network, and never
+ * ownVersion(): this process is the copy that was just replaced.
+ */
+async function pnpmHeldBack(deps: UpdateRunDeps): Promise<string | null> {
+  const cached = await readCachedLatest({ now: deps.now, cachePath: deps.cachePath });
+  if (cached === null) return null;
+  let stdout: string;
+  try {
+    // Same shell, cwd and timeout as the ownership lookup, for the same reasons.
+    stdout = await (deps.list ?? runWhere)(PNPM_LIST_COMMAND, {
+      shell: true,
+      cwd: homedir(),
+      timeout: WHERE_TIMEOUT_MS,
+    });
+  } catch {
+    return null;
+  }
+  const installed = listedVersion(stdout);
+  if (installed === null || !isNewer(cached, installed)) return null;
+  // The user may have set minimumReleaseAge themselves, so the default isn't named as the cause.
+  return (
+    `Installed ${installed}, not ${cached}.\n` +
+    "The pnpm minimumReleaseAge setting (a day by default since pnpm 11) holds back newer releases."
+  );
+}
+
 export interface UpdateRunDeps {
   spawn?: SpawnFn;
   /** Asks the package manager where its global installs live. */
   where?: WhereFn;
+  /** Asks pnpm which version it has installed, after an update (PNPM_LIST_COMMAND). */
+  list?: WhereFn;
   /** The bin script's path — NOT Node's process.execPath (the node binary). A string stands for
    *  both the path Node was given and its realpath; see binPaths. */
   binPath?: string | BinPaths;
@@ -280,7 +342,8 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
   }
 
   console.log(message(`${c.faint}running${c.reset} ${c.bold}${cmd}${c.reset}`));
-  await new Promise<void>((resolve) => {
+  // Resolves true only when the package manager exited 0.
+  const installed = await new Promise<boolean>((resolve) => {
     let child: SpawnedChild;
     try {
       // cwd is pinned to the home dir: with shell:true on Windows, cmd.exe resolves a bare
@@ -290,15 +353,15 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
       child = doSpawn(cmd, { stdio: "inherit", shell: true, cwd: homedir() });
     } catch {
       failSpawn();
-      resolve();
+      resolve(false);
       return;
     }
     let settled = false;
-    const settle = (fn: () => void): void => {
+    const settle = (fn: () => void, ok = false): void => {
       if (settled) return;
       settled = true;
       fn();
-      resolve();
+      resolve(ok);
     };
     child.on("error", () => {
       settle(failSpawn);
@@ -312,7 +375,11 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
           // verdict through without re-narrating.
           process.exitCode = code;
         }
-      });
+      }, code === 0);
     });
   });
+  if (installed && method === "pnpm-global") {
+    const note = await pnpmHeldBack(deps);
+    if (note) console.log(message(note));
+  }
 }
