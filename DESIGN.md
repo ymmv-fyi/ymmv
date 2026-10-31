@@ -60,7 +60,8 @@ Amber marks ONLY links and diff differences. Never spend it on emphasis, CTAs, p
 decoration — with two deliberate exceptions: the fork motif itself (hero field branch, the fork
 glyph on the diff heading, favicon/OG mark), because the fork IS the diff; and the one amber
 nudge (`.nudge`, see Components & States), because it mirrors the CLI's `nudge()`. A difference is
-symmetric: both differing values go amber plus the row dot; same rows recede to `--faint`.
+symmetric: both differing values go amber plus the row dot; same rows recede to `--faint`. A row
+only one side filled in is no difference: it recedes too, keeping a faint dot.
 
 CLI parity: the CLI renders the same semantics with ANSI bright yellow (`packages/cli/src/render.ts`)
 — amber-only-on-difference, em-dash for a missing side, "N differ / N shared / N only <handle>"
@@ -187,15 +188,17 @@ the identity.
   26/37/37 fixed layout. Row semantics: both differing values amber + label dot
   (presence, not just hue — WCAG 1.4.1) + sr-only "differs:/same:" prefixes; missing side is an
   em-dash glyph. A row only one side filled in (`.one`, decided 2026-10-31) is not a different
-  tool, so it spends no amber: the dot stays (it is not a shared row) but faint, the one value
-  keeps the default ink, its sr-only prefix is "only <handle>:", and it counts apart, as
-  `N only <handle>` after `N shared`, left out at 0. The CLI marks it the same way: a faint `•`
-  with color, `?` without. `?` because the row can't be compared; the publish preview's `+`/`-`
-  (new/cleared) would mean something else two screens apart, and diff(1)'s `<`/`>` would add two
-  glyphs where the em-dash already says which side is empty. The ratio minimap now speaks the CLI's own no-color vocabulary — a run of
-  `~`/`=`/`?` glyphs (`.diff-map`, amber `~` where the stacks split) — above the "N differ /
-  N shared / N only <handle>" counts and the swap link. Extras render dimmed below (`table.extras-dim`), uncompared and never
-  amber, under a lowercase "extras (not compared)" line. NOTHING live wears the `.sheet` plate any
+  tool, so it spends no amber and recedes like a shared row: both cells `--faint` (in ink it
+  would outshine the amber of a real difference), the dot kept but faint, the sr-only prefix
+  "only <handle>:". It counts apart, as `N only <handle>` after `N shared`, left out at 0. The
+  CLI marks it the same way: a faint `•` and faint cells with color, `?` without. `?` because
+  the row can't be compared; the publish preview's `+`/`-` (new/cleared) would mean something
+  else two screens apart, and diff(1)'s `<`/`>` would add two glyphs where the em-dash already
+  says which side is empty. The ratio minimap now speaks the CLI's own no-color vocabulary — a
+  run of `~`/`=`/`?` glyphs (`.diff-map`, amber `~` where the stacks split) — above the
+  "N differ / N shared / N only <handle>" counts and the swap link. Extras render dimmed below
+  (`table.extras-dim`), uncompared and never amber, under a lowercase "extras (not compared)"
+  line. NOTHING live wears the `.sheet` plate any
   more; `.win` frames the landing's two windows.
   Rejected in the run: keeping the plated 30/35/35 sheet (estranged from the transcript profile),
   one-column git-style stacking ("Unified"/"Stack" — best on phones, loses the side-by-side eye
@@ -236,7 +239,7 @@ the inline SVG glyph (`Arrow.astro`, same stroke family as the fork), never the 
 which belongs to CLI output, and to the landing transcript that mirrors it byte-for-byte.
 Sentences open with a capital; fragments stay lowercase. Counts read "N differ", "N shared"
 and "N only <handle>" as words set apart by whitespace, never punctuation soup. "differ" counts
-only fields both sides filled in. The serif voice gets complete
+only fields both sides filled in, with different values. The serif voice gets complete
 sentences only. Page titles are URL-shaped — the title IS the address (`ymmv.fyi/<handle>`,
 `ymmv.fyi/<handle>/vs/<you>`), the same identity line the profile breadcrumb and the CLI print;
 the landing alone carries a subtitle (`ymmv.fyi: your stack, in the terminal`).

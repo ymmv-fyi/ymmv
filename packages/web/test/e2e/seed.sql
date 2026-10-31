@@ -9,10 +9,12 @@
 -- bidi control (the diff's bidi collide rung). corruptrow (7007) stores its editor value as a
 -- BLOB, a shape the write API can never produce, so a diff against it throws inside the /vs/
 -- page render: the only way to exercise the thrown-render 500 through the built Worker without
--- a test hook in production code.
+-- a test hook in production code. longhandlewithnohyphenstobreakatanywher (8008) is a 39-character handle, the longest
+-- GitHub allows, with no hyphen to break at: the diff's `N only <handle>` count must wrap it on a
+-- phone instead of letting it run off the page.
 
-DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007);
-DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007);
+DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008);
+DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008);
 
 INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES
   (1001, 'antfu', 'antfu',
@@ -34,7 +36,9 @@ INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_a
   (6006, '404', '404', '[{"label":"Launcher","value":"Raycast"}]',
    '2026-06-28T14:00:00.000Z', '2026-06-25T00:00:00.000Z'),
   (7007, 'corruptrow', 'corruptrow', '[]',
-   '2026-06-28T15:00:00.000Z', '2026-06-26T00:00:00.000Z');
+   '2026-06-28T15:00:00.000Z', '2026-06-26T00:00:00.000Z'),
+  (8008, 'longhandlewithnohyphenstobreakatanywher', 'longhandlewithnohyphenstobreakatanywher', '[]',
+   '2026-06-28T16:00:00.000Z', '2026-06-27T00:00:00.000Z');
 
 INSERT INTO profile_entries (github_id, key, value) VALUES
   (1001, 'editor', 'VS Code'),
@@ -81,7 +85,9 @@ INSERT INTO profile_entries (github_id, key, value) VALUES
   -- Forces a render throw for the e2e 500 test; keep it throwing. X'5A6564' is "Zed" as a BLOB:
   -- D1 hands it back as a non-string, and the diff's value.toLowerCase() throws on it. The diff
   -- only compares keys both sides hold, so antfu must keep an editor row too.
-  (7007, 'editor', X'5A6564');
+  (7007, 'editor', X'5A6564'),
+  -- longhandlewithnohyphenstobreakatanywher: a key bardisty lacks, so /longhandlewithnohyphenstobreakatanywher/vs/bardisty counts `1 only longhandlewithnohyphenstobreakatanywher`
+  (8008, 'dotfiles', 'https://github.com/long/dots');
 
 -- A live bearer for bardisty (2002) so the built Worker's whoami can be exercised end to end. The
 -- raw token is `ymmv_e2e_seed_token_2002` (local D1 only, never a real credential); the row holds

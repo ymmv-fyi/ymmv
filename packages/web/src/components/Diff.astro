@@ -3,10 +3,10 @@
 // run — see DESIGN.md → Components & States): the same voice as the profile page. The command
 // that produced the comparison opens the page (also the copy control), the readout keeps real
 // <table> bones restyled to the bare session register, the ratio minimap speaks the CLI's
-// no-color vocabulary (~/=), and extras render dimmed below.
+// no-color vocabulary (~/=/?), and extras render dimmed below.
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
 // a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint. A row
-// only one side filled in is not a different tool: a faint dot, the one value in ink, counted as
+// only one side filled in is not a different tool: a faint dot, its value faint, counted as
 // `N only <handle>` apart from `N differ` (the CLI's `?` row, same counts, same order).
 // Values are user-controlled → compared cells go through lib/diff-cells.ts (shortening, collide
 // guard, bidi stripping, a URL's slash break points) under Astro auto-escaping; extras labels

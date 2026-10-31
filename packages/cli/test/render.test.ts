@@ -708,7 +708,7 @@ describe("renderDiff", () => {
     expect(out).toMatch(/0 differ {3}0 shared {3}1 only antfu {3}1 only you$/);
   });
 
-  it("marks a one-sided row `?` with color off, and with a faint dot and no amber with color on", () => {
+  it("marks a one-sided row `?` with color off, and faint with no amber with color on", () => {
     const d: DiffResult = {
       rows: [
         { key: "editor", label: "Editor", theirs: "Zed", mine: "Helix", status: "changed" },
@@ -730,9 +730,13 @@ describe("renderDiff", () => {
     expect(plain).toMatch(/^\? Font {4}— {9}Lilex$/m);
     const color = renderDiff(d, { ...opts, color: true });
     const prompt = color.split("\n").find((l) => l.includes("Prompt")) ?? "";
-    expect(prompt).toBe(`${ESC}[90m•${ESC}[0m Prompt  Starship  ${ESC}[90m—${ESC}[0m`);
+    expect(prompt).toBe(
+      `${ESC}[90m•${ESC}[0m Prompt  ${ESC}[90mStarship${ESC}[0m  ${ESC}[90m—${ESC}[0m`,
+    );
     const font = color.split("\n").find((l) => l.includes("Font")) ?? "";
-    expect(font).toBe(`${ESC}[90m•${ESC}[0m Font    ${ESC}[90m—${ESC}[0m${" ".repeat(7)}  Lilex`);
+    expect(font).toBe(
+      `${ESC}[90m•${ESC}[0m Font    ${ESC}[90m—${ESC}[0m${" ".repeat(7)}  ${ESC}[90mLilex${ESC}[0m`,
+    );
     expect(prompt + font).not.toContain(AMBER);
   });
 

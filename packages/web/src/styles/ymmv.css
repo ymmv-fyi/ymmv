@@ -474,8 +474,13 @@ a {
 .diff-foot a {
   margin-left: auto;
 }
+/* `N only <handle>` carries a handle, up to 39 characters with no hyphen to break at: wrap it
+   anywhere rather than let body's overflow-x clip it on a phone (as .diff-h does). */
+.diff-foot > span {
+  overflow-wrap: anywhere;
+}
 /* the ratio minimap: one glyph per row, in row order, the CLI's no-color vocabulary — amber ~
-   where the stacks split, faint = where they share. Own full-width row above the counts
+   where the stacks split, faint = where they share, faint ? where only one side says. Own full-width row above the counts
    (order -1 beats the flex flow; flex-basis 100% keeps the swap link's auto-margin working). */
 .diff-foot .diff-map {
   order: -1;
@@ -719,10 +724,15 @@ table.diff th:last-child {
 .diff .same .dot {
   visibility: hidden;
 }
-/* a row only one side filled in: not a different tool, so no amber. The dot stays (it is not a
-   shared row) but faint, and the one value keeps the default ink; the empty side is .missing. */
+/* a row only one side filled in: not a different tool, so no amber, and it recedes like a shared
+   row (in ink it would outshine the amber of a real difference). The dot stays, faint: the row
+   is not a shared one. */
 .diff .one .dot {
   background: var(--faint);
+}
+.diff .one .theirs,
+.diff .one .yours {
+  color: var(--faint);
 }
 /* extras under the diff — informational only: free-form labels don't diff, so they render
    dimmed, uncounted, and never amber. Session dress: the handle column is the diff's label column

@@ -14,8 +14,8 @@ import {
 // Terminal rendering — the CLI half of the design system. Mirrors the web surface (ymmv.css):
 // aligned key→value columns, amber on links + diff-differences ONLY (the load-bearing scarcity
 // rule, same as the web), muted for same. Two hard requirements live here:
-//   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) symbols so
-//     the diff still reads on any terminal.
+//   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) / `?` (one
+//     side only) symbols so the diff still reads on any terminal.
 //   • Output sanitization: every profile value is UNTRUSTED — strip ANSI/control sequences
 //     before printing so a crafted value can't move the cursor, recolor the screen, or inject lines.
 //
@@ -517,7 +517,7 @@ function pairShown(
  * The diff — the soul of ymmv — as a 3-column readout: label | theirs | yours. Differing rows mark
  * BOTH value columns amber with a leading amber dot (a difference is symmetric, neither side is the
  * "wrong" one — mirrors the web diff); same rows are muted. A row only one side filled in is not
- * a different tool, so it spends no amber: a faint dot, the one value in ink, a faint `—`. With
+ * a different tool, so it spends no amber: a faint dot, the label in ink, both cells faint. With
  * color off, a leading `~` (differ) / `=` (same) / `?` (one side only) carries the same
  * information so it reads on any terminal. `?` because the row can't be compared; `+`/`-` would
  * read as the publish preview's new/cleared, two screens apart.
@@ -601,9 +601,10 @@ export function renderDiff(
       const sym = r.one ? "?" : r.differ ? "~" : "=";
       lines.push(`${sym} ${r.label.padEnd(labelW)}  ${ts.padEnd(theirsW)}  ${ms}`);
     } else if (r.one) {
-      // The set side in ink (a link when it's a URL), the empty side's `—` faint.
+      // Both sides faint (the set one a link when it's a URL), the label in ink: the row recedes
+      // like a shared one but its dot and label keep it apart from one.
       const side = (shown: string, raw: string | null): string =>
-        raw === null ? `${c.faint}${shown}${c.reset}` : cell(shown, raw);
+        `${c.faint}${raw === null ? shown : cell(shown, raw)}${c.reset}`;
       lines.push(
         `${c.faint}•${c.reset} ${r.label.padEnd(labelW)}  ${side(ts, r.theirs)}` +
           `${" ".repeat(Math.max(0, theirsW - ts.length))}  ${side(ms, r.mine)}`,

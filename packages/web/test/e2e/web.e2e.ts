@@ -424,6 +424,20 @@ test.describe("privacy page", () => {
     );
     expect(overflow).toBeLessThanOrEqual(1);
   });
+
+  test("a diff's count line wraps a 39-character handle on a small phone", async ({ page }) => {
+    // `N only <handle>` is the one count that carries a handle, and a GitHub handle can be 39
+    // characters with no hyphen to break at
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.goto("/longhandlewithnohyphenstobreakatanywher/vs/bardisty");
+    await expect(page.locator(".diff-foot")).toContainText(
+      "1 only longhandlewithnohyphenstobreakatanywher",
+    );
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+  });
 });
 
 test.describe("routing", () => {
@@ -956,10 +970,8 @@ test.describe("the 3-column diff", () => {
     expect(res?.headers()["cache-control"]).toContain("s-maxage=30");
     // 13-key taxonomy: theme + version-manager differ, prompt shared, and dotfiles is antfu's
     // alone, counted apart (seed.sql arithmetic)
-    await expect(page.locator(".foot")).toContainText("7 differ");
-    await expect(page.locator(".foot")).toContainText("5 shared");
-    await expect(page.locator(".foot")).toContainText("1 only antfu");
-    await expect(page.locator(".foot")).not.toContainText("only bardisty");
+    const counts = page.locator(".diff-foot > span:not(.diff-map)");
+    await expect(counts).toHaveText(["7 differ", "5 shared", "1 only antfu"]);
 
     const changedYours = page.locator("tr.changed .yours").first();
     const changedTheirs = page.locator("tr.changed .theirs").first();
