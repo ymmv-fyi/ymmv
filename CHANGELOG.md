@@ -8,6 +8,11 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 - **The diff's extras line up and say they are not compared.** The block is headed
   `extras (not compared)` and prints dimmed, as on ymmv.fyi, and each label starts in the diff's
   value column whatever the length of the handle in front of it.
+- **Piping a readout into a reader that stops early no longer prints a stack trace.**
+  `ymmv <handle> | head -3`, `q` in `less` and `grep -m1` close the pipe before ymmv finishes
+  writing, and ymmv printed a Node `EPIPE` error and exited 1. It now stops writing to that
+  stream, finishes the command and exits with the command's own status, so `ymmv -y | head -1`
+  still publishes.
 
 ## [0.15.2] - 2026-10-30
 
