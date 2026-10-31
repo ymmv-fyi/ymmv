@@ -12,7 +12,7 @@ Set FontSize 19
 Set TypingSpeed 55ms
 Set Width 960
 # Tall enough that the last frame shows the whole diff, its command included.
-Set Height 640
+Set Height 666
 Set Padding 24
 Set Margin 24
 # The page's ground: amber marks only links and differences (DESIGN.md).
