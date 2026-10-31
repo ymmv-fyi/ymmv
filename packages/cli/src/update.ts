@@ -134,8 +134,8 @@ function realOr(path: string): string {
  *         `…/global/5/.pnpm/…`, so the trailing node_modules comes off. 12 prints
  *         `…/pnpm/global/v11` and installs into `<that>/<hash>/node_modules/…`: used as printed.
  *         11 (and 12 as of 12.16) prints the same, but the package under `<hash>` links into
- *         pnpm's store, so the running copy is never under it. runUpdate follows that link
- *         instead (pnpmGlobalLink).
+ *         pnpm's store, so the running copy is never under it. runUpdate compares the global
+ *         dir the copy runs from instead (pnpmGlobalLink).
  *   bun   prints `$BUN_INSTALL/bin`; packages are in `$BUN_INSTALL/install/global`, so its parent
  */
 function installBase(method: keyof typeof WHERE_COMMANDS, printed: string): string {
@@ -250,16 +250,19 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
   // (Homebrew, nvm's `current`).
   const real = realOr(printed);
   const base = installBase(method, real);
-  // pnpm's store layout: the running copy is in the store, reached through `<hash>` in the
-  // global dir. Following the raw path's own link from the printed dir proves that dir holds
-  // the running copy, and a $PNPM_HOME behind a symlink resolves the same way on both sides.
+  // pnpm's store layout: the running copy is in the store, so it's never under the printed dir.
+  // The global dir the shim ran it from is what identifies the install: it has to be the printed
+  // one, both realpathed so a $PNPM_HOME behind a symlink matches from either side. Following the
+  // link to the store file instead isn't enough, since two homes sharing a store resolve to the
+  // same file.
   const link = method === "pnpm-global" ? pnpmGlobalLink(bin) : null;
+  const ranFrom = link ? realOr(link.reduce((p) => pathLib(p).dirname(p), bin.raw)) : null;
   // bun's bin dir can be moved away from $BUN_INSTALL (BUN_INSTALL_BIN). Its `ymmv` there is a
   // symlink to the copy it owns, so that match also counts. Windows has no symlink to follow: a
   // moved bin dir is refused there.
   const owned =
     isInside(base, bin.real) ||
-    (link !== null && realOr(pathLib(base).join(base, ...link)) === bin.real) ||
+    (ranFrom !== null && isInside(base, ranFrom) && isInside(ranFrom, base)) ||
     (method === "bun-global" && realOr(join(real, "ymmv")) === bin.real);
   if (!owned) {
     // The store path means nothing to the user; the global dir path is what pnpm printed against.

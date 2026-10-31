@@ -197,8 +197,8 @@ const PNPM_LAYOUT_RE = /^v\d+$/;
  * `<store>/v11/links/…`. Both halves are required. A store realpath alone is also what a
  * project install through pnpm's global virtual store looks like, and a raw path in the global
  * dir proves nothing about where the copy really is. Returns the raw path's segments below
- * `global/v<N>` (`<dir>/node_modules/ymmv-cli/…`, case kept), which runUpdate follows from the
- * global dir pnpm prints; null when this isn't that layout.
+ * `global/v<N>` (`<dir>/node_modules/ymmv-cli/…`, case kept), which runUpdate strips off to
+ * find the global dir the copy runs from; null when this isn't that layout.
  */
 export function pnpmGlobalLink(bin: BinPaths): string[] | null {
   const raw = pathSegments(bin.raw);

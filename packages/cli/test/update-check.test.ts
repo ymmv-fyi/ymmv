@@ -847,11 +847,11 @@ describe("runUpdate", () => {
       expect(spawn).toHaveBeenCalledWith("bun add -g ymmv-cli@latest", SPAWN_OPTS);
     });
 
-    /** pnpm 11's layout under `<dir>/<home>`: the package in the store, a hash-named link in the
-     *  global dir pointing at the install dir that links the package. Returns the path the shim
-     *  runs (what Node puts in argv[1]). */
-    const pnpm11Install = (home: string): string => {
-      const pkg = join(dir, home, "store", "v11", "links", "@", "ymmv-cli", "0.15.1", "3bd1");
+    /** pnpm 11's layout under `<dir>/<home>`: the package in the store (`<dir>/<store>/store`),
+     *  a hash-named link in the global dir pointing at the install dir that links the package.
+     *  Returns the path the shim runs (what Node puts in argv[1]). */
+    const pnpm11Install = (home: string, store = home): string => {
+      const pkg = join(dir, store, "store", "v11", "links", "@", "ymmv-cli", "0.15.1", "3bd1");
       const pkgDir = join(pkg, "node_modules", "ymmv-cli");
       mkdirSync(join(pkgDir, "dist"), { recursive: true });
       writeFileSync(join(pkgDir, "dist", "cli.js"), "");
@@ -863,7 +863,7 @@ describe("runUpdate", () => {
     };
     const pnpm11Bin = (raw: string) => ({ raw, real: realpathSync(raw) });
 
-    it("pnpm 11: the global dir pnpm prints links to the running copy, so it spawns", async () => {
+    it("pnpm 11: pnpm prints the global dir the running copy runs from, so it spawns", async () => {
       const raw = pnpm11Install("pnpm");
       const spawn = spawnThat("exit", 0);
       await runUpdate({
@@ -875,7 +875,7 @@ describe("runUpdate", () => {
       expect(errs).toEqual([]);
     });
 
-    it("pnpm 11: a global dir without the running copy's link is refused", async () => {
+    it("pnpm 11: another global dir is refused", async () => {
       const raw = pnpm11Install("pnpm");
       const spawn = vi.fn();
       const other = join(dir, "other", "pnpm", "global", "v11");
@@ -887,19 +887,25 @@ describe("runUpdate", () => {
       expect(process.exitCode).toBe(1);
     });
 
-    it("pnpm 11: another install's store copy of the same version is still refused", async () => {
-      // Same hash name and version in a second PNPM_HOME: the link there resolves to ITS store.
-      const raw = pnpm11Install("pnpm");
-      pnpm11Install(join("second", "pnpm"));
-      const spawn = vi.fn();
-      await runUpdate({
-        spawn,
-        where: where(`${join(dir, "second", "pnpm", "global", "v11")}\n`),
-        binPath: pnpm11Bin(raw),
-      });
-      expect(spawn).not.toHaveBeenCalled();
-      expect(process.exitCode).toBe(1);
-    });
+    it.each([
+      ["its own store", join("second", "pnpm")],
+      // Both homes' links then end at the very same file, so only the global dir tells them apart.
+      ["the same store", "pnpm"],
+    ] as const)(
+      "pnpm 11: another PNPM_HOME with the same version in %s is refused",
+      async (_label, store) => {
+        const raw = pnpm11Install("pnpm");
+        pnpm11Install(join("second", "pnpm"), store);
+        const spawn = vi.fn();
+        await runUpdate({
+          spawn,
+          where: where(`${join(dir, "second", "pnpm", "global", "v11")}\n`),
+          binPath: pnpm11Bin(raw),
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(process.exitCode).toBe(1);
+      },
+    );
 
     it.each([
       ["the running path goes through it", "alias", "data"],
