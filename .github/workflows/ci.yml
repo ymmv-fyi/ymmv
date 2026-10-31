@@ -19,7 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Test the engines floor (>=22) AND the dev version (26).
+        # Test the newest 22.x (the engines major: >=22) AND the dev version (26). Newest, not the
+        # literal floor: Astro needs >=22.23.4 to build the web (see check-latest below).
         node: [22, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,9 +29,12 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         # version read from the root package.json "packageManager" field.
 
+      # check-latest: resolve the newest release of the major from the versions manifest. Without
+      # it setup-node takes the runner's cached build, which can sit below Astro's Node floor.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
+          check-latest: true
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -61,6 +65,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # shared must be built (web imports its dist) before the e2e webServer runs `astro build`.

@@ -134,6 +134,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true # the runner's cached 22.x can sit below Astro's floor
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -175,6 +176,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true # the same newest 22.x the gate job tested with
           cache: pnpm
           registry-url: https://registry.npmjs.org
       # Trusted Publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.x. Pinned to the 11
@@ -235,6 +237,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+          check-latest: true # the runner's cached 22.x can sit below Astro's floor
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ymmv/shared build
