@@ -143,6 +143,47 @@ describe("view — the 3 branches", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("a miss on a word near a verb → the hint on stderr, the not-found line alone on stdout", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    const fetchFn = vi.fn().mockResolvedValue(missing());
+    vi.stubGlobal("fetch", fetchFn);
+    await view("lgoin", "login");
+    expect(logs).toEqual(['\n  no ymmv profile for "lgoin" yet.']);
+    expect(errs).toEqual(["\n  Did you mean: ymmv login?"]);
+    expect(fetchFn).toHaveBeenCalledTimes(1); // the hint costs no request
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("a hit on a word near a verb → the card, no hint", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonRes(prof("lgoin"))));
+    await view("lgoin", "login");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("ymmv.fyi/lgoin");
+    expect(errs).toEqual([]);
+  });
+
+  it("`ymmv view lgoin` → no hint: resolveArg gives the view path none", async () => {
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(missing()));
+    const cmd = resolveArg(["view", "lgoin"]);
+    if (cmd.kind !== "view") throw new Error("expected a view");
+    await view(cmd.handle, cmd.nearVerb);
+    expect(logs).toEqual(['\n  no ymmv profile for "lgoin" yet.']);
+    expect(errs).toEqual([]);
+  });
+
+  it("a miss with the hint and a login with no profile → both, each on its own stream", async () => {
+    vi.mocked(loadToken).mockResolvedValue(stored());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(missing()).mockResolvedValueOnce(missing()),
+    );
+    await view("publsh", "publish");
+    expect(logs).toEqual(['\n  no ymmv profile for "publsh" yet.', "\n  publish yours → run ymmv"]);
+    expect(errs).toEqual(["\n  Did you mean: ymmv publish?"]);
+  });
+
   it("unknown handle, a file login with no profile → the nudge, from a public read", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     const fetchFn = vi.fn().mockResolvedValueOnce(missing()).mockResolvedValueOnce(missing());

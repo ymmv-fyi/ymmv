@@ -972,12 +972,17 @@ export async function publish(io: PublishIO): Promise<void> {
   }
 }
 
-/** `ymmv <handle>` — view a profile: own→diff, logged-in-no-profile→nudge, unknown→friendly. */
-export async function view(handle: string): Promise<void> {
+/** `ymmv <handle>` — view a profile: own→diff, logged-in-no-profile→nudge, unknown→friendly.
+ *  `nearVerb`: the verb a bare `ymmv <word>` was probably meant to be (resolveArg), named only
+ *  under a miss. */
+export async function view(handle: string, nearVerb?: string): Promise<void> {
   const theirs = await fetchProfileJson(handle);
   const c = colorEnabled();
   if (!theirs) {
     console.log(notFound(handle));
+    // A diagnostic about what was typed, so stderr: stdout stays the readout, the same not-found
+    // line it always was, and the exit stays 0 (the word may well be a handle with no profile).
+    if (nearVerb) console.error(message(`Did you mean: ymmv ${nearVerb}?`));
     // The nudge goes where a found profile would show it: to a login with no profile of its own.
     // Only a file login's handle is checked, through the public read: its handle was minted at
     // login, so no token has to prove it. An env credential's handle is unverified until whoami,

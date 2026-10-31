@@ -232,7 +232,7 @@ async function dispatch(cmd: Command): Promise<void> {
       );
       break;
     case "view":
-      await view(cmd.handle);
+      await view(cmd.handle, cmd.nearVerb);
       break;
     case "compare":
       await compare(cmd.theirs, cmd.mine);
