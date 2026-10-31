@@ -420,9 +420,10 @@ function extrasBlock(
  * symbol carries the same information so it reads on any terminal.
  *
  * `page` is the web page this readout mirrors (diffPageUrl). It heads the diff where the card
- * puts its `ymmv.fyi/<handle>` breadcrumb, in the card's form: no `https://` in either color mode,
- * so a piped diff and a piped card name their pages alike. With color on it is faint (an address,
- * not a difference, so never amber) and an OSC-8 link to the full URL.
+ * puts its `ymmv.fyi/<handle>` breadcrumb, and like that breadcrumb (and the web page's title) it
+ * drops `https://` in both color modes, so a piped diff and a piped card name their pages alike.
+ * It is faint throughout, handles included: the heading right under it bolds them already. An
+ * address, not a difference, so never amber; with color on it is an OSC-8 link to the full URL.
  */
 export function renderDiff(
   result: DiffResult,

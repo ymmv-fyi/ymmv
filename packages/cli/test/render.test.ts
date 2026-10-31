@@ -376,22 +376,7 @@ describe("renderDiff", () => {
     // Only our own link's open and close: the smuggled sequence lost its escape bytes.
     expect(out.split(`${ESC}]`)).toHaveLength(3);
   });
-});
 
-describe("diffPageUrl", () => {
-  it("follows the web's route: theirs first, then mine", () => {
-    expect(diffPageUrl("https://ymmv.fyi", "antfu", "bardisty")).toBe(
-      "https://ymmv.fyi/antfu/vs/bardisty",
-    );
-  });
-  it("keeps the stored casing and encodes each segment like the web's swap link", () => {
-    expect(diffPageUrl("https://ymmv.fyi", "OctoCat", "a b/c")).toBe(
-      "https://ymmv.fyi/OctoCat/vs/a%20b%2Fc",
-    );
-  });
-  it("strips control bytes from a handle before encoding it", () => {
-    expect(diffPageUrl("https://ymmv.fyi", `x${ESC}[2Jy`, "me")).toBe("https://ymmv.fyi/xy/vs/me");
-  });
   it("color mode: amber marks BOTH values of the differing row; footer is the thesis line", () => {
     const out = renderDiff(DIFF, {
       color: true,
@@ -567,6 +552,22 @@ describe("diffPageUrl", () => {
     };
     const out = renderDiff(d, { color: false, theirsLabel: "jo", mineLabel: "you", page: PAGE });
     expect(out).toContain("  jo   WM = Hyprland\n  you  Launcher = Raycast");
+  });
+});
+
+describe("diffPageUrl", () => {
+  it("follows the web's route: theirs first, then mine", () => {
+    expect(diffPageUrl("https://ymmv.fyi", "antfu", "bardisty")).toBe(
+      "https://ymmv.fyi/antfu/vs/bardisty",
+    );
+  });
+  it("keeps the stored casing and encodes each segment like the web's swap link", () => {
+    expect(diffPageUrl("https://ymmv.fyi", "OctoCat", "a b/c")).toBe(
+      "https://ymmv.fyi/OctoCat/vs/a%20b%2Fc",
+    );
+  });
+  it("strips control bytes from a handle before encoding it", () => {
+    expect(diffPageUrl("https://ymmv.fyi", `x${ESC}[2Jy`, "me")).toBe("https://ymmv.fyi/xy/vs/me");
   });
 });
 
