@@ -39,7 +39,7 @@ export const help = (
 
 ${c.faint}Usage:${c.reset}
   ymmv                      detect your stack, confirm, and publish your profile
-  ymmv -y                   skip the prompts (required when piped or redirected)
+  ymmv -y                   publish without prompts (for pipes, redirects, CI)
   ymmv --reset-marks        forget dismissed detection marks, then publish
   ymmv <handle>             view a profile; logged in, see the diff vs yours
   ymmv view <handle>        explicit view (same as ymmv <handle>)
