@@ -603,6 +603,17 @@ describe("renderDiff", () => {
           }
         });
 
+        it("with color off at 40 columns, a schemeless value against its URL still marks", () => {
+          const out = renderDiff(pair("https://github.com/x", `github.com/x${ZWSP}`), {
+            ...OPTS,
+            color: false,
+            columns: 40,
+          });
+          const [t, m] = cells(out);
+          expect(t).not.toBe(m);
+          expect(out).not.toContain(ZWSP);
+        });
+
         it("two values alike at the floor print whole when nothing is cut", () => {
           const out = renderDiff(pair(`longvalue${ZWSP}`, "longvalue\u{2060}"), {
             ...OPTS,

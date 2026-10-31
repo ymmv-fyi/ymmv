@@ -39,7 +39,7 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
 ### Fixed
 - **A diff row that differs only by an invisible character shows where.** Two values such as
   `zsh` and `zsh` followed by a zero-width space or a bidi control used to print as the same text
-  on a `~` row. Each invisible character in such a row now prints as `�`, as on ymmv.fyi.
+  on a differing row. Each invisible character in such a row now prints as `�`, as on ymmv.fyi.
 - **The diff's extras line up and say they are not compared.** The block is headed
   `extras (not compared)` and prints dimmed, as on ymmv.fyi, and each label starts in the diff's
   value column whatever the length of the handle in front of it.
