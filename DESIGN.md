@@ -79,8 +79,10 @@ cell is shortened and is an OSC 8 link to the full address. The link takes the r
 because in the diff amber means "differs". That includes extras, whose links stay faint (the web's
 extras link is amber, but the web underlines it). Both surfaces keep one rule for a differing row:
 its two cells never look the same because of a shortening or a cut. When they would, the CLI drops
-the shortening, or shows both cells from just before the first character that differs. The web
-also marks invisible characters. The CLI does not.
+the shortening, or shows both cells from just before the first character that differs. When two
+cells would still look the same, both surfaces show each invisible character (a zero-width space,
+a bidi control) as `�` in that row, marked before any cut so the cut keeps it in view. Same rows
+and the card never mark.
 
 The CLI's publish preview compares the card against the live profile and marks each differing
 row in the gutter: `~` changed, `+` new, `-` cleared. That is the no-color vocabulary plus two

@@ -87,6 +87,26 @@ export function sanitizeValue(value: string): string {
   return value.replace(ANSI_RE, "").replace(CTRL_RE, "").replace(BIDI_RE, "");
 }
 
+// The code points a terminal shows as nothing: \p{Default_Ignorable_Code_Point} (zero-width
+// space, soft hyphen, word joiner, BOM, and every bidi control) less the join controls, variation
+// selectors and tag characters, which shape glyphs (an emoji sequence vs its parts, emoji vs text
+// presentation), so a difference in them already shows. The web's diff-cells.ts INVISIBLE,
+// duplicated on purpose like BIDI_RE.
+const INVISIBLE_RE =
+  /(?![\p{Join_Control}\p{Variation_Selector}\u{e0020}-\u{e007f}])\p{Default_Ignorable_Code_Point}/gu;
+const FFFD = String.fromCodePoint(0xfffd);
+
+/** sanitizeValue, but each invisible code point (INVISIBLE_RE) becomes U+FFFD instead of
+ *  printing as nothing. Marked before the bidi strip, so a bidi control turns into U+FFFD and
+ *  still never reaches the terminal; the strip after is a backstop. */
+function markInvisible(value: string): string {
+  return value
+    .replace(ANSI_RE, "")
+    .replace(CTRL_RE, "")
+    .replace(INVISIBLE_RE, FFFD)
+    .replace(BIDI_RE, "");
+}
+
 /** The form a prompt's `[default]` and the card row show for a value. Every "does this name the
  *  same thing the user saw" comparison uses it: promptEntries' typed-back dotfiles check and its
  *  repair of a stored form that fails a write rule, detectionDisagreements, and the dismissal
@@ -505,7 +525,11 @@ function valueWidths(
  * then drops the shortening. A cut can too (two long URLs that differ past it): checked at the
  * narrower column, the row then shows both cells from the same point a little before the first
  * character that differs, `…/editor/v1` against `…/editor/v2`, so the difference is in view.
- * What a terminal shows alike past that (invisible characters) is not caught, as before.
+ * Two values that differ only by invisible characters come in already marked (lookAlike), so
+ * the first character that differs is a U+FFFD and a cut keeps it in view too; two that still
+ * match (the floor lookAlike names) print whole-cut, since no window can tell them apart. An
+ * unmarked invisible in a row that differs visibly past the cut still counts as the difference
+ * here, so the window can stop at it and miss the visible one, as before.
  */
 function pairShown(
   theirs: string | null,
@@ -521,7 +545,7 @@ function pairShown(
   let [t, m] = [short(theirs, tw), short(mine, mw)];
   if (both && t === m) [t, m] = [theirs, mine];
   const w = Math.min(tw, mw);
-  if (!both || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
+  if (!both || t === m || cut(t, w) !== cut(m, w)) return [cut(t, tw), cut(m, mw)];
   const [tc, mc] = [[...t], [...m]];
   let i = 0;
   while (i < tc.length && tc[i] === mc[i]) i++;
@@ -531,6 +555,21 @@ function pairShown(
     Math.min(i - Math.floor(w / 2), Math.max(tc.length, mc.length) - w + 1),
   );
   return [windowAt(tc, start, w), windowAt(mc, start, w)];
+}
+
+/** Would a differing row's two (sanitized) cells still look the same once pairShown has dropped
+ *  any shortening that made them match? Asked of the uncut forms, so every width marks alike.
+ *  With color off a URL shortens only where it is cut, so either form may show and both are
+ *  asked. Then renderDiff marks the row's invisibles (the web's pairCells rule): `zsh` against
+ *  `zsh` plus a bidi control or a zero-width space shows as `zsh` against `zsh�`. Two values that
+ *  differ only by WHICH invisible they carry still look alike; that is the floor of a glyph. */
+function lookAlike(theirs: string, mine: string, color: boolean): boolean {
+  const alike = (short: (v: string) => string): boolean => {
+    const [t, m] = short(theirs) === short(mine) ? [theirs, mine] : [short(theirs), short(mine)];
+    return t.replace(INVISIBLE_RE, "") === m.replace(INVISIBLE_RE, "");
+  };
+  const shortUrl = (v: string): string => (isHttpUrl(v) ? displayUrl(v) : v);
+  return alike(shortUrl) || (!color && alike((v) => v));
 }
 
 /**
@@ -573,18 +612,32 @@ export function renderDiff(
   const theirsLabel = sanitizeValue(opts.theirsLabel);
   const mineLabel = sanitizeValue(opts.mineLabel);
 
-  const rows = result.rows.map((r) => ({
-    label: r.label,
-    theirs: r.theirs === null ? null : sanitizeValue(r.theirs),
-    mine: r.mine === null ? null : sanitizeValue(r.mine),
-    differ: r.status !== "same",
-    one: r.status === "only_theirs" || r.status === "only_mine",
-  }));
+  const rows = result.rows.map((r) => {
+    const theirs = r.theirs === null ? null : sanitizeValue(r.theirs);
+    const mine = r.mine === null ? null : sanitizeValue(r.mine);
+    const differ = r.status !== "same";
+    // `theirs`/`mine` stay unmarked: they are what a cell links to. `shown` is what pairShown
+    // shortens and cuts, marked when the two would otherwise look alike. Same rows never are.
+    const pair =
+      differ && r.theirs !== null && r.mine !== null ? ([r.theirs, r.mine] as const) : null;
+    const shown: [string | null, string | null] =
+      pair && lookAlike(sanitizeValue(pair[0]), sanitizeValue(pair[1]), opts.color)
+        ? [markInvisible(pair[0]), markInvisible(pair[1])]
+        : [theirs, mine];
+    return {
+      label: r.label,
+      theirs,
+      mine,
+      shown,
+      differ,
+      one: r.status === "only_theirs" || r.status === "only_mine",
+    };
+  });
   const labelW = Math.max(3, ...rows.map((r) => r.label.length));
   // Natural widths, of the form each cell shows uncut: column heads (the handles as stored, faint,
   // like the web diff's: DESIGN.md, Diff session) and values, shortened where pairShown would.
   const natural = rows.map((r) =>
-    pairShown(r.theirs, r.mine, r.differ, [Infinity, Infinity], opts.color),
+    pairShown(...r.shown, r.differ, [Infinity, Infinity], opts.color),
   );
   const widths = valueWidths(
     labelW,
@@ -616,7 +669,7 @@ export function renderDiff(
     `  ${c.faint}${"".padEnd(labelW)}  ${cut(theirsLabel, theirsW).padEnd(theirsW)}  ${cut(mineLabel, mineW)}${c.reset}`,
   );
   for (const r of rows) {
-    const [ts, ms] = pairShown(r.theirs, r.mine, r.differ, widths, opts.color);
+    const [ts, ms] = pairShown(...r.shown, r.differ, widths, opts.color);
     if (!opts.color) {
       const sym = r.one ? "?" : r.differ ? "~" : "=";
       lines.push(`${sym} ${r.label.padEnd(labelW)}  ${ts.padEnd(theirsW)}  ${ms}`);
