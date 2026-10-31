@@ -514,11 +514,6 @@ function clusterWidth(g: string): number {
   return ZERO_RE.test(g) ? 0 : WIDE_RE.test(g) ? 2 : 1;
 }
 
-/** Two parts of a line as one indented line, or as two when `apart`. */
-function wrapTwo(a: string, b: string, apart: boolean): string[] {
-  return apart ? [`  ${a}`, `  ${b}`] : [`  ${a} ${b}`];
-}
-
 /** `s` padded with spaces to `w` columns as `measure` counts them. */
 function padTo(s: string, w: number, measure: (s: string) => number): string {
   return s + " ".repeat(Math.max(0, w - measure(s)));
@@ -742,17 +737,15 @@ export function renderDiff(
   // Cut only as a link, which keeps the whole address; plain text prints whole and may wrap.
   const linked = opts.color && !(term !== undefined && NO_OSC8_TERMS.has(term));
   const pageText = `${c.faint}${linked ? cut(displayUrl(page), room) : displayUrl(page)}${c.reset}`;
+  const how = `${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset}`;
+  const from = `${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`;
   const lines: string[] = [
     "",
     `  ${opts.color ? hyperlink(page, pageText, term) : pageText}`,
     // The web diff's h1, collapsed to one line — information (which side is which), not decoration,
     // so it prints in both color modes. Too wide for the terminal (two long handles), it breaks
     // before `differs from` rather than mid-handle; the handles themselves are never cut.
-    ...wrapTwo(
-      `${c.faint}how${c.reset} ${c.bold}${theirsLabel}${c.reset}`,
-      `${c.faint}differs from${c.reset} ${c.bold}${mineLabel}${c.reset}`,
-      width(`how ${theirsLabel} differs from ${mineLabel}`) > room,
-    ),
+    `  ${how}${width(`how ${theirsLabel} differs from ${mineLabel}`) > room ? "\n  " : " "}${from}`,
     "",
   ];
   lines.push(
