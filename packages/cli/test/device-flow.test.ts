@@ -527,6 +527,33 @@ describe("login() orchestration", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  // Where a CI job with nothing stored stops: the refusal names the way out there, by variable name.
+  it("the non-TTY refusal names YMMV_TOKEN and the README's CI section", async () => {
+    vi.stubEnv("YMMV_TOKEN", "");
+    await withTTY(undefined, async () => {
+      await expect(login({ fetch: vi.fn() as unknown as typeof fetch })).rejects.toThrow(
+        "GitHub sign-in needs an interactive terminal. Run `ymmv login` in one.\n" +
+          "In CI or a script, set YMMV_TOKEN to the token from a local login instead:\n" +
+          "https://github.com/ymmv-fyi/ymmv/blob/main/packages/cli/README.md#publishing-from-ci",
+      );
+    });
+    vi.unstubAllEnvs();
+  });
+
+  // With YMMV_TOKEN set only `ymmv login` reaches the device flow (every other command signs in
+  // with the variable), and telling it to set what is set would be wrong: the first line alone.
+  it("with YMMV_TOKEN set, the refusal leaves out the CI line and never echoes the token", async () => {
+    vi.stubEnv("YMMV_TOKEN", "tok-should-not-print");
+    await withTTY(undefined, async () => {
+      const err = await login({ fetch: vi.fn() as unknown as typeof fetch }).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe(
+        "GitHub sign-in needs an interactive terminal. Run `ymmv login` in one.",
+      );
+    });
+    vi.unstubAllEnvs();
+  });
+
   // `ymmv -y > log.txt`: the code must reach the terminal, not the file. The two flow lines go to
   // stderr only when stdout is redirected and stderr is still a terminal; the result stays on stdout.
   describe("which stream the code prints on", () => {

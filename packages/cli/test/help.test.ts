@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { CURATED_KEYS } from "@ymmv/shared";
 import { describe, expect, it } from "vitest";
 import { DETECTED_KEYS } from "../src/detect.js";
+import { noTerminalRefusal, README_URL } from "../src/device-flow.js";
+import { help } from "../src/index.js";
+import { NO_CODES } from "../src/render.js";
 
 // The help text hand-maintains the curated-key list as prose. Grepping the SOURCE (rather than
 // rendering help()) pins the key names as literals in index.ts — an interpolation that "helpfully"
@@ -17,11 +20,36 @@ describe("HELP text stays in sync with CURATED_KEYS", () => {
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 
   it("lists exactly the curated keys in the Curated keys: block", () => {
-    const block = source.match(/Curated keys:\$\{c\.reset\}([^`]*)`/)?.[1];
+    // The block ends at the blank line before Environment:.
+    const block = source.match(/Curated keys:\$\{c\.reset\}([^`]*?)\n\n/)?.[1];
     expect(block, "the Curated keys: block must exist in the help template").toBeTruthy();
     const listed = (block as string).split(/[,\s]+/).filter(Boolean);
     expect([...listed].sort()).toEqual([...CURATED_KEYS].sort());
     expect(listed).toHaveLength(new Set(listed).size); // no duplicates in the prose either
+  });
+});
+
+// The Environment block names the variables the CLI README's "Environment variables" section
+// documents, one line each, so a variable added to one and not the other fails here. Read from
+// the rendered help (the names are plain text there) and from the README's top-level bullets.
+describe("help's Environment block matches the CLI README", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+  it("names the same variables as the README's Environment variables section", () => {
+    const section = readme.match(/\n## Environment variables\n([\s\S]*?)\n## /)?.[1];
+    expect(section, "the README's Environment variables section must exist").toBeTruthy();
+    const documented = [...(section as string).matchAll(/^- `([A-Z_]+)`/gm)].map((m) => m[1]);
+    const block = help(NO_CODES).match(/\nEnvironment:\n([\s\S]*?)\n\n/)?.[1];
+    expect(block, "the help's Environment: block must exist").toBeTruthy();
+    const listed = (block as string).split("\n").map((line) => line.trim().split(/\s+/)[0]);
+    expect([...listed].sort()).toEqual([...documented].sort());
+  });
+
+  // The sign-in refusal links to this heading: GitHub's anchor is the heading, lowercased.
+  it("has the Publishing from CI heading the sign-in refusal links to", () => {
+    expect(readme).toContain("\n## Publishing from CI\n");
+    expect(noTerminalRefusal()).toContain(`${README_URL}#publishing-from-ci`);
+    expect(help(NO_CODES)).toContain(`Docs: ${README_URL}`);
   });
 });
 

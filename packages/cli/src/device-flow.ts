@@ -267,6 +267,26 @@ export function retirable(
   return cred != null && isSameServer(cred.base) && cred.token.trim() !== "";
 }
 
+/** The CLI's README on GitHub, which the help and the sign-in refusal point to. GitHub over the npm
+ *  page: a heading's #anchor there is the stable one, and the README's own links go to GitHub. */
+export const README_URL = "https://github.com/ymmv-fyi/ymmv/blob/main/packages/cli/README.md";
+
+/** login()'s refusal without a terminal. Every command that needs a sign-in reaches it this way, so
+ *  it is where a CI job with nothing stored stops (`ymmv -y`, `ymmv set`), and it names the way out
+ *  there: YMMV_TOKEN, with the README section that says where the token file is. `ymmv login` in a
+ *  pipe gets the same text, where the first line is its answer. With YMMV_TOKEN set, only
+ *  `ymmv login` gets here (every other command signs in with it and never starts the device flow),
+ *  and runLogin has already said the variable takes precedence: the CI line would tell the user
+ *  to set what is set, so it is left out. Only the variable's name is ever printed. */
+export function noTerminalRefusal(): string {
+  const lead = "GitHub sign-in needs an interactive terminal. Run `ymmv login` in one.";
+  if (process.env.YMMV_TOKEN) return lead;
+  return (
+    `${lead}\nIn CI or a script, set YMMV_TOKEN to the token from a local login instead:\n` +
+    `${README_URL}#publishing-from-ci`
+  );
+}
+
 /** What login says for an account bound to no handle, and what `ymmv login` says of a stored
  *  one. */
 export const NO_HANDLE_BOUND =
@@ -316,12 +336,7 @@ export async function login(deps: LoginDeps = {}): Promise<void> {
   // The device flow needs a human to read a code and visit a URL, so it cannot complete without a
   // terminal. Refuse fast in a piped/CI/non-TTY context instead of printing a code nobody reads and
   // blocking on the ~15-minute GitHub poll. (publish/set/delete reach here via ensureLogin.)
-  if (!process.stdin.isTTY) {
-    throw new Error(
-      "Device login needs an interactive terminal. Run `ymmv login` in a real terminal " +
-        "(a piped or CI shell can't complete the GitHub device flow).",
-    );
-  }
+  if (!process.stdin.isTTY) throw new Error(noTerminalRefusal());
   const prior = await peekCredential();
   // By the stream the code prints on (see signInColor). The stderr warnings below share it, which
   // matches their stream only when the code goes to stderr: with stdout a terminal it is stdout's
