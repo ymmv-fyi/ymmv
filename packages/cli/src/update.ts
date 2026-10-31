@@ -4,11 +4,13 @@ import { homedir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { colorEnabled, message, palette, sanitizeValue } from "./render.js";
 import {
-  binRealpath,
+  type BinPaths,
+  binPaths,
   detectInstallMethod,
   isNewer,
   npxInvocation,
   ownVersion,
+  pnpmGlobalLink,
   readCachedLatest,
 } from "./update-check.js";
 
@@ -131,8 +133,9 @@ function realOr(path: string): string {
  *   pnpm  9 and 10 print `…/pnpm/global/5/node_modules`, but the real package sits beside it in
  *         `…/global/5/.pnpm/…`, so the trailing node_modules comes off. 12 prints
  *         `…/pnpm/global/v11` and installs into `<that>/<hash>/node_modules/…`: used as printed.
- *         (11 prints the same but keeps the package in its store, which detectInstallMethod
- *         answers `unknown` for, so an 11 install never gets here.)
+ *         11 (and 12 as of 12.16) prints the same, but the package under `<hash>` links into
+ *         pnpm's store, so the running copy is never under it. runUpdate follows that link
+ *         instead (pnpmGlobalLink).
  *   bun   prints `$BUN_INSTALL/bin`; packages are in `$BUN_INSTALL/install/global`, so its parent
  */
 function installBase(method: keyof typeof WHERE_COMMANDS, printed: string): string {
@@ -175,8 +178,9 @@ export interface UpdateRunDeps {
   spawn?: SpawnFn;
   /** Asks the package manager where its global installs live. */
   where?: WhereFn;
-  /** The bin script's (real)path — NOT Node's process.execPath (the node binary). */
-  binPath?: string;
+  /** The bin script's path — NOT Node's process.execPath (the node binary). A string stands for
+   *  both the path Node was given and its realpath; see binPaths. */
+  binPath?: string | BinPaths;
   now?: () => number;
   cachePath?: string;
   /** Pass null to mean "could not be determined". `undefined` = read it. */
@@ -188,10 +192,10 @@ function manualFallback(intro: string): string {
 }
 
 export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
-  // Same realpath resolution as the startup notice — npm global bins are symlinks, and the two
-  // surfaces must agree or the notice says "run ymmv update" while update itself shrugs.
-  const binPath = deps.binPath ?? binRealpath();
-  const method = detectInstallMethod(binPath);
+  // Same resolution as the startup notice — npm global bins are symlinks, and the two surfaces
+  // must agree or the notice says "run ymmv update" while update itself shrugs.
+  const bin = binPaths(deps.binPath);
+  const method = detectInstallMethod(bin);
   const c = palette(colorEnabled());
 
   if (method === "ephemeral") {
@@ -212,7 +216,7 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
     return;
   }
 
-  if (method === "unknown" || !binPath) {
+  if (method === "unknown" || !bin) {
     console.log(message(manualFallback("Couldn't tell how ymmv-cli was installed.")));
     return;
   }
@@ -242,22 +246,30 @@ export async function runUpdate(deps: UpdateRunDeps = {}): Promise<void> {
     fail(manualFallback(`Couldn't check where \`${cmd}\` would install.`));
     return;
   }
-  // Both sides are realpaths: binPath already is, and a prefix can be a symlink itself
+  // Both sides are realpaths: bin.real already is, and a prefix can be a symlink itself
   // (Homebrew, nvm's `current`).
   const real = realOr(printed);
   const base = installBase(method, real);
+  // pnpm's store layout: the running copy is in the store, reached through `<hash>` in the
+  // global dir. Following the raw path's own link from the printed dir proves that dir holds
+  // the running copy, and a $PNPM_HOME behind a symlink resolves the same way on both sides.
+  const link = method === "pnpm-global" ? pnpmGlobalLink(bin) : null;
   // bun's bin dir can be moved away from $BUN_INSTALL (BUN_INSTALL_BIN). Its `ymmv` there is a
   // symlink to the copy it owns, so that match also counts. Windows has no symlink to follow: a
   // moved bin dir is refused there.
   const owned =
-    isInside(base, binPath) || (method === "bun-global" && realOr(join(real, "ymmv")) === binPath);
+    isInside(base, bin.real) ||
+    (link !== null && realOr(pathLib(base).join(base, ...link)) === bin.real) ||
+    (method === "bun-global" && realOr(join(real, "ymmv")) === bin.real);
   if (!owned) {
-    const pkgDir = pathLib(binPath).dirname(pathLib(binPath).dirname(binPath)); // …/dist/cli.js
+    // The store path means nothing to the user; the global dir path is what pnpm printed against.
+    const shown = link ? bin.raw : bin.real;
+    const pkgDir = pathLib(shown).dirname(pathLib(shown).dirname(shown)); // …/dist/cli.js
     const pm = cmd.slice(0, cmd.indexOf(" "));
     // Paths are printed, and a directory name can hold anything.
     fail(
       `This ymmv runs from ${sanitizeValue(pkgDir)}, but \`${cmd}\` installs under ${sanitizeValue(base)}.\n` +
-        (/^\/mnt\/[a-z]\//i.test(binPath)
+        (/^\/mnt\/[a-z]\//i.test(bin.real)
           ? "This copy is a Windows install, so run `ymmv update` from Windows."
           : `Run the update with the ${pm} that installed this copy.`),
     );

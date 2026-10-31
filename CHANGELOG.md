@@ -2,6 +2,14 @@
 
 Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newest first.
 
+## [Unreleased]
+
+### Fixed
+- **`ymmv update` recognizes a pnpm 11 global install.** pnpm 11 and pnpm 12.16 keep a global
+  package in pnpm's store, and `ymmv update` printed the commands to run by hand instead of running
+  `pnpm add -g ymmv-cli@latest`. It now runs the update, after the same check that the pnpm on your
+  `PATH` is the one that installed the copy you're running.
+
 ## [0.15.1] - 2026-10-01
 
 ### Fixed
