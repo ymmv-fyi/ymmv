@@ -14,8 +14,8 @@ import {
 // Terminal rendering — the CLI half of the design system. Mirrors the web surface (ymmv.css):
 // aligned key→value columns, amber on links + diff-differences ONLY (the load-bearing scarcity
 // rule, same as the web), muted for same. Two hard requirements live here:
-//   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) symbols so
-//     the diff still reads on any terminal.
+//   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) / `?` (one
+//     side only) symbols so the diff still reads on any terminal.
 //   • Output sanitization: every profile value is UNTRUSTED — strip ANSI/control sequences
 //     before printing so a crafted value can't move the cursor, recolor the screen, or inject lines.
 //
@@ -516,8 +516,14 @@ function pairShown(
 /**
  * The diff — the soul of ymmv — as a 3-column readout: label | theirs | yours. Differing rows mark
  * BOTH value columns amber with a leading amber dot (a difference is symmetric, neither side is the
- * "wrong" one — mirrors the web diff); same rows are muted. With color off, a leading `~`/`=`
- * symbol carries the same information so it reads on any terminal.
+ * "wrong" one — mirrors the web diff); same rows are muted. A row only one side filled in is not
+ * a different tool, so it spends no amber: a faint dot, the label in ink, both cells faint. With
+ * color off, a leading `~` (differ) / `=` (same) / `?` (one side only) carries the same
+ * information so it reads on any terminal. `?` because the row can't be compared; `+`/`-` would
+ * read as the publish preview's new/cleared, two screens apart.
+ *
+ * The count line splits the same way, `N differ   N shared   N only <theirs>   N only <mine>`, an
+ * `only` segment left out at 0 (the web's foot, same order and words).
  *
  * `page` is the web page this readout mirrors (diffPageUrl). It heads the diff where the card
  * puts its `ymmv.fyi/<handle>` breadcrumb, and like that breadcrumb (and the web page's title) it
@@ -552,6 +558,7 @@ export function renderDiff(
     theirs: r.theirs === null ? null : sanitizeValue(r.theirs),
     mine: r.mine === null ? null : sanitizeValue(r.mine),
     differ: r.status !== "same",
+    one: r.status === "only_theirs" || r.status === "only_mine",
   }));
   const labelW = Math.max(3, ...rows.map((r) => r.label.length));
   // Natural widths, of the form each cell shows uncut: column heads (the handles as stored, faint,
@@ -591,8 +598,17 @@ export function renderDiff(
   for (const r of rows) {
     const [ts, ms] = pairShown(r.theirs, r.mine, r.differ, widths, opts.color);
     if (!opts.color) {
-      const sym = r.differ ? "~" : "=";
+      const sym = r.one ? "?" : r.differ ? "~" : "=";
       lines.push(`${sym} ${r.label.padEnd(labelW)}  ${ts.padEnd(theirsW)}  ${ms}`);
+    } else if (r.one) {
+      // Both sides faint (the set one a link when it's a URL), the label in ink: the row recedes
+      // like a shared one but its dot and label keep it apart from one.
+      const side = (shown: string, raw: string | null): string =>
+        `${c.faint}${raw === null ? shown : cell(shown, raw)}${c.reset}`;
+      lines.push(
+        `${c.faint}•${c.reset} ${r.label.padEnd(labelW)}  ${side(ts, r.theirs)}` +
+          `${" ".repeat(Math.max(0, theirsW - ts.length))}  ${side(ms, r.mine)}`,
+      );
     } else if (r.differ) {
       lines.push(
         `${c.amber}•${c.reset} ${r.label.padEnd(labelW)}  ` +
@@ -607,7 +623,10 @@ export function renderDiff(
   }
 
   lines.push(...extrasBlock(result.extras, theirsLabel, mineLabel, labelW, c, opts.color, term));
-  lines.push("", `  ${c.faint}${result.differ} differ   ${result.shared} shared${c.reset}`);
+  const counts = [`${result.differ} differ`, `${result.shared} shared`];
+  if (result.onlyTheirs) counts.push(`${result.onlyTheirs} only ${theirsLabel}`);
+  if (result.onlyMine) counts.push(`${result.onlyMine} only ${mineLabel}`);
+  lines.push("", `  ${c.faint}${counts.join("   ")}${c.reset}`);
   return lines.join("\n");
 }
 

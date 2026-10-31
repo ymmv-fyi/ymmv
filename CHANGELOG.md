@@ -28,6 +28,11 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   and the other commands that need a login stop because GitHub's sign-in needs one. The message
   now adds that CI and scripts set `YMMV_TOKEN` to the token from a local login, and links to the
   README's "Publishing from CI" section, which says where that token is.
+- **The diff counts a field only one side filled in on its own.** The count reads
+  `5 differ   1 shared   6 only bardisty`, where `differ` now counts only fields both sides
+  filled in with different values, and an `only` count is left out when it is 0. Such a row is
+  faint, with a faint dot, where it used to be amber like a difference, and is marked `?` instead
+  of `~` with color off. ymmv.fyi's diff page shows the same counts and marks.
 
 ### Fixed
 - **The diff's extras line up and say they are not compared.** The block is headed

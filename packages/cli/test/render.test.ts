@@ -286,6 +286,8 @@ const DIFF: DiffResult = {
   extras: { mine: [], theirs: [] },
   differ: 1,
   shared: 1,
+  onlyTheirs: 0,
+  onlyMine: 0,
 };
 
 const PAGE = "https://ymmv.fyi/antfu/vs/me";
@@ -305,6 +307,8 @@ describe("renderDiff", () => {
       extras: { mine: [], theirs: [] },
       differ: 1,
       shared: 0,
+      onlyTheirs: 0,
+      onlyMine: 0,
     };
     const out = renderDiff(d, {
       color: true,
@@ -334,8 +338,10 @@ describe("renderDiff", () => {
         { key: "dotfiles", label: "Dotfiles", theirs: LONG, mine: null, status: "only_theirs" },
       ],
       extras: { mine: [], theirs: [] },
-      differ: 3,
+      differ: 2,
       shared: 1,
+      onlyTheirs: 1,
+      onlyMine: 0,
     };
     const OPTS = { theirsLabel: "antfu", mineLabel: "bardisty", page: PAGE, term: "xterm" };
     // What the terminal shows: the line with its SGR codes and OSC-8 wrappers taken out.
@@ -345,7 +351,7 @@ describe("renderDiff", () => {
         .replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
     it("without columns (piped) prints every value whole, as before the cap", () => {
       const out = renderDiff(LONGDIFF, { ...OPTS, color: false });
-      expect(out).toContain(`~ Dotfiles         ${LONG}  —`);
+      expect(out).toContain(`? Dotfiles         ${LONG}  —`);
       expect(out).toContain(`~ Editor           ${"VS Code".padEnd(LONG.length)}  Zed`);
       expect(out).not.toContain("…");
     });
@@ -355,7 +361,7 @@ describe("renderDiff", () => {
       for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(80);
       // Color off keeps a URL whole when it fits (a terminal can detect it); one being cut
       // loses that anyway, so it drops `https://` first, as with color on.
-      expect(out).toMatch(/^~ Dotfiles {9}github\.com\/antfu\/dotfiles-but-wi\S*… {2}—$/m);
+      expect(out).toMatch(/^\? Dotfiles {9}github\.com\/antfu\/dotfiles-but-wi\S*… {2}—$/m);
       expect(out).toMatch(/^~ Editor {11}VS Code {2,}Zed$/m);
       expect(out).toMatch(/^= OS {15}macOS 15\.2 {2,}macOS 15\.2$/m);
     });
@@ -385,7 +391,7 @@ describe("renderDiff", () => {
       };
       const out = renderDiff(d, { ...OPTS, color: false, columns: 60 });
       for (const l of out.split("\n")) expect(l.length).toBeLessThanOrEqual(60);
-      expect(out).toMatch(/^~ Dotfiles {2}— {6}github\.com\S*…$/m);
+      expect(out).toMatch(/^\? Dotfiles {2}— {6}github\.com\S*…$/m);
     });
 
     it("cuts a column head that is longer than its column", () => {
@@ -395,7 +401,10 @@ describe("renderDiff", () => {
         color: false,
         columns: 50,
       });
-      for (const l of out.split("\n").slice(3)) expect(l.length).toBeLessThanOrEqual(50);
+      // The table rows fit; the page and count lines name handles whole and may wrap.
+      for (const l of out.split("\n").filter((l) => /^[~=?] /.test(l))) {
+        expect(l.length).toBeLessThanOrEqual(50);
+      }
       expect(out).toContain("a-very-long-github…");
       // The heading names the handle in full: only the column head is cut.
       expect(out).toContain("how a-very-long-github-handle-indeed differs from bardisty");
@@ -436,6 +445,8 @@ describe("renderDiff", () => {
         extras: { mine: [], theirs: [] },
         differ: 1,
         shared: 0,
+        onlyTheirs: 0,
+        onlyMine: 0,
       });
       const BASE_URL = `https://github.com/someone/${"x".repeat(80)}`;
       const cells = (out: string): string[] =>
@@ -500,6 +511,8 @@ describe("renderDiff", () => {
           extras: { mine: [], theirs: [] },
           differ: 1,
           shared: 2,
+          onlyTheirs: 0,
+          onlyMine: 0,
         };
         for (const columns of [80, 81]) {
           const out = renderDiff(d, { ...OPTS, color: false, columns });
@@ -520,6 +533,8 @@ describe("renderDiff", () => {
           extras: { mine: [], theirs: [] },
           differ: 0,
           shared: 1,
+          onlyTheirs: 0,
+          onlyMine: 0,
         };
         const out = renderDiff(d, { ...OPTS, color: false, columns: 60 });
         const [t, m] = cells(out.replace(/^= /m, "~ "));
@@ -662,6 +677,8 @@ describe("renderDiff", () => {
       extras: { mine: [], theirs: [] },
       differ: 1,
       shared: 0,
+      onlyTheirs: 0,
+      onlyMine: 0,
     };
     const out = renderDiff(evil, { color: false, theirsLabel: "x", mineLabel: "you", page: PAGE });
     expect(out).not.toContain(ESC);
@@ -678,15 +695,70 @@ describe("renderDiff", () => {
         mine: [{ label: "WM", value: "Hyprland" }],
         theirs: [{ label: "Launcher", value: "Raycast" }],
       },
-      differ: 2,
+      differ: 0,
       shared: 0,
+      onlyTheirs: 1,
+      onlyMine: 1,
     };
     const out = renderDiff(d, { color: false, theirsLabel: "antfu", mineLabel: "you", page: PAGE });
     expect(out).toContain("—"); // the absent-side placeholder
     expect(out).toMatch(/extras/);
     expect(out).toContain("Hyprland");
     expect(out).toContain("Raycast");
-    expect(out).toMatch(/2 differ {3}0 shared/);
+    expect(out).toMatch(/0 differ {3}0 shared {3}1 only antfu {3}1 only you$/);
+  });
+
+  it("marks a one-sided row `?` with color off, and faint with no amber with color on", () => {
+    const d: DiffResult = {
+      rows: [
+        { key: "editor", label: "Editor", theirs: "Zed", mine: "Helix", status: "changed" },
+        { key: "prompt", label: "Prompt", theirs: "Starship", mine: null, status: "only_theirs" },
+        { key: "shell", label: "Shell", theirs: "fish", mine: "fish", status: "same" },
+        { key: "font", label: "Font", theirs: null, mine: "Lilex", status: "only_mine" },
+      ],
+      extras: { mine: [], theirs: [] },
+      differ: 1,
+      shared: 1,
+      onlyTheirs: 1,
+      onlyMine: 1,
+    };
+    const opts = { theirsLabel: "bardisty", mineLabel: "you", page: PAGE, term: "xterm" };
+    const plain = renderDiff(d, { ...opts, color: false });
+    expect(plain).toMatch(/^~ Editor {2}Zed {7}Helix$/m);
+    expect(plain).toMatch(/^\? Prompt {2}Starship {2}—$/m);
+    expect(plain).toMatch(/^= Shell {3}fish {6}fish$/m);
+    expect(plain).toMatch(/^\? Font {4}— {9}Lilex$/m);
+    const color = renderDiff(d, { ...opts, color: true });
+    const prompt = color.split("\n").find((l) => l.includes("Prompt")) ?? "";
+    expect(prompt).toBe(
+      `${ESC}[90m•${ESC}[0m Prompt  ${ESC}[90mStarship${ESC}[0m  ${ESC}[90m—${ESC}[0m`,
+    );
+    const font = color.split("\n").find((l) => l.includes("Font")) ?? "";
+    expect(font).toBe(
+      `${ESC}[90m•${ESC}[0m Font    ${ESC}[90m—${ESC}[0m${" ".repeat(7)}  ${ESC}[90mLilex${ESC}[0m`,
+    );
+    expect(prompt + font).not.toContain(AMBER);
+  });
+
+  it("splits the count per side, leaving out a side with none, in the web's order", () => {
+    const base: DiffResult = {
+      rows: [],
+      extras: { mine: [], theirs: [] },
+      differ: 5,
+      shared: 1,
+      onlyTheirs: 6,
+      onlyMine: 0,
+    };
+    const opts = { color: false, theirsLabel: "bardisty", mineLabel: "you", page: PAGE };
+    expect(renderDiff(base, opts)).toMatch(/\n {2}5 differ {3}1 shared {3}6 only bardisty$/);
+    expect(renderDiff({ ...base, onlyTheirs: 0, onlyMine: 2 }, opts)).toMatch(
+      /\n {2}5 differ {3}1 shared {3}2 only you$/,
+    );
+    expect(renderDiff({ ...base, onlyTheirs: 0 }, opts)).toMatch(/\n {2}5 differ {3}1 shared$/);
+    // The handle in the count is sanitized, as the column heads are.
+    expect(renderDiff(base, { ...opts, theirsLabel: `bar${ESC}[2Jdisty` })).toMatch(
+      /6 only bardisty$/,
+    );
   });
 
   it("heads the extras block as uncompared and starts each label at the value column", () => {
@@ -701,6 +773,8 @@ describe("renderDiff", () => {
       },
       differ: 1,
       shared: 0,
+      onlyTheirs: 0,
+      onlyMine: 0,
     };
     const plain = renderDiff(d, {
       color: false,
@@ -742,6 +816,8 @@ describe("renderDiff", () => {
       extras: { theirs: [{ label: "WM", value: "Hyprland" }], mine: [] },
       differ: 0,
       shared: 1,
+      onlyTheirs: 0,
+      onlyMine: 0,
     };
     // Only the owners with a line count: `bardisty` owns none, so `Shell` sets the stop.
     const out = renderDiff(d, {
@@ -763,6 +839,8 @@ describe("renderDiff", () => {
       },
       differ: 0,
       shared: 0,
+      onlyTheirs: 0,
+      onlyMine: 0,
     };
     const out = renderDiff(d, { color: false, theirsLabel: "jo", mineLabel: "you", page: PAGE });
     expect(out).toContain("  jo   WM = Hyprland\n  you  Launcher = Raycast");

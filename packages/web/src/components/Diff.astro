@@ -3,16 +3,19 @@
 // run — see DESIGN.md → Components & States): the same voice as the profile page. The command
 // that produced the comparison opens the page (also the copy control), the readout keeps real
 // <table> bones restyled to the bare session register, the ratio minimap speaks the CLI's
-// no-color vocabulary (~/=), and extras render dimmed below.
+// no-color vocabulary (~/=/?), and extras render dimmed below.
 // Amber is scarce: it marks ONLY a real difference (both differing values + the label dot) —
-// a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint.
+// a difference is symmetric, neither side is the "wrong" one. Same rows recede to --faint. A row
+// only one side filled in is not a different tool: a faint dot, its value faint, counted as
+// `N only <handle>` apart from `N differ` (the CLI's `?` row, same counts, same order).
 // Values are user-controlled → compared cells go through lib/diff-cells.ts (shortening, collide
 // guard, bidi stripping, a URL's slash break points) under Astro auto-escaping; extras labels
 // through lib/sanitize.ts and extras values through UntrustedValue.
 //
 // a11y: the difference is conveyed without relying on color (WCAG 1.4.1) — the label dot is shown
-// only on differing rows (presence, not just hue), and each row carries a visually-hidden
-// "differs:"/"same:" prefix for screen readers. Header + row-label cells are real <th>.
+// only on differing and one-sided rows (presence, not just hue), and each row carries a
+// visually-hidden "differs:"/"same:"/"only <handle>:" prefix for screen readers. Header +
+// row-label cells are real <th>.
 //
 // `example`: the landing-page sample diff (not a live /vs/ page). Like Profile.astro's `example`,
 // it downgrades the <h1> to <p>, renders the typed command as a plain line (no copy control) and
@@ -34,6 +37,13 @@ interface Props {
 const { result, theirs, mine, example = false } = Astro.props;
 const hasExtras = result.extras.theirs.length > 0 || result.extras.mine.length > 0;
 const HeadingTag = example ? "p" : "h1";
+// Per row: its class, the minimap glyph (the CLI's no-color gutter) and the screen-reader prefix.
+const kind = (status: DiffResult["rows"][number]["status"]) =>
+  status === "same"
+    ? { cls: "same", glyph: "=", sr: "same: " }
+    : status === "changed"
+      ? { cls: "changed", glyph: "~", sr: "differs: " }
+      : { cls: "one", glyph: "?", sr: `only ${status === "only_theirs" ? theirs : mine}: ` };
 // The CLI spelling of this exact page: `ymmv <a> vs <b>` compares { theirs: a, mine: b }
 // (cli resolve.ts versusTail), the same direction as /<a>/vs/<b>, so theirs stays first. Both
 // sides are stored handles (Diff renders only when both profiles are live), never a raw URL
@@ -72,6 +82,7 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
       {
         result.rows.map((row) => {
           const differs = row.status !== "same";
+          const k = kind(row.status);
           // Never display a marked difference as two equal-looking strings: pairCells drops the
           // shortening, or marks invisible code points, whenever the two cells of a differing row
           // would otherwise show the same text (lib/diff-cells.ts).
@@ -80,10 +91,10 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
           // column wrap it between path segments, like the extras below. Every other cell is one
           // piece and renders as the plain string.
           return (
-            <tr class={differs ? "changed" : "same"}>
+            <tr class={k.cls}>
               <th scope="row" class="k">
                 <span class="dot" aria-hidden="true" />
-                <span class="sr-only">{differs ? "differs: " : "same: "}</span>
+                <span class="sr-only">{k.sr}</span>
                 {row.label}
               </th>
               <td class="theirs">
@@ -109,15 +120,19 @@ const command = `npx ymmv-cli@latest ${theirs} vs ${mine}`;
 
   <div class="foot diff-foot">
     {/* the ratio minimap: one glyph per row, in row order, the CLI's no-color vocabulary —
-        amber ~ where the stacks split, faint = where they share. Pure decoration over the counts
-        beside it — no anchors (the e2e foot pins assume the swap link is the only <a> here). */}
+        amber ~ where the stacks split, faint = where they share, faint ? where only one side
+        says. Pure decoration over the counts beside it — no anchors (the e2e foot pins assume
+        the swap link is the only <a> here). */}
     <span class="diff-map" aria-hidden="true">
-      {result.rows.map((row) => (
-        <i class={row.status === "same" ? "s" : "d"}>{row.status === "same" ? "=" : "~"}</i>
-      ))}
+      {result.rows.map((row) => {
+        const k = kind(row.status);
+        return <i class={k.cls}>{k.glyph}</i>;
+      })}
     </span>
     <span><b>{result.differ}</b> differ</span>
     <span><b>{result.shared}</b> shared</span>
+    {result.onlyTheirs > 0 && <span><b>{result.onlyTheirs}</b> only {theirs}</span>}
+    {result.onlyMine > 0 && <span><b>{result.onlyMine}</b> only {mine}</span>}
     {
       !example && (
         <a href={`/${encodeURIComponent(mine)}/vs/${encodeURIComponent(theirs)}`}>swap <Arrow /></a>

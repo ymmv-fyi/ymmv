@@ -60,11 +60,12 @@ Amber marks ONLY links and diff differences. Never spend it on emphasis, CTAs, p
 decoration — with two deliberate exceptions: the fork motif itself (hero field branch, the fork
 glyph on the diff heading, favicon/OG mark), because the fork IS the diff; and the one amber
 nudge (`.nudge`, see Components & States), because it mirrors the CLI's `nudge()`. A difference is
-symmetric: both differing values go amber plus the row dot; same rows recede to `--faint`.
+symmetric: both differing values go amber plus the row dot; same rows recede to `--faint`. A row
+only one side filled in is no difference: it recedes too, keeping a faint dot.
 
 CLI parity: the CLI renders the same semantics with ANSI bright yellow (`packages/cli/src/render.ts`)
-— amber-only-on-difference, em-dash for a missing side, "N differ / N shared" wording, "how X
-differs from Y" heading. Change one surface, mirror the other.
+— amber-only-on-difference, em-dash for a missing side, "N differ / N shared / N only <handle>"
+wording, "how X differs from Y" heading. Change one surface, mirror the other.
 
 Long values part ways, because a terminal can't break a cell between path segments the way the
 web's narrow column does. On a terminal the CLI caps both value columns to the width. A cut cell
@@ -92,8 +93,8 @@ outgoing value and its arrow are faint. The web has no publish preview, so this 
   (the OG card) where it reads as a spark at the split; at glyph/icon sizes it fattens the
   junction into a blob, so the small marks go without it.
 - **Ratio minimap** (`.diff-foot .diff-map`): a minimap of the diff readout — one glyph per row,
-  in row order, the CLI's no-color vocabulary (`~` differs in amber, `=` same in faint).
-  Decorative (aria-hidden), no anchors.
+  in row order, the CLI's no-color vocabulary (`~` differs in amber, `=` same in faint, `?` one
+  side only in faint). Decorative (aria-hidden), no anchors.
 
 ## Landing layout
 
@@ -184,12 +185,20 @@ the identity.
   the copy control), the "how X differs from Y" heading sits in the session register (14px, amber
   fork glyph — the fork IS the diff), and the readout keeps real `<table>` bones restyled bare:
   no plate, no hairline rows, no caps ledger — lowercase handle column heads in `--faint`,
-  26/37/37 fixed layout. Row semantics unchanged: both differing values amber + label dot
+  26/37/37 fixed layout. Row semantics: both differing values amber + label dot
   (presence, not just hue — WCAG 1.4.1) + sr-only "differs:/same:" prefixes; missing side is an
-  em-dash glyph. The ratio minimap now speaks the CLI's own no-color vocabulary — a run of
-  `~`/`=` glyphs (`.diff-map`, amber `~` where the stacks split) — above the "N differ / N shared"
-  counts and the swap link. Extras render dimmed below (`table.extras-dim`), uncompared and never
-  amber, under a lowercase "extras (not compared)" line. NOTHING live wears the `.sheet` plate any
+  em-dash glyph. A row only one side filled in (`.one`, decided 2026-10-31) is not a different
+  tool, so it spends no amber and recedes like a shared row: both cells `--faint` (in ink it
+  would outshine the amber of a real difference), the dot kept but faint, the sr-only prefix
+  "only <handle>:". It counts apart, as `N only <handle>` after `N shared`, left out at 0. The
+  CLI marks it the same way: a faint `•` and faint cells with color, `?` without. `?` because
+  the row can't be compared; the publish preview's `+`/`-` (new/cleared) would mean something
+  else two screens apart, and diff(1)'s `<`/`>` would add two glyphs where the em-dash already
+  says which side is empty. The ratio minimap now speaks the CLI's own no-color vocabulary — a
+  run of `~`/`=`/`?` glyphs (`.diff-map`, amber `~` where the stacks split) — above the
+  "N differ / N shared / N only <handle>" counts and the swap link. Extras render dimmed below
+  (`table.extras-dim`), uncompared and never amber, under a lowercase "extras (not compared)"
+  line. NOTHING live wears the `.sheet` plate any
   more; `.win` frames the landing's two windows.
   Rejected in the run: keeping the plated 30/35/35 sheet (estranged from the transcript profile),
   one-column git-style stacking ("Unified"/"Stack" — best on phones, loses the side-by-side eye
@@ -228,8 +237,9 @@ No em dashes in user-facing prose (the missing-value `—` glyph is exempt). Nev
 separator anywhere user-facing — whitespace does the separating. Web UI copy draws its arrows:
 the inline SVG glyph (`Arrow.astro`, same stroke family as the fork), never the `→` character —
 which belongs to CLI output, and to the landing transcript that mirrors it byte-for-byte.
-Sentences open with a capital; fragments stay lowercase. Counts read "N differ" and "N shared"
-as words set apart by whitespace, never punctuation soup. The serif voice gets complete
+Sentences open with a capital; fragments stay lowercase. Counts read "N differ", "N shared"
+and "N only <handle>" as words set apart by whitespace, never punctuation soup. "differ" counts
+only fields both sides filled in, with different values. The serif voice gets complete
 sentences only. Page titles are URL-shaped — the title IS the address (`ymmv.fyi/<handle>`,
 `ymmv.fyi/<handle>/vs/<you>`), the same identity line the profile breadcrumb and the CLI print;
 the landing alone carries a subtitle (`ymmv.fyi: your stack, in the terminal`).

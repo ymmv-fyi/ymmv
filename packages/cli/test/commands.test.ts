@@ -421,7 +421,7 @@ describe("compare: ymmv <a> vs <b>", () => {
       Object.defineProperty(process.stdout, "columns", { value: 60, configurable: true });
       await compare("antfu", "bardisty");
       expect(logs[1]).not.toContain(long);
-      expect(logs[1]).toMatch(/^~ Dotfiles\s+—\s+github\.com\/bardisty\/d+…$/m);
+      expect(logs[1]).toMatch(/^\? Dotfiles\s+—\s+github\.com\/bardisty\/d+…$/m);
       for (const l of logs[1]?.split("\n") ?? []) expect(l.length).toBeLessThanOrEqual(60);
     } finally {
       for (const [k, d] of [
