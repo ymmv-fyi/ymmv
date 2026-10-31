@@ -1058,6 +1058,44 @@ describe("renderDiff fits wide characters (columns)", () => {
     expect(strip(line)).toBe(`  ${"ymmv.fyi/antfu/vs/me".slice(0, 17)}…`);
   });
 
+  it("keeps a wide differing character in a 6-column window", () => {
+    const d: DiffResult = {
+      ...CJK_DIFF,
+      rows: [
+        {
+          key: "editor",
+          label: "Editor",
+          theirs: `${"a".repeat(10)}中${"b".repeat(10)}`,
+          mine: `${"a".repeat(10)}文${"b".repeat(10)}`,
+          status: "changed",
+        },
+      ],
+      extras: { theirs: [], mine: [] },
+    };
+    for (const columns of [24, 25, 26]) {
+      const out = renderDiff(d, {
+        ...OPTS,
+        theirsLabel: "a",
+        mineLabel: "b",
+        color: false,
+        columns,
+      });
+      const row = out.split("\n").find((l) => l.startsWith("~ Editor")) ?? "";
+      expect(row).toContain("中");
+      expect(row).toContain("文");
+    }
+  });
+
+  it("prints the page line whole when it can't be a link", () => {
+    for (const [color, term] of [
+      [false, "xterm"],
+      [true, "linux"],
+    ] as const) {
+      const out = renderDiff(CJK_DIFF, { ...OPTS, color, term, columns: 20 });
+      expect(out.split("\n")[1]).toContain("ymmv.fyi/antfu/vs/me");
+    }
+  });
+
   it("cuts an extras value, never its owner or label", () => {
     const out = renderDiff(CJK_DIFF, { ...OPTS, color: false, columns: 40 });
     const line = out.split("\n").find((l) => l.includes("配色")) ?? "";

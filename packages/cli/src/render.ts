@@ -621,8 +621,12 @@ function pairShown(
     }
     return at;
   };
-  const longer = tc.length >= mc.length ? tc : mc;
-  const start = Math.min(back(tc, i, Math.floor(w / 2)), back(longer, longer.length, w - 1));
+  // At most half the window before it, and never so much that a wide differing character would
+  // be dropped at the trailing `…` (a 6-column window holds `…`, 3 before, 2 wide, `…`).
+  const diffW = Math.max(clusterWidth(tc[i] ?? ""), clusterWidth(mc[i] ?? ""));
+  const longer = width(t) >= width(m) ? tc : mc;
+  const before = Math.min(Math.floor(w / 2), w - 2 - diffW);
+  const start = Math.min(back(tc, i, before), back(longer, longer.length, w - 1));
   return [windowAt(tc, start, w), windowAt(mc, start, w)];
 }
 
@@ -735,7 +739,9 @@ export function renderDiff(
   };
 
   const page = sanitizeValue(opts.page);
-  const pageText = `${c.faint}${cut(displayUrl(page), room)}${c.reset}`;
+  // Cut only as a link, which keeps the whole address; plain text prints whole and may wrap.
+  const linked = opts.color && !(term !== undefined && NO_OSC8_TERMS.has(term));
+  const pageText = `${c.faint}${linked ? cut(displayUrl(page), room) : displayUrl(page)}${c.reset}`;
   const lines: string[] = [
     "",
     `  ${opts.color ? hyperlink(page, pageText, term) : pageText}`,
@@ -785,13 +791,14 @@ export function renderDiff(
   const counts = [`${result.differ} differ`, `${result.shared} shared`];
   if (result.onlyTheirs) counts.push(`${result.onlyTheirs} only ${theirsLabel}`);
   if (result.onlyMine) counts.push(`${result.onlyMine} only ${mineLabel}`);
-  // Segments fill a line and the next starts a new one, so a count is never cut; only a segment
-  // wider than the whole line on its own (a long handle) is.
+  // Segments fill a line and the next starts a new one, so a count is never cut. A segment wider
+  // than the whole line on its own (a long handle) wraps, as the web's foot does: a handle is
+  // never cut outside the column heads.
   const countLines: string[] = [];
   for (const seg of counts) {
     const joined = `${countLines.at(-1)}   ${seg}`;
     if (countLines.length && width(joined) <= room) countLines[countLines.length - 1] = joined;
-    else countLines.push(cut(seg, room));
+    else countLines.push(seg);
   }
   lines.push("", ...countLines.map((l) => `  ${c.faint}${l}${c.reset}`));
   return lines.join("\n");

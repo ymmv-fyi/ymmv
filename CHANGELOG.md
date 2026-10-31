@@ -52,12 +52,12 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   its value columns to the width and ends a longer value with `…`. When two values differ only
   past the cut, both show the part where they differ. With color on, a URL is shortened and
   links to the full address, as on a profile. Output piped to another command is never cut.
-- **The diff counts wide characters and fits long handles on a terminal.** A CJK character or an
-  emoji takes two columns, and a row holding one no longer runs past the edge or pushes the
-  next column out of line. The page address, the extras lines and the count line fit the width
-  too: an extras line shortens its value, the count line breaks between its counts, and the
-  heading breaks before `differs from` when two long handles don't fit on one line. On the
-  profile card, a wide extras label lines up with the rest.
+- **The diff measures wide characters and fits more of its lines on a terminal.** A CJK
+  character or an emoji takes two columns, and a row holding one no longer runs past the edge or
+  pushes the next column out of line. With color on, the page address is shortened to fit and
+  still links to the whole address. An extras line shortens its value, the count line breaks
+  between its counts, and the heading breaks before `differs from` when two long handles don't
+  fit on one line. On the profile card, a wide extras label lines up with the rest.
 
 ## [0.15.2] - 2026-10-30
 
