@@ -240,6 +240,21 @@ describe("view — the 3 branches", () => {
     expect(logs[0]).toContain("ymmv.fyi/antfu");
   });
 
+  it("with color on, the card's breadcrumb links the page under the handle as stored", async () => {
+    vi.stubEnv("FORCE_COLOR", "1");
+    vi.stubEnv("TERM", "xterm-256color");
+    vi.mocked(loadToken).mockResolvedValue(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonRes(prof("antfu"))));
+    try {
+      await view("antfuold");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const esc = String.fromCharCode(0x1b);
+    expect(logs[0]).toContain(`${esc}]8;;https://ymmv.fyi/antfu${esc}\\`);
+    expect(logs[0]).not.toContain("ymmv.fyi/antfuold");
+  });
+
   it("a renamed handle in the diff branch says so too", async () => {
     vi.mocked(loadToken).mockResolvedValue(stored());
     vi.stubGlobal(

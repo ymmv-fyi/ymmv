@@ -8,6 +8,7 @@ import {
   message,
   notFound,
   nudge,
+  profilePageUrl,
   relTime,
   renderDiff,
   renderProfile,
@@ -863,6 +864,16 @@ describe("diffPageUrl", () => {
   });
 });
 
+describe("profilePageUrl", () => {
+  it("is the card's web page, the handle as one encoded segment", () => {
+    expect(profilePageUrl("https://ymmv.fyi", "antfu")).toBe("https://ymmv.fyi/antfu");
+    expect(profilePageUrl("https://ymmv.fyi", "a/b?c")).toBe("https://ymmv.fyi/a%2Fb%3Fc");
+  });
+  it("strips control bytes from a handle before encoding it", () => {
+    expect(profilePageUrl("https://ymmv.fyi", `x${ESC}[2Jy`)).toBe("https://ymmv.fyi/xy");
+  });
+});
+
 describe("renderProfile", () => {
   const SITE = "ymmv.fyi";
   const at = (iso: string) => () => Date.parse(iso);
@@ -935,6 +946,37 @@ describe("renderProfile", () => {
     expect(out).toContain(`  ${ESC_}[90mymmv.fyi/${ESC_}[0m${ESC_}[1mcarol${ESC_}[0m`);
     const plain = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
     expect(plain).toContain("  ymmv.fyi/carol");
+  });
+
+  describe("the breadcrumb links its page", () => {
+    const PAGE = "https://ymmv.fyi/carol";
+    const ST = `${ESC}\\`;
+    const CRUMB = `${ESC}[90mymmv.fyi/${ESC}[0m${ESC}[1mcarol${ESC}[0m`;
+    const opts = { site: SITE, now: at(NOW), page: PAGE };
+
+    it("with color on: an OSC-8 link to the page around the unchanged faint/bold text", () => {
+      const out = renderProfile(FULLISH, { ...opts, color: true, term: "xterm-256color" });
+      expect(out.split("\n")[1]).toBe(`  ${OSC8_OPEN}${PAGE}${ST}${CRUMB}${OSC8_OPEN}${ST}`);
+    });
+    it("TERM=linux and TERM=dumb keep the text and drop the link", () => {
+      for (const term of ["linux", "dumb"]) {
+        const out = renderProfile(FULLISH, { ...opts, color: true, term });
+        expect(out.split("\n")[1]).toBe(`  ${CRUMB}`);
+      }
+    });
+    it("with color off: byte-identical to a card without a page", () => {
+      const without = renderProfile(FULLISH, { color: false, site: SITE, now: at(NOW) });
+      expect(renderProfile(FULLISH, { ...opts, color: false })).toBe(without);
+    });
+    it("the publish preview never links (before a first publish the page is a 404)", () => {
+      const out = renderProfile(FULLISH, { ...opts, color: true, mode: "preview" });
+      expect(out.split("\n")[1]).toBe(`  ${CRUMB}`);
+      expect(out).not.toContain(PAGE);
+    });
+    it("the href is sanitized: a control byte in the page can't end the sequence early", () => {
+      const out = renderProfile(FULLISH, { ...opts, page: `${PAGE}${ESC}${BEL}x`, color: true });
+      expect(out).toContain(`${OSC8_OPEN}${PAGE}x${ST}`);
+    });
   });
 
   it("URL values render as amber links (the web rule: amber = links + diffs)", () => {

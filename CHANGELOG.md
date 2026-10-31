@@ -17,6 +17,8 @@ Notable changes to **ymmv** (the `ymmv-cli` package + the ymmv.fyi Worker), newe
   and the address of the CLI README.
 
 ### Changed
+- **The profile card's address is a link.** On a terminal with color, the `ymmv.fyi/<handle>`
+  line that heads `ymmv <handle>` opens the profile on ymmv.fyi, like the diff's page line.
 - **A mistyped command gets a suggestion.** `ymmv lgoin` still looks up a profile named `lgoin`,
   and when there is none it now adds `Did you mean: ymmv login?` on stderr. A profile at that
   name still shows, with no hint.

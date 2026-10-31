@@ -222,8 +222,17 @@ function hyperlink(href: string, text: string, term: string | undefined): string
  *  typed argument and never the `you` the signed-in diff heads its column with. Each segment is
  *  encoded like Diff.astro's swap link: a stored handle needs none, but wire data is untrusted. */
 export function diffPageUrl(base: string, theirs: string, mine: string): string {
-  const seg = (h: string): string => encodeURIComponent(sanitizeValue(h));
-  return `${base}/${seg(theirs)}/vs/${seg(mine)}`;
+  return `${base}/${pageSegment(theirs)}/vs/${pageSegment(mine)}`;
+}
+
+/** The web page a card mirrors, `<base>/<handle>`, for the handle as stored (the fetched
+ *  profile's, after any rename). Encoded like diffPageUrl's segments. */
+export function profilePageUrl(base: string, handle: string): string {
+  return `${base}/${pageSegment(handle)}`;
+}
+
+function pageSegment(handle: string): string {
+  return encodeURIComponent(sanitizeValue(handle));
 }
 
 /**
@@ -271,6 +280,12 @@ export function relTime(iso: string, now: () => number = Date.now): string {
  * dropped when the old value shows nothing or shows the same as the new one (a walk re-saving a
  * value that carried a control sequence), where it would read as a blank or as `Vim → Vim`.
  * Unmarked rows are byte-identical to a card without `changes`.
+ *
+ * `page` (view only, ignored in preview mode) is the web page the card mirrors (profilePageUrl).
+ * With color on the breadcrumb is an OSC-8 link to it, its faint/bold text unchanged, as the
+ * diff's page line links its page; with color off it prints exactly as without `page`. The
+ * preview never links: before a first publish the page is a 404, and on a republish it shows the
+ * live profile, not the card being confirmed.
  */
 export function renderProfile(
   profile: Profile,
@@ -278,6 +293,8 @@ export function renderProfile(
     color: boolean;
     site: string;
     mode?: "view" | "preview";
+    page?: string;
+    term?: string;
     now?: () => number;
     disagreements?: ReadonlyMap<CuratedKey, string>;
     changes?: ReadonlyMap<CuratedKey, string | null>;
@@ -311,7 +328,8 @@ export function renderProfile(
     ...rows.map((r) => r.label.length),
     ...extras.map((x) => x.label.length),
   );
-  const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color) : v);
+  const term = opts.term ?? process.env.TERM;
+  const val = (v: string): string => (isHttpUrl(v) ? link(v, opts.color, term) : v);
   // A marked row's value column up to the incoming value: the gutter, then `old → ` unless it
   // would not read (see above). A URL is shortened with color on, to sit beside the shortened
   // incoming link.
@@ -324,9 +342,11 @@ export function renderProfile(
   // Every section (rows, extras, updated) pushes its OWN leading blank — the breadcrumb never
   // pre-pays one. A profile with zero curated rows would otherwise stack the breadcrumb's blank
   // on the next section's, breaking the one-blank-line-between-units convention.
+  const crumb = `${c.faint}${opts.site}/${c.reset}${c.bold}${sanitizeValue(profile.handle)}${c.reset}`;
+  const page = opts.color && !preview && opts.page !== undefined ? opts.page : undefined;
   const lines: string[] = [
     "",
-    `  ${c.faint}${opts.site}/${c.reset}${c.bold}${sanitizeValue(profile.handle)}${c.reset}`,
+    `  ${page === undefined ? crumb : hyperlink(sanitizeValue(page), crumb, term)}`,
   ];
   if (rows.length) {
     lines.push("");

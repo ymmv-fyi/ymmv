@@ -65,7 +65,11 @@ only one side filled in is no difference: it recedes too, keeping a faint dot.
 
 CLI parity: the CLI renders the same semantics with ANSI bright yellow (`packages/cli/src/render.ts`)
 — amber-only-on-difference, em-dash for a missing side, "N differ / N shared / N only <handle>"
-wording, "how X differs from Y" heading. Change one surface, mirror the other.
+wording, "how X differs from Y" heading. Change one surface, mirror the other. The card's
+`ymmv.fyi/<handle>` breadcrumb and the diff's page line name the web page each mirrors, and with
+color on each is an OSC 8 link to it. The web's breadcrumb links its `ymmv.fyi` home instead,
+because there the page is already open. The publish preview's breadcrumb is not a link: before a
+first publish there is no page.
 
 Long values part ways, because a terminal can't break a cell between path segments the way the
 web's narrow column does. On a terminal the CLI caps both value columns to the width. A cut cell
