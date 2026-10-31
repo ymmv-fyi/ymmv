@@ -205,8 +205,9 @@ function listedVersion(stdout: string): string | null {
  * After pnpm reports success, the note to print when it installed an older version than the
  * update check last saw, or null. pnpm 11 and later hold back releases younger than their
  * minimumReleaseAge setting (a day by default), and `@latest` then quietly resolves to the
- * newest release that is old enough. The cache's latest can itself be up to a day old, so only
- * a cached version strictly newer than the installed one says anything. A cold or stale cache,
+ * newest release that is old enough. The cache's latest can itself lag (readCachedLatest takes
+ * one fetched up to a week ago), so only a cached version strictly newer than the installed one
+ * says anything. A cold or stale cache,
  * a failed lookup and output that can't be read all print nothing. No network, and never
  * ownVersion(): this process is the copy that was just replaced.
  */
