@@ -11,12 +11,12 @@ import { readCacheControl, resolveProfile } from "../../lib/profile-read.ts";
 // never a fake 404.
 const raw = String(Astro.params.handle ?? "");
 
-// A native (script-failed) diff-form submit lands here as GET /<handle>?you=<x> — honor it
-// server-side so the form still works when its inline script never ran: redirect to the canonical
-// diff URL. Only a valid handle shape redirects; anything else falls through and renders the
-// profile with the form's hint showing. Runs before the D1 read — the redirect needs no data.
-// The normalization is the form script's (Layout.astro), step for step — the two copies must stay
-// identical: trim, drop leading @s, drop ONE pasted github.com/ or ymmv.fyi/ prefix (optionally
+// A native (script-failed) compare-form submit lands here as GET /<handle>?you=<x> — honor it
+// server-side so the form still works when its script never ran: redirect to the canonical diff
+// URL. Only a valid handle shape redirects; anything else falls through and renders the profile
+// with the form's error showing. Runs before the D1 read — the redirect needs no data.
+// The normalization is the compare script's (Profile.astro), step for step — the two copies must
+// stay identical: trim, drop leading @s, drop ONE pasted github.com/ or ymmv.fyi/ prefix (optionally
 // http(s)://, any case), drop one trailing slash. e2e runs one input table through both paths.
 const youParam = Astro.url.searchParams.get("you");
 const you = (youParam ?? "")
@@ -71,7 +71,7 @@ const title =
         : "ymmv.fyi";
 const description =
   result.kind === "live"
-    ? `${result.profile.handle}'s developer tool stack on ymmv.fyi.`
+    ? `${result.profile.handle}’s developer tool stack on ymmv.fyi.`
     : safeRaw && !reserved
       ? `No ymmv profile for ${safeRaw} yet. Publish yours with npx ymmv-cli@latest.`
       : undefined;

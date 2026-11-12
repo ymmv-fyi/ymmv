@@ -1,13 +1,15 @@
-import { type BrowserContext, expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-// Token colors asserted below (DESIGN.md): dark bg #0E0C09 = rgb(14,12,9),
-// light bg #F6F3EA = rgb(246,243,234), dark accent #FFAB2E = rgb(255,171,46).
+// Token colors asserted below (DESIGN.md → Color): bg #050607 = rgb(5,6,7), accent (mint)
+// #3EE6A8 = rgb(62,230,168). The site is dark only.
+const BG = "rgb(5, 6, 7)";
+const MINT = "rgb(62, 230, 168)";
 
-// The diff form's error line (Profile.astro), shown on a miss by the script or the ?you= handler.
-const YOU_HINT = "a GitHub handle: letters, digits, single hyphens, up to 39";
+// The compare form's error line (Profile.astro), shown on a miss by the script or the ?you= handler.
+const YOU_HINT = "Enter a GitHub handle: letters, digits and single hyphens, up to 39.";
 
-// One input table for both copies of the diff form's rule: the inline script (Layout.astro) and
-// the native ?you= handler ([handle]/index.astro). A drift between the two fails one path here.
+// One input table for both copies of the compare form's rule: the script (Profile.astro) and the
+// native ?you= handler ([handle]/index.astro). A drift between the two fails one path here.
 // The strip set is deliberately narrow: www. and a path after the handle are misses.
 const YOU_CASES: [input: string, expected: string | null][] = [
   ["bardisty", "bardisty"],
@@ -27,75 +29,162 @@ const YOU_CASES: [input: string, expected: string | null][] = [
 ];
 
 test.describe("profile render", () => {
-  test("renders the command line, handle, readout and footer", async ({ page }) => {
+  test("renders the handle, the stack, the extras and the foot commands", async ({ page }) => {
     const res = await page.goto("/antfu");
     expect(res?.status()).toBe(200);
     // URL-as-title, pinned exactly (a partial revert to the old "antfu - ymmv.fyi" shape would
     // still match a loose /antfu/ regex)
     await expect(page).toHaveTitle("ymmv.fyi/antfu");
-    await expect(page.locator("h1.handle")).toContainText("antfu");
-    // the session opens with the command that produced the page
-    await expect(page.locator(".session > .cmdline")).toContainText("npx ymmv-cli@latest antfu");
-    const readout = page.locator(".readout");
-    await expect(readout).toContainText("Editor");
-    await expect(readout).toContainText("VS Code");
-    // the foot is the make-yours prompt line, not the handle command (that one sits on top)
-    await expect(page.locator(".foot")).toContainText("npx ymmv-cli@latest");
-    await expect(page.locator(".foot")).toContainText("# make yours");
+    await expect(page.locator("h1.handle")).toHaveText("antfu");
+    await expect(page.locator(".profile-meta")).toHaveText("Updated 28 Jun 2026");
+    const stack = page.locator("table.stack");
+    await expect(stack).toContainText("Editor");
+    await expect(stack).toContainText("VS Code");
+    // the person's own lines are labelled as theirs, and as uncompared
+    await expect(page.locator(".extras-h")).toHaveText("Extras");
+    await expect(page.locator(".extras-note")).toHaveText(
+      "Lines added by hand. A diff doesn’t compare them.",
+    );
+    await expect(page.locator(".extras-rows")).toContainText("HHKB Pro 2");
+    await expect(page.locator(".view-cmd .install")).toHaveAttribute(
+      "data-copy",
+      "npx ymmv-cli@latest antfu",
+    );
+    await expect(page.locator(".make-cmd .install")).toHaveAttribute(
+      "data-copy",
+      "npx ymmv-cli@latest",
+    );
   });
 
-  test("the diff form navigates to the diff and remembers the entered handle", async ({ page }) => {
+  test("both foot commands click-copy to the clipboard", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/antfu");
-    await page.fill(".diff-cta input", "bardisty");
-    await page.press(".diff-cta input", "Enter");
-    await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
-    await page.goto("/antfu");
-    await expect(page.locator(".diff-cta input")).toHaveValue("bardisty");
+    await page.click(".view-cmd .install");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      "npx ymmv-cli@latest antfu",
+    );
+    await page.click(".make-cmd .install");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli@latest");
   });
 
-  test("the diff form blocks empty and invalid handles, strips a leading @", async ({ page }) => {
+  test("compares in place, links the full diff, and remembers the handle", async ({ page }) => {
     await page.goto("/antfu");
-    await page.press(".diff-cta input", "Enter");
-    await expect(page).toHaveURL(/\/antfu$/); // empty submit stays put…
-    await expect(page.locator(".diff-cta input")).toBeFocused(); // …and refocuses the input
-    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT); // …and says what a handle is
-    await page.fill(".diff-cta input", "..");
-    await page.press(".diff-cta input", "Enter");
-    await expect(page).toHaveURL(/\/antfu$/); // dot-segments must never navigate
-    await page.fill(".diff-cta input", "@bardisty");
-    await page.press(".diff-cta input", "Enter");
-    await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
+    await page.fill("#compare-you", "bardisty");
+    await page.press("#compare-you", "Enter");
+    const table = page.locator("table.stack");
+    await expect(table).toHaveClass(/is-compared/);
+    // the page did not navigate; the stack gained the visitor's column
+    await expect(page).toHaveURL(/\/antfu$/);
+    await expect(page.locator("[data-stack-you]")).toHaveText("bardisty");
+    // the same counts the full diff page shows (seed.sql arithmetic)
+    await expect(page.locator(".compare-status > span")).toHaveText([
+      "7 differ",
+      "5 shared",
+      "1 only antfu",
+    ]);
+    await expect(page.locator(".compare-status a")).toHaveAttribute("href", "/antfu/vs/bardisty");
+    // differences spend the accent on both sides; shared rows recede
+    const editor = page.locator("tr.d").filter({ hasText: "Editor" });
+    await expect(editor.locator("td")).toHaveText(["VS Code", "Zed"]);
+    const theirs = await editor
+      .locator("td")
+      .first()
+      .evaluate((el) => getComputedStyle(el).color);
+    expect(theirs).toBe(MINT);
+    expect(
+      await editor
+        .locator("td")
+        .nth(1)
+        .evaluate((el) => getComputedStyle(el).color),
+    ).toBe(MINT);
+    const shared = page.locator("tr.s").filter({ hasText: "Prompt" }).locator("td").first();
+    expect(await shared.evaluate((el) => getComputedStyle(el).color)).not.toBe(MINT);
+    // announced for screen readers, with the counts
+    await expect(page.locator("#compare-msg")).toHaveText(
+      "Compared with bardisty: 7 differ, 5 shared, 1 only antfu.",
+    );
+    // a valid compare is remembered and prefills the next visit, which never compares by itself
+    await page.goto("/antfu");
+    await expect(page.locator("#compare-you")).toHaveValue("bardisty");
+    await expect(page.locator("table.stack")).not.toHaveClass(/is-compared/);
   });
 
-  test("an invalid handle shows the hint, described and announced; typing clears it", async ({
+  test("Clear and Escape put the stack back", async ({ page }) => {
+    await page.goto("/antfu");
+    await page.fill("#compare-you", "bardisty");
+    await page.press("#compare-you", "Enter");
+    await expect(page.locator("table.stack")).toHaveClass(/is-compared/);
+    await page.press("#compare-you", "Escape");
+    await expect(page.locator("table.stack")).not.toHaveClass(/is-compared/);
+    await expect(page.locator("[data-stack-you]")).toBeHidden();
+    await page.press("#compare-you", "Enter");
+    await expect(page.locator("table.stack")).toHaveClass(/is-compared/);
+    await page.click("[data-compare-clear]");
+    await expect(page.locator("table.stack")).not.toHaveClass(/is-compared/);
+    await expect(page.locator("#compare-you")).toHaveValue("");
+    await expect(page.locator("#compare-you")).toBeFocused();
+  });
+
+  test("a handle with no profile gets the install command, and is not remembered", async ({
     page,
   }) => {
     await page.goto("/antfu");
-    const input = page.locator(".diff-cta input");
-    const hint = page.locator("#diff-hint");
-    // the live region is in the tree before any miss, so the first fill is announced
-    await expect(hint).toHaveAttribute("aria-live", "polite");
-    await expect(hint).toHaveText("");
-    await expect(input).not.toHaveAttribute("aria-describedby");
+    await page.fill("#compare-you", "ghostviewer");
+    await page.press("#compare-you", "Enter");
+    await expect(page.locator("#compare-msg")).toHaveText(
+      "No ymmv profile for ghostviewer yet. Publish yours, then compare:",
+    );
+    await expect(page.locator("[data-compare-miss] .install")).toBeVisible();
+    await expect(page.locator("table.stack")).not.toHaveClass(/is-compared/);
+    expect(await page.evaluate(() => localStorage.getItem("ymmv-you"))).toBeNull();
+  });
+
+  test("compared cells strip bidi controls and never show a difference as equal strings", async ({
+    page,
+  }) => {
+    // plainuser's shell is "zsh"; collide's is "zsh" + U+202E (seed.sql)
+    await page.goto("/plainuser");
+    await page.fill("#compare-you", "collide");
+    await page.press("#compare-you", "Enter");
+    const shell = page.locator("tbody tr").filter({ hasText: "Shell" });
+    await expect(shell).toHaveClass("d");
+    await expect(shell.locator("td")).toHaveText(["zsh", "zsh\uFFFD"]);
+  });
+
+  test("an invalid handle: three signals, described and announced; a valid one clears it", async ({
+    page,
+  }) => {
+    await page.goto("/antfu");
+    const input = page.locator("#compare-you");
+    const msg = page.locator("#compare-msg");
+    // the live region is in the tree before any miss, so the first message is announced
+    await expect(msg).toHaveAttribute("aria-live", "polite");
+    await expect(msg).toHaveText("");
     await input.fill("not a handle");
     await input.press("Enter");
     await expect(page).toHaveURL(/\/antfu$/);
-    await expect(hint).toHaveText(YOU_HINT);
-    await expect(hint).toBeVisible();
-    await expect(input).toHaveAttribute("aria-describedby", "diff-hint");
+    await expect(input).toBeFocused();
+    await expect(msg).toHaveText(YOU_HINT);
+    await expect(input).toHaveAttribute("aria-invalid", "true");
     await expect(input).toHaveAccessibleDescription(YOU_HINT);
-    // a miss is never remembered: only a valid submit writes the prefill
+    expect(await msg.evaluate((el) => getComputedStyle(el, "::before").content)).not.toBe("none");
+    // a miss is never remembered: only a valid compare writes the prefill
     expect(await page.evaluate(() => localStorage.getItem("ymmv-you"))).toBeNull();
+    // still invalid while the value is: the error stays
     await input.pressSequentially("x");
-    await expect(hint).toHaveText("");
-    await expect(input).not.toHaveAttribute("aria-describedby");
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    // valid: it clears the moment it is
+    await input.fill("");
+    await input.pressSequentially("bardisty");
+    await expect(input).not.toHaveAttribute("aria-invalid");
+    await expect(msg).toHaveText("");
   });
 
-  test("keyboard only: Tab to the input, Enter on a bad value, and the hint describes it", async ({
+  test("keyboard only: Tab to the input, Enter on a bad value, and the error describes it", async ({
     page,
   }) => {
     await page.goto("/antfu");
-    const input = page.locator(".diff-cta input");
+    const input = page.locator("#compare-you");
     for (let i = 0; i < 20 && !(await input.evaluate((el) => el === document.activeElement)); i++) {
       await page.keyboard.press("Tab");
     }
@@ -106,90 +195,75 @@ test.describe("profile render", () => {
     await expect(input).toHaveAccessibleDescription(YOU_HINT);
   });
 
-  test("the diff form and the ?you= handler agree on every input", async ({ page, request }) => {
+  test("the compare form and the ?you= handler agree on every input", async ({ page, request }) => {
     for (const [value, expected] of YOU_CASES) {
       await page.goto("/antfu");
-      await page.fill(".diff-cta input", value);
-      await page.press(".diff-cta input", "Enter");
+      await page.evaluate(() => localStorage.clear());
+      await page.fill("#compare-you", value);
+      const fetched = expected
+        ? page.waitForRequest((r) => r.url().endsWith(`/api/v1/u/${expected}`))
+        : null;
+      await page.press("#compare-you", "Enter");
       const native = await request.get(`/antfu?you=${encodeURIComponent(value)}`, {
         maxRedirects: 0,
       });
       if (expected) {
-        await expect(page, value).toHaveURL(new RegExp(`/antfu/vs/${expected}$`));
+        await fetched;
         expect(native.status(), value).toBe(302);
         expect(native.headers().location, value).toBe(`/antfu/vs/${expected}`);
       } else {
-        await expect(page.locator("#diff-hint"), value).toHaveText(YOU_HINT);
-        await expect(page, value).toHaveURL(/\/antfu$/);
+        await expect(page.locator("#compare-msg"), value).toHaveText(YOU_HINT);
         expect(native.status(), value).toBe(200);
         const body = await native.text();
-        expect(body, value).toContain(`>${YOU_HINT}</p>`);
-        expect(body, value).toContain('aria-describedby="diff-hint"');
+        expect(body, value).toContain(YOU_HINT);
+        expect(body, value).toContain('aria-invalid="true"');
       }
     }
   });
 
   test("a pasted profile URL is not cut short by the input", async ({ page }) => {
-    // a maxlength of 39 truncated the paste before the script could strip the prefix
+    // a maxlength of 39 would truncate the paste before the script strips the prefix
     await page.goto("/antfu");
-    await page.fill(".diff-cta input", "https://github.com/bardisty");
-    await expect(page.locator(".diff-cta input")).toHaveValue("https://github.com/bardisty");
-    await page.press(".diff-cta input", "Enter");
-    await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
+    await page.fill("#compare-you", "https://github.com/bardisty");
+    await expect(page.locator("#compare-you")).toHaveValue("https://github.com/bardisty");
+    await page.press("#compare-you", "Enter");
+    await expect(page.locator("[data-stack-you]")).toHaveText("bardisty");
     expect(await page.evaluate(() => localStorage.getItem("ymmv-you"))).toBe("bardisty");
   });
 
-  test("a server-rendered hint is not contradicted by the remembered handle", async ({ page }) => {
+  test("a server-rendered error is not contradicted by the remembered handle", async ({ page }) => {
     await page.goto("/antfu");
     await page.evaluate(() => localStorage.setItem("ymmv-you", "bardisty"));
     await page.goto("/antfu?you=not%20a%20handle");
-    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT);
-    await expect(page.locator(".diff-cta input")).toHaveValue("");
+    await expect(page.locator("#compare-msg")).toHaveText(YOU_HINT);
+    await expect(page.locator("#compare-you")).toHaveValue("");
     // a plain visit still prefills
     await page.goto("/antfu");
-    await expect(page.locator(".diff-cta input")).toHaveValue("bardisty");
+    await expect(page.locator("#compare-you")).toHaveValue("bardisty");
   });
 
-  test("the profile without ?you= renders no hint", async ({ request }) => {
+  test("the profile without ?you= renders no error", async ({ request }) => {
     const body = await (await request.get("/antfu")).text();
-    expect(body).not.toContain(`${YOU_HINT}</p>`);
-    expect(body).not.toContain('aria-describedby="diff-hint"');
+    expect(body).not.toContain(YOU_HINT);
+    expect(body).not.toContain('aria-invalid="true"');
   });
 
-  test("both session commands click-copy to the clipboard", async ({ page, context }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await page.goto("/antfu");
-    // the opening command copies the view invocation (handle included)…
-    await page.click(".session > .cmdline .install");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-      "npx ymmv-cli@latest antfu",
-    );
-    // …the foot's make-yours line copies the bare publish command
-    await page.click(".foot .install");
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npx ymmv-cli@latest");
-  });
-
-  test("a 1-key edge profile still renders a readout (no awkward empty block)", async ({
-    page,
-  }) => {
-    // xsstest has one curated entry (dotfiles) + extras — the readout must still render.
+  test("a 1-key edge profile still renders a stack (no awkward empty block)", async ({ page }) => {
+    // xsstest has one curated entry (dotfiles) + extras — the stack must still render.
     await page.goto("/xsstest");
-    await expect(page.locator(".readout")).toBeVisible();
+    await expect(page.locator("table.stack")).toBeVisible();
   });
 
-  test("the live session is unplated, with the preview marker suppressed", async ({ page }) => {
-    // The transcript decision (2026-08-24): no .sheet on a profile page — the plate is the diff
-    // document's dress. A profile regaining a plate renders wrong silently.
+  test("a live profile carries no landing-only preview marker", async ({ page }) => {
     await page.goto("/antfu");
-    await expect(page.locator(".sheet")).toHaveCount(0);
-    await expect(page.locator(".spec-more")).toHaveCount(0); // example-only marker
+    await expect(page.locator(".spec-more")).toHaveCount(0);
+    await expect(page.locator(".is-example")).toHaveCount(0);
   });
 
   test("the canonical names the profile path even when a query string rides along", async ({
     page,
   }) => {
-    // an invalid ?you= falls through to the profile render (see the diff-form tests) — the
-    // canonical must not echo the query
+    // an invalid ?you= falls through to the profile render — the canonical must not echo the query
     await page.goto("/antfu?you=..");
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
       "href",
@@ -222,28 +296,42 @@ test.describe("landing", () => {
     expect(res.headers()["cache-control"]).toContain("s-maxage=10");
   });
 
-  test("the page window groups dotfiles under stack, exactly like a live profile", async ({
+  test("the page pane groups dotfiles under stack, exactly like a live profile", async ({
     page,
   }) => {
     await page.goto("/");
-    const stack = page.locator(".readout").first();
+    const stack = page.locator(".page-pane .stack");
     await expect(stack).toContainText("Dotfiles");
     await expect(stack).toContainText("github.com/octocat/dotfiles");
   });
 
-  test("the page window is an honest preview: truncated rows + a '+ N more' marker", async ({
+  test("the page pane is an honest preview: truncated rows + a '+ N more' marker", async ({
     page,
   }) => {
     await page.goto("/");
-    const stack = page.locator(".readout").first();
+    const stack = page.locator(".page-pane .stack");
     // truncation is real (Multiplexer is elided from the preview)...
     await expect(stack).not.toContainText("Multiplexer");
     await expect(page.locator(".spec-more")).toContainText("+ 7 more");
-    // ...and the window is a preview of the profile page, not the diff: no diff on the landing
-    await expect(page.locator("table.diff")).toHaveCount(0);
   });
 
-  test("the terminal window shows the CLI transcript (detect, confirm, published link)", async ({
+  test("the compare panel is the real diff, in example mode", async ({ page }) => {
+    await page.goto("/");
+    const panel = page.locator(".panel .diff-page");
+    await expect(panel.locator("table.diff")).toHaveCount(1);
+    await expect(panel.locator(".diff-h")).toHaveText("how hubot differs from octocat");
+    await expect(panel.locator(".diff-counts > span")).toHaveText([
+      "5 differ",
+      "7 shared",
+      "1 only octocat",
+    ]);
+    // example mode: no command, no swap link, no links at all, and no second h1
+    await expect(panel.locator(".install")).toHaveCount(0);
+    await expect(panel.locator("a")).toHaveCount(0);
+    await expect(page.locator("h1")).toHaveCount(1);
+  });
+
+  test("the terminal pane shows the CLI transcript (detect, confirm, published link)", async ({
     page,
   }) => {
     await page.goto("/");
@@ -252,7 +340,7 @@ test.describe("landing", () => {
     await expect(term).toContainText("npx ymmv-cli@latest");
     await expect(term).toContainText("Publish to ymmv.fyi/octocat? [Y/n/e=edit]");
     await expect(term).toContainText("Published octocat");
-    // amber marks exactly what the CLI renders amber: the published link
+    // the accent marks exactly what the CLI renders in its accent: the published link
     await expect(term.locator(".t-link")).toHaveText("ymmv.fyi/octocat");
   });
 
@@ -270,9 +358,14 @@ test.describe("landing", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.goto("/");
     await expect(page.locator(".demo")).toHaveAttribute("data-play", "");
-    // the run finishes and the page window is fully in view
+    // the run finishes: its last line lands
     await expect
-      .poll(() => page.locator(".page-win").evaluate((el) => getComputedStyle(el).opacity))
+      .poll(() =>
+        page
+          .locator(".term .tl")
+          .last()
+          .evaluate((el) => getComputedStyle(el).opacity),
+      )
       .toBe("1");
     await page.reload();
     await expect(page.locator(".demo")).not.toHaveAttribute("data-play", "");
@@ -289,15 +382,9 @@ test.describe("landing", () => {
     await expect(page.locator("h1.handle")).toContainText("bardisty");
   });
 
-  test("the landing never plates its preview twice, and never scrolls sideways on a phone", async ({
-    page,
-  }) => {
+  test("never scrolls sideways on a phone", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
-    // the preview is framed by .win only — a .sheet here means the example gate broke
-    await expect(page.locator(".sheet")).toHaveCount(0);
-    // the hand-tuned narrow-viewport fits (12px transcript, trimmed window padding) have no other
-    // tripwire — any copy or font change that reintroduces overflow fails here
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
@@ -318,8 +405,7 @@ test.describe("landing", () => {
     });
   });
 
-  test("spends amber only on the published link inside the terminal", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
+  test("spends the accent only on the published link inside the terminal", async ({ page }) => {
     await page.goto("/");
     const term = page.locator(".term");
     const linkColor = await term.locator(".t-link").evaluate((el) => getComputedStyle(el).color);
@@ -327,31 +413,52 @@ test.describe("landing", () => {
       .locator(".t-dim")
       .first()
       .evaluate((el) => getComputedStyle(el).color);
-    expect(linkColor).toBe("rgb(255, 171, 46)"); // amber on the published link
-    expect(dimColor).not.toBe(linkColor); // scaffolding recedes — never amber
+    expect(linkColor).toBe(MINT); // the accent on the published link
+    expect(dimColor).not.toBe(linkColor); // scaffolding recedes — never the accent
   });
 
-  test("keeps a single h1: the claim, not the wordmark", async ({ page }) => {
+  test("keeps a single h1: the claim, not the logo", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("h1")).toHaveCount(1);
     await expect(page.locator("h1")).toHaveClass(/claim/);
-    await expect(page.locator("h1")).toContainText("ten seconds");
-    // the wordmark is a plain home link now
-    await expect(page.locator(".wordmark")).toHaveAttribute("href", "/");
+    await expect(page.locator("h1")).toContainText("one command");
+    await expect(page.locator(".site-nav .logo")).toHaveAttribute("href", "/");
   });
 
-  test("the footer is a labelled quick reference", async ({ page }) => {
+  test("the sky is decoration: hidden from assistive tech, never in the way of a click", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const canvas = page.locator(".hero-canvas");
+    // no WebGPU (or a failed start) removes the canvas and leaves the CSS glow; either way is fine
+    if ((await canvas.count()) === 1) {
+      await expect(canvas).toHaveAttribute("aria-hidden", "true");
+      expect(await canvas.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe("none");
+    }
+    await expect(page.locator(".hero .claim")).toBeVisible();
+  });
+
+  test("the nav carries the install command only once the hero's has scrolled away", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const navCmd = page.locator(".site-nav .nav-cmd .install");
+    await expect(navCmd).toBeHidden();
+    await page.locator(".site-foot").scrollIntoViewIfNeeded();
+    await expect(navCmd).toBeVisible();
+    await expect(navCmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(navCmd).toBeHidden();
+  });
+
+  test("the footer links the API contract and the privacy page", async ({ page }) => {
     await page.goto("/");
     const foot = page.locator(".site-foot");
-    await expect(foot.locator(".foot-h")).toContainText("Reference");
-    await expect(foot).toContainText("json"); // the data-row note is filled in
-    await expect(foot).toContainText("code + issues"); // the source-row note
-    // The data-row note links the API contract doc — a consumer who discovers the API from a
-    // profile page needs a path to the contract, not just the URL shape.
-    const docLink = foot.locator(
-      'a[href="https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md"]',
-    );
-    await expect(docLink).toContainText("json");
+    // a consumer who discovers the API from a page needs a path to the contract
+    await expect(
+      foot.locator('a[href="https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md"]'),
+    ).toHaveText("API docs");
+    await expect(foot.locator('a[href="/privacy"]')).toHaveText("Privacy");
   });
 });
 
@@ -374,19 +481,18 @@ test.describe("privacy page", () => {
     await expect(page.locator(".doc h2").first()).toHaveText("What the server stores");
   });
 
-  test("keeps the // section mark out of each heading's accessible name", async ({ page }) => {
-    // toHaveText reads textContent, which never includes ::before, so only the role name sees
-    // the mark: without its empty alt text, a screen reader reads "slash slash" before every h2
+  test("each section heading's accessible name is its plain text", async ({ page }) => {
+    // a decorative mark added in CSS (::before) would land in the role name, not in textContent
     await page.goto("/privacy");
     await expect(
       page.getByRole("heading", { level: 2, name: "What the server stores", exact: true }),
     ).toHaveCount(1);
   });
 
-  test("the landing's reference footer links it", async ({ page }) => {
+  test("the site footer links it", async ({ page }) => {
     await page.goto("/");
     const link = page.locator('.site-foot a[href="/privacy"]');
-    await expect(link).toHaveText("ymmv.fyi/privacy");
+    await expect(link).toHaveText("Privacy");
     await link.click();
     await expect(page).toHaveURL(/\/privacy$/);
     await expect(page.locator(".url h1.handle")).toHaveText("privacy");
@@ -430,7 +536,7 @@ test.describe("privacy page", () => {
     // characters with no hyphen to break at
     await page.setViewportSize({ width: 320, height: 640 });
     await page.goto("/longhandlewithnohyphenstobreakatanywher/vs/bardisty");
-    await expect(page.locator(".diff-foot")).toContainText(
+    await expect(page.locator(".diff-counts")).toContainText(
       "1 only longhandlewithnohyphenstobreakatanywher",
     );
     const overflow = await page.evaluate(
@@ -652,10 +758,10 @@ test.describe("routing", () => {
     const html = await page.goto("/404");
     expect(html?.status()).toBe(404);
     expect(html?.headers()["cache-control"]).toContain("s-maxage=10");
-    // The generic not-found page, never the session readout a live profile renders.
+    // The generic not-found page, never the stack a live profile renders.
     await expect(page.locator("p.empty-msg")).toContainText("no page here.");
     await expect(page).toHaveTitle("ymmv.fyi/404");
-    await expect(page.locator(".readout")).toHaveCount(0);
+    await expect(page.locator("table.stack")).toHaveCount(0);
     await expect(page.locator("body")).not.toContainText("Neovim");
 
     const json = await request.get("/api/v1/u/404", { maxRedirects: 0 });
@@ -690,153 +796,29 @@ test.describe("routing", () => {
   });
 });
 
-test.describe("themes (dark-primary + light)", () => {
-  // the browser-UI color mirror (mobile toolbar/overscroll) — asserted alongside data-theme
-  const themeColor = (page: Page) =>
-    page.evaluate(() =>
-      document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
-    );
-  // two same-context tabs on /antfu under a dark system preference — the cross-tab fixtures
-  // (pages close with the per-test context; no explicit cleanup needed)
-  async function openTwoTabs(context: BrowserContext): Promise<[Page, Page]> {
-    const a = await context.newPage();
-    const b = await context.newPage();
-    await a.emulateMedia({ colorScheme: "dark" });
-    await b.emulateMedia({ colorScheme: "dark" });
-    await a.goto("/antfu");
-    await b.goto("/antfu");
-    return [a, b];
-  }
-
-  test("honors prefers-color-scheme: dark", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.goto("/antfu");
-    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bg).toBe("rgb(14, 12, 9)");
-  });
-
-  test("honors prefers-color-scheme: light", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "light" });
-    await page.goto("/antfu");
-    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    expect(bg).toBe("rgb(246, 243, 234)");
-    // the dark-band fix itself: the html canvas (painted past a short body on mobile
-    // overscroll) must follow the theme, not just the body
-    const htmlBg = await page.evaluate(
-      () => getComputedStyle(document.documentElement).backgroundColor,
-    );
-    expect(htmlBg).toBe("rgb(246, 243, 234)");
-    // the no-FOUC head script must set the browser-UI color pre-paint, not just the click path
-    const metaColor = await page.evaluate(() =>
-      document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
-    );
-    expect(metaColor).toBe("#f6f3ea");
-  });
-
-  test("the toggle flips and persists the theme", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.goto("/antfu");
-    await page.click("#theme-toggle");
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    // poll past the 0.3s background transition until it settles on the light token
-    await expect
-      .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
-      .toBe("rgb(246, 243, 234)");
-    const stored = await page.evaluate(() => localStorage.getItem("ymmv-theme"));
-    expect(stored).toBe("light");
-    // the browser-UI color (mobile toolbar/overscroll canvas) follows the toggle
-    const metaColor = await page.evaluate(() =>
-      document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
-    );
-    expect(metaColor).toBe("#f6f3ea");
-    // and back to dark — the sync reads the computed --bg token, both directions must hold
-    await page.click("#theme-toggle");
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
+test.describe("dark only", () => {
+  for (const colorScheme of ["dark", "light"] as const) {
+    test(`stays dark under prefers-color-scheme: ${colorScheme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme });
+      await page.goto("/antfu");
+      expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(BG);
+      // the html canvas (painted past a short body on mobile overscroll) matches the body
+      expect(
+        await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor),
+      ).toBe(BG);
+      // and the browser UI color is the same bg
+      expect(
+        await page.evaluate(() =>
           document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
         ),
-      )
-      .toBe("#0e0c09");
-    // stored choice must beat the system preference on the next pre-paint load
-    await page.emulateMedia({ colorScheme: "light" });
-    await page.reload();
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    const metaReload = await page.evaluate(() =>
-      document.querySelector('meta[name="theme-color"]')?.getAttribute("content"),
-    );
-    expect(metaReload).toBe("#0e0c09");
-  });
-
-  test("a toggle in one tab resyncs another open tab (cross-tab storage)", async ({ context }) => {
-    const [a, b] = await openTwoTabs(context);
-    await expect(a.locator("html")).toHaveAttribute("data-theme", "dark");
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
-    // toggle in A → B follows via the storage listener: data-theme, the toggle state, and the
-    // browser-UI color all flip in the tab that never received the click.
-    await a.click("#theme-toggle");
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
-    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
-    await expect.poll(() => themeColor(b)).toBe("#f6f3ea");
-  });
-
-  test("clearing the stored theme in one tab reverts another to the system preference", async ({
-    context,
-  }) => {
-    const [a, b] = await openTwoTabs(context);
-    await a.click("#theme-toggle"); // store an explicit light choice; B follows it cross-tab
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
-    // remove the stored choice in A → B's storage listener sees newValue null and falls back to system
-    await a.evaluate(() => localStorage.removeItem("ymmv-theme"));
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
-    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "false");
-  });
-
-  test("localStorage.clear() in one tab also reverts another to the system preference", async ({
-    context,
-  }) => {
-    const [a, b] = await openTwoTabs(context);
-    await a.click("#theme-toggle");
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "light");
-    // clear() fires storage with key null — the listener must treat that as a wiped choice too
-    await a.evaluate(() => localStorage.clear());
-    await expect(b.locator("html")).toHaveAttribute("data-theme", "dark");
-    await expect(b.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "false");
-  });
-
-  test("re-applies the theme on a BFCache restore (synthetic pageshow)", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
-    await page.goto("/antfu");
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    // A real back-forward restore never re-runs the pre-paint script, so a choice stored after
-    // this page painted leaves it stale. The pageshow(persisted) path must re-resolve all three.
-    await page.evaluate(() => {
-      localStorage.setItem("ymmv-theme", "light");
-      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      ).toBe("#050607");
     });
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    await expect(page.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
-    expect(await themeColor(page)).toBe("#f6f3ea");
-  });
+  }
 
-  test("a live system-preference change moves the theme only with no stored choice", async ({
-    page,
-  }) => {
-    // Regression on the simplified matchMedia change callback (it had no coverage before).
-    await page.emulateMedia({ colorScheme: "dark" });
+  test("has no theme toggle and keeps no theme choice", async ({ page }) => {
     await page.goto("/antfu");
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    // no stored choice → a live system flip to light is followed
-    await page.emulateMedia({ colorScheme: "light" });
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-    await expect(page.locator("#theme-toggle")).toHaveAttribute("aria-pressed", "true");
-    // store an explicit light choice, then flip the system to dark — the stored choice must win
-    await page.evaluate(() => localStorage.setItem("ymmv-theme", "light"));
-    await page.emulateMedia({ colorScheme: "dark" });
-    // positive propagation signal (not a fixed sleep): the media flip has reached the page —
-    // any (erroneous) change handler has therefore fired — before the negative assertion
-    await page.waitForFunction(() => matchMedia("(prefers-color-scheme: dark)").matches);
-    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.locator("#theme-toggle")).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("ymmv-theme"))).toBeNull();
   });
 });
 
@@ -847,7 +829,7 @@ test.describe("install command (progressive copy button)", () => {
   }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/antfu");
-    const install = page.locator(".session > .cmdline .install");
+    const install = page.locator(".view-cmd .install");
     await expect(install).toHaveAttribute("role", "button");
     await expect(install).toHaveAttribute("tabindex", "0");
     await expect(install).toHaveAttribute("aria-label", "Copy command: npx ymmv-cli@latest antfu");
@@ -873,7 +855,7 @@ test.describe("install command (progressive copy button)", () => {
     expect(
       await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),
     ).toBe(true);
-    const install = page.locator(".session > .cmdline .install");
+    const install = page.locator(".view-cmd .install");
     await install.focus();
     const before = await page.evaluate(() => window.scrollY);
     await page.keyboard.press("Space");
@@ -897,7 +879,7 @@ test.describe("install command (progressive copy button)", () => {
     page,
   }) => {
     await page.goto("/antfu");
-    const install = page.locator(".session > .cmdline .install");
+    const install = page.locator(".view-cmd .install");
     await install.focus();
     await page.keyboard.press("Tab");
     // a broadened preventDefault gate in the keydown handler would trap Tab on the control
@@ -906,7 +888,7 @@ test.describe("install command (progressive copy button)", () => {
 
   test("announces a failure when the clipboard write is denied", async ({ page }) => {
     await page.goto("/antfu");
-    const install = page.locator(".session > .cmdline .install");
+    const install = page.locator(".view-cmd .install");
     await expect(install).toHaveAttribute("role", "button"); // wired before we break the write
     // policy-denied clipboard (NotAllowedError): the promoted control must not silently no-op
     await page.evaluate(() => {
@@ -921,20 +903,16 @@ test.describe("install command (progressive copy button)", () => {
   });
 });
 
-test.describe("diff form without JS", () => {
+test.describe("compare form without JS", () => {
   test.use({ javaScriptEnabled: false });
-  test("a bad ?you= renders the profile with the hint visible, never echoing the input", async ({
+  test("a bad ?you= renders the profile with the error showing, never echoing the input", async ({
     page,
   }) => {
     const res = await page.goto(`/antfu?you=${encodeURIComponent("zqxzqx<b>")}`);
     expect(res?.status()).toBe(200);
-    // the <noscript> rule hides the form itself; the hint sits outside it and stays visible
-    await expect(page.locator("#diff-hint")).toBeVisible();
-    await expect(page.locator("#diff-hint")).toHaveText(YOU_HINT);
-    // the hint explains the <you> of the noscript line standing in for the form, so it sits below
-    const cta = await page.locator(".term-foot .cta").boundingBox();
-    const hint = await page.locator("#diff-hint").boundingBox();
-    expect(cta && hint && hint.y > cta.y).toBe(true);
+    await expect(page.locator("#compare-msg")).toBeVisible();
+    await expect(page.locator("#compare-msg")).toHaveText(YOU_HINT);
+    await expect(page.locator("#compare-you")).toHaveAttribute("aria-invalid", "true");
     expect(await res?.text()).not.toContain("zqxzqx");
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
       "href",
@@ -942,7 +920,14 @@ test.describe("diff form without JS", () => {
     );
     // a plain visit shows nothing
     await page.goto("/antfu");
-    await expect(page.locator("#diff-hint")).toHaveText("");
+    await expect(page.locator("#compare-msg")).toHaveText("");
+  });
+
+  test("a valid handle submits natively to the full diff", async ({ page }) => {
+    await page.goto("/antfu");
+    await page.fill("#compare-you", "bardisty");
+    await page.click(".compare-btn");
+    await expect(page).toHaveURL(/\/antfu\/vs\/bardisty$/);
   });
 });
 
@@ -950,7 +935,7 @@ test.describe("install command without JS", () => {
   test.use({ javaScriptEnabled: false });
   test("stays plain selectable text with no dead control", async ({ page }) => {
     await page.goto("/antfu");
-    const install = page.locator(".session > .cmdline .install");
+    const install = page.locator(".view-cmd .install");
     await expect(install).toBeVisible();
     await expect(install).toContainText("npx ymmv-cli@latest antfu");
     // a SPAN, not a native <button> — a button revert would pass the null-attribute checks
@@ -962,53 +947,63 @@ test.describe("install command without JS", () => {
   });
 });
 
-test.describe("the 3-column diff", () => {
-  test("counts differences and spends amber only on real differences", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "dark" });
+test.describe("the diff page", () => {
+  test("counts differences and spends the accent only on real differences", async ({ page }) => {
     const res = await page.goto("/antfu/vs/bardisty");
     // both sides live → the long-lived edge policy (the nudge test pins the short side)
     expect(res?.headers()["cache-control"]).toContain("s-maxage=30");
     // 13-key taxonomy: theme + version-manager differ, prompt shared, and dotfiles is antfu's
     // alone, counted apart (seed.sql arithmetic)
-    const counts = page.locator(".diff-foot > span:not(.diff-map)");
+    const counts = page.locator(".diff-counts > span");
     await expect(counts).toHaveText(["7 differ", "5 shared", "1 only antfu"]);
+    // rows keep the taxonomy order (the profile's and the CLI's), never sorted by verdict
+    await expect(page.locator("table.diff tbody th").first()).toContainText("Editor");
+    await expect(page.locator("table.diff tbody th").nth(1)).toContainText("OS");
 
-    const changedYours = page.locator("tr.changed .yours").first();
-    const changedTheirs = page.locator("tr.changed .theirs").first();
-    const sameYours = page.locator("tr.same .yours").first();
+    const changedYours = page.locator("tr.d .mine").first();
+    const changedTheirs = page.locator("tr.d .theirs").first();
+    const sameYours = page.locator("tr.s .mine").first();
     const changedColor = await changedYours.evaluate((el) => getComputedStyle(el).color);
     const theirsColor = await changedTheirs.evaluate((el) => getComputedStyle(el).color);
     const sameColor = await sameYours.evaluate((el) => getComputedStyle(el).color);
-    expect(changedColor).toBe("rgb(255, 171, 46)"); // amber on a difference
-    expect(theirsColor).toBe(changedColor); // a difference is symmetric — both sides amber
-    expect(sameColor).not.toBe(changedColor); // same rows recede — never amber
+    expect(changedColor).toBe(MINT); // the accent on a difference
+    expect(theirsColor).toBe(changedColor); // a difference is symmetric — both sides
+    expect(sameColor).not.toBe(changedColor); // same rows recede — never the accent
 
-    // A field only one side filled in is no difference: a faint dot, the value in ink, no amber.
-    const one = page.locator("tr.one").filter({ hasText: "Dotfiles" });
-    await expect(one.locator(".sr-only")).toHaveText("only antfu:");
-    const oneDot = await one.locator(".dot").evaluate((el) => getComputedStyle(el).backgroundColor);
+    // A field only one side filled in is no difference: a grey dot, a faint value, no accent.
+    const one = page.locator("tr.o").filter({ hasText: "Dotfiles" });
+    await expect(one.locator("th .sr-only")).toHaveText("only antfu:");
+    const oneDot = await one
+      .locator(".diff-dot")
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
     const oneValue = await one.locator(".theirs").evaluate((el) => getComputedStyle(el).color);
     const changedDot = await page
-      .locator("tr.changed .dot")
+      .locator("tr.d .diff-dot")
       .first()
       .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(changedDot).toBe(MINT);
     expect(oneDot).not.toBe(changedDot);
     expect(oneValue).not.toBe(changedColor);
-    expect(await one.locator(".dot").evaluate((el) => getComputedStyle(el).visibility)).toBe(
+    expect(await one.locator(".diff-dot").evaluate((el) => getComputedStyle(el).visibility)).toBe(
       "visible",
     );
-    // The minimap speaks the CLI's gutter: ~ differ, = same, ? one side only, in row order.
-    await expect(page.locator(".diff-map")).toHaveText(/^[~=?]{13}$/);
-    await expect(page.locator(".diff-map .one")).toHaveText("?");
+    // a shared row shows no dot: presence, not hue, marks the other two (WCAG 1.4.1)
+    expect(
+      await page
+        .locator("tr.s .diff-dot")
+        .first()
+        .evaluate((el) => getComputedStyle(el).visibility),
+    ).toBe("hidden");
+    // the missing side reads "not set" to a screen reader, never "dash"
+    await expect(one.locator(".mine .sr-only")).toHaveText("not set");
+    await expect(one.locator(".mine .diff-missing")).toHaveAttribute("aria-hidden", "true");
   });
 
   test("links both handles, offers a swap, and lists extras uncompared", async ({ page }) => {
     await page.goto("/antfu/vs/bardisty");
     await expect(page).toHaveTitle("ymmv.fyi/antfu/vs/bardisty"); // URL-as-title, pinned exactly
-    // the Session decision (2026-08-24): no live document wears a plate — the diff is bare too
-    await expect(page.locator(".sheet")).toHaveCount(0);
-    // and it opens with the command that produced it: the CLI's `<a> vs <b>`, theirs first
-    const cmd = page.locator(".session > .cmdline .install");
+    // the command that produced it sits under the h1: the CLI's `<a> vs <b>`, theirs first
+    const cmd = page.locator(".diff-cmd .install");
     await expect(cmd).toHaveText("$ npx ymmv-cli@latest antfu vs bardisty");
     await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest antfu vs bardisty");
     // the copy control names what it copies; this command compares, it installs nothing
@@ -1016,15 +1011,25 @@ test.describe("the 3-column diff", () => {
       "aria-label",
       "Copy command: npx ymmv-cli@latest antfu vs bardisty",
     );
-    await expect(page.locator("h1.url a").first()).toHaveAttribute("href", "/antfu");
-    await expect(page.locator("h1.url a").nth(1)).toHaveAttribute("href", "/bardisty");
-    await expect(page.locator(".foot a")).toHaveAttribute("href", "/bardisty/vs/antfu");
-    // extras render dimmed + uncounted below the table (free labels don't diff)
-    const extras = page.locator("table.extras-dim");
-    await expect(extras).toContainText("Keyboard = HHKB Pro 2");
-    await expect(extras).toContainText("Launcher = Raycast");
+    await expect(page.locator("h1.diff-h")).toHaveText("how antfu differs from bardisty");
+    await expect(page.locator("h1.diff-h a").first()).toHaveAttribute("href", "/antfu");
+    await expect(page.locator("h1.diff-h a").nth(1)).toHaveAttribute("href", "/bardisty");
+    await expect(page.locator(".diff-counts a")).toHaveAttribute("href", "/bardisty/vs/antfu");
+    await expect(page.locator(".diff-counts a")).toHaveText("Swap sides");
+    // the table is named by the h1
+    await expect(page.locator("table.diff")).toHaveAttribute("aria-labelledby", "diff-h");
+    // extras render dimmed + uncounted below the table, grouped by owner (free labels don't diff)
+    const extras = page.locator(".diff-extras");
+    await expect(extras.locator(".diff-x-who")).toHaveText(["antfu", "bardisty"]);
+    const keyboard = extras.locator(".diff-x-row").filter({ hasText: "Keyboard" });
+    await expect(keyboard.locator("dd")).toHaveText("HHKB Pro 2");
+    await expect(extras.locator(".diff-x").nth(1)).toContainText("Launcher");
+    await expect(extras.locator(".diff-x").nth(1)).toContainText("Raycast");
+    expect(
+      await extras.evaluate((el) => getComputedStyle(el.querySelector("dd") as Element).color),
+    ).not.toBe(MINT);
     // diff cells strip the https scheme for display but keep the full URL in the title
-    const urlSpan = page.locator('tr.one .theirs span[title^="https://"]').first();
+    const urlSpan = page.locator('tr.o .theirs span[title^="https://"]').first();
     await expect(urlSpan).toHaveText(/^github\.com\/antfu/);
     await expect(urlSpan).toHaveAttribute(
       "title",
@@ -1035,37 +1040,38 @@ test.describe("the 3-column diff", () => {
   test("a narrow screen keeps the longest one-word label on one line, level with its values", async ({
     page,
   }) => {
-    // 375 is the iPhone SE/mini width where "Multiplexer" used to break mid-word and drop a line
-    // below its own values; 320 is the WCAG reflow width. 431 and 480 sit above the phone
-    // breakpoint, where a 26% label column is still narrower than the word (it clears it at 540).
-    for (const width of [320, 375, 431, 480]) {
+    // 320 is the WCAG reflow width and 375 the iPhone SE/mini; 401 sits just above the breakpoint
+    // where the label column switches from a length back to 30%.
+    for (const width of [320, 375, 401, 480]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/antfu/vs/bardisty");
       // measure the self-hosted mono, not the metric-matched fallback it swaps in for
       await page.evaluate(() => document.fonts.ready);
       const row = page.locator("table.diff tbody tr").filter({ hasText: "Multiplexer" });
       const layout = await row.evaluate((tr) => {
-        const k = tr.querySelector("th.k") as HTMLElement;
+        const k = tr.querySelector("th.diff-k") as HTMLElement;
         const text = [...k.childNodes].find(
           (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim(),
         );
         const range = document.createRange();
         range.selectNodeContents(text as Node);
         const value = tr.querySelector("td.theirs span") as HTMLElement;
+        // the label (14px) and the value (15-17px) share a baseline, so their bottoms sit within
+        // the larger face's extra descent of each other
         return {
           lines: range.getClientRects().length,
-          topDelta: range.getBoundingClientRect().top - value.getBoundingClientRect().top,
+          bottomDelta: range.getBoundingClientRect().bottom - value.getBoundingClientRect().bottom,
         };
       });
       expect(layout.lines, `at ${width}px`).toBe(1);
-      expect(Math.abs(layout.topDelta), `at ${width}px`).toBeLessThan(1);
+      expect(Math.abs(layout.bottomDelta), `at ${width}px`).toBeLessThan(4);
     }
   });
 
   test("the label column never pushes the diff past the page", async ({ page }) => {
-    // 431 to 539 is where the label column is a length, not 26%: sized value columns beside it
-    // would add up to more than the table and scroll the page sideways
-    for (const width of [431, 480, 533]) {
+    // under 400px the label column is a length, not 30%: sized value columns beside it would add
+    // up to more than the table and scroll the page sideways
+    for (const width of [320, 360, 400, 480]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/antfu/vs/bardisty");
       await page.evaluate(() => document.fonts.ready);
@@ -1083,8 +1089,7 @@ test.describe("the 3-column diff", () => {
   });
 
   test("extras values start on the diff's value edge at every width", async ({ page }) => {
-    // rendered text edges, not CSS widths: the diff's label cell carries the dot's indent and the
-    // extras' handle cell doesn't
+    // rendered text edges, not CSS widths: both read --diff-label, at 30% and at the phone length
     for (const width of [320, 375, 480, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto("/antfu/vs/bardisty");
@@ -1097,7 +1102,7 @@ test.describe("the 3-column diff", () => {
         };
         return {
           diff: textLeft(document.querySelector("table.diff tbody td.theirs") as Element),
-          extras: textLeft(document.querySelector("table.extras-dim td.v") as Element),
+          extras: textLeft(document.querySelector(".diff-x-row dd") as Element),
         };
       });
       expect(Math.abs(edges.diff - edges.extras), `at ${width}px`).toBeLessThanOrEqual(1);
@@ -1113,7 +1118,7 @@ test.describe("the 3-column diff", () => {
       await page.goto("/antfu/vs/bardisty");
       await page.evaluate(() => document.fonts.ready);
       // a word broken across lines has more than one client rect
-      const broken = await page.locator("table.extras-dim").evaluate((table, list) => {
+      const broken = await page.locator(".diff-extras").evaluate((table, list) => {
         const found: string[] = [];
         const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT);
         while (walker.nextNode()) {
@@ -1133,7 +1138,7 @@ test.describe("the 3-column diff", () => {
       expect(broken, `at ${width}px`).toEqual([]);
       // the break points are <wbr>s: the link's text is still the one unbroken string
       await expect(
-        page.locator('table.extras-dim a[href="https://github.com/antfu/dotfiles"]'),
+        page.locator('.diff-extras a[href="https://github.com/antfu/dotfiles"]'),
       ).toHaveText("github.com/antfu/dotfiles");
     }
   });
@@ -1188,7 +1193,7 @@ test.describe("the 3-column diff", () => {
 
   test("the command follows the pair's order and copies the stored handles", async ({ page }) => {
     await page.goto("/bardisty/vs/antfu");
-    const cmd = page.locator(".session > .cmdline .install");
+    const cmd = page.locator(".diff-cmd .install");
     await expect(cmd).toHaveAttribute("data-copy", "npx ymmv-cli@latest bardisty vs antfu");
     // the viewer segment resolves case-insensitively without a redirect: the copied command
     // carries the stored handle, never the raw URL segment
@@ -1203,11 +1208,11 @@ test.describe("the 3-column diff", () => {
     // verbatim-compared, so the row differs; stripping would display two identical values,
     // and the collide guard must render both raw instead
     await page.goto("/plainuser/vs/collide");
-    await expect(page.locator(".foot")).toContainText("2 differ"); // dotfiles + the bidi shell row
-    await expect(page.locator(".foot")).toContainText("2 shared");
-    const dotfiles = page.locator("tr.changed").filter({ hasText: "dotfiles" });
+    await expect(page.locator(".diff-counts")).toContainText("2 differ"); // dotfiles + the bidi shell row
+    await expect(page.locator(".diff-counts")).toContainText("2 shared");
+    const dotfiles = page.locator("tr.d").filter({ hasText: "dotfiles" });
     await expect(dotfiles.locator(".theirs")).toHaveText("github.com/plain/dots");
-    await expect(dotfiles.locator(".yours")).toHaveText("https://github.com/plain/dots");
+    await expect(dotfiles.locator(".mine")).toHaveText("https://github.com/plain/dots");
   });
 
   test("a bidi-only difference renders a visible U+FFFD marker, never two equal strings", async ({
@@ -1216,15 +1221,28 @@ test.describe("the 3-column diff", () => {
     // plainuser: "zsh" vs collide: "zsh" + U+202E — stripping alone would show "zsh" twice on a
     // "differs" row, so the bidi collide rung marks the control instead
     await page.goto("/plainuser/vs/collide");
-    const shell = page.locator("tr.changed").filter({ hasText: "shell" });
+    const shell = page.locator("tr.d").filter({ hasText: "shell" });
     await expect(shell.locator(".theirs")).toHaveText("zsh");
-    await expect(shell.locator(".yours")).toHaveText(`zsh${String.fromCodePoint(0xfffd)}`);
+    await expect(shell.locator(".mine")).toHaveText(`zsh${String.fromCodePoint(0xfffd)}`);
   });
 
   test("nudges to publish when the viewer has no profile", async ({ page }) => {
     const res = await page.goto("/antfu/vs/ghostviewer");
-    await expect(page.locator(".nudge")).toContainText("Publish yours to diff");
+    const nudge = page.locator(".nudge");
+    await expect(nudge.locator(".nudge-h")).toHaveText("No ymmv profile for ghostviewer yet.");
+    await expect(nudge).toContainText(
+      "If that’s you, publish yours and this page becomes the diff.",
+    );
+    // the call to action is the command itself, the way to make this page a diff
+    await expect(nudge.locator(".install")).toHaveAttribute("data-copy", "npx ymmv-cli@latest");
     await expect(page.locator("h1.handle")).toContainText("antfu"); // still shows the viewed profile
+    // the reason there's no diff comes first: the nudge sits above the profile
+    const order = await page.evaluate(() => {
+      const n = document.querySelector(".nudge") as Element;
+      const h = document.querySelector("h1.handle") as Element;
+      return n.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING;
+    });
+    expect(order).toBeTruthy();
     // the nudge must stay short-cached like a 404 — the viewer may publish seconds later
     expect(res?.headers()["cache-control"]).toContain("s-maxage=10");
     // a transient 200 state: never canonical, never indexed (junk viewer segments must not
@@ -1240,23 +1258,42 @@ test.describe("the 3-column diff", () => {
       throw new Error("a script in a diff extra executed");
     });
     await page.goto("/antfu/vs/xsstest");
-    await expect(page.locator("table.extras-dim")).toContainText("Bio <script>alert(1)</script>");
+    await expect(page.locator(".diff-extras")).toContainText("Bio <script>alert(1)</script>");
     expect(await page.locator('a[href^="javascript:"]').count()).toBe(0);
+  });
+
+  test("says there's nothing to compare when neither side has a stack", async ({ page }) => {
+    // seed.sql: extrasonly has one extra and no stack rows, blankslate has neither
+    await page.goto("/extrasonly/vs/blankslate");
+    await expect(page.locator("h1.diff-h")).toHaveText("how extrasonly differs from blankslate");
+    await expect(page.locator(".diff-empty")).toHaveText(
+      "Neither extrasonly nor blankslate has published a stack yet, so there’s nothing to compare.",
+    );
+    // no empty table, no "0 differ / 0 shared" counts, no swap to an equally empty page
+    await expect(page.locator("table.diff")).toHaveCount(0);
+    await expect(page.locator(".diff-counts")).toHaveCount(0);
+    // the command still copies, and the extras still render under the message
+    await expect(page.locator(".diff-cmd .install")).toHaveAttribute(
+      "data-copy",
+      "npx ymmv-cli@latest extrasonly vs blankslate",
+    );
+    await expect(page.locator(".diff-x-who")).toHaveText(["extrasonly"]);
+    await expect(page.locator(".diff-x-row dd")).toHaveText("Corne v4");
   });
 
   test("omits the extras block entirely when neither side has extras", async ({ page }) => {
     await page.goto("/plainuser/vs/plainuser");
-    await expect(page.locator(".foot")).toContainText("0 differ");
-    expect(await page.locator("table.extras-dim").count()).toBe(0);
+    await expect(page.locator(".diff-counts")).toContainText("0 differ");
+    expect(await page.locator(".diff-extras").count()).toBe(0);
   });
 
   test("a self-diff lists each extra once, under the one handle", async ({ page }) => {
     // Both sides are the same profile: listing each side's extras would print every one twice.
     await page.goto("/antfu/vs/antfu");
-    const rows = page.locator("table.extras-dim tr");
+    await expect(page.locator(".diff-x-who")).toHaveText(["antfu"]);
+    const rows = page.locator(".diff-x-row");
     await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: "Keyboard = HHKB Pro 2" })).toHaveCount(1);
-    await expect(rows.locator("th")).toHaveText(["antfu", "antfu"]);
+    await expect(rows.filter({ hasText: "HHKB Pro 2" })).toHaveCount(1);
   });
 
   test("301s a renamed viewed-handle to the canonical diff URL (preserves the viewer)", async ({
@@ -1300,9 +1337,9 @@ test.describe("the 3-column diff", () => {
     const res = await page.goto("/antfu/vs/nobody");
     expect(res?.status()).toBe(200);
     expect(page.url()).toMatch(/\/antfu\/vs\/nobody$/);
-    await expect(page.locator(".nudge")).toContainText("Publish yours to diff");
+    await expect(page.locator(".nudge")).toContainText("No ymmv profile for nobody yet.");
     // the nudge is the profile page: `antfu vs nobody` would fail, so no `vs` in its command
-    await expect(page.locator(".session > .cmdline .install")).toHaveAttribute(
+    await expect(page.locator(".view-cmd .install")).toHaveAttribute(
       "data-copy",
       "npx ymmv-cli@latest antfu",
     );
@@ -1346,8 +1383,10 @@ test.describe("long values + safety", () => {
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBeLessThanOrEqual(1); // no horizontal scrollbar => it wrapped
-    // the slash break points are the diff page's alone: a profile link stays one plain string
-    expect(await page.locator("wbr").count()).toBe(0);
+    // it breaks only at its slashes (<wbr>s), and still reads, and copies, as one unbroken string
+    expect(await link.evaluate((a) => a.textContent)).toBe(
+      "github.com/antfu/dotfiles-but-with-a-very-long-path/blob/main/config",
+    );
   });
 
   test("external profile links carry rel=noreferrer (no Referer leak to the destination)", async ({
@@ -1381,7 +1420,7 @@ test.describe("bidi controls (Trojan-Source spoofing)", () => {
     page,
   }) => {
     await page.goto("/xsstest");
-    const text = await page.locator(".session").innerText();
+    const text = await page.locator(".profile").innerText();
     expect(text).not.toMatch(BIDI);
     expect(text).toContain("zshevil");
     expect(text).toContain("Bidilabel");
@@ -1397,9 +1436,9 @@ test.describe("bidi controls (Trojan-Source spoofing)", () => {
     page,
   }) => {
     await page.goto("/xsstest");
-    const dd = page.locator("dl.rows dd").filter({ hasText: "https://evil com" });
-    await expect(dd).toHaveCount(1);
-    expect(await dd.locator("a").count()).toBe(0);
+    const cell = page.locator(".profile :is(td, dd)").filter({ hasText: "https://evil com" });
+    await expect(cell).toHaveCount(1);
+    expect(await cell.locator("a").count()).toBe(0);
   });
 
   test("JSON API returns the stored value verbatim (never sanitized)", async ({ request }) => {
@@ -1412,9 +1451,9 @@ test.describe("bidi controls (Trojan-Source spoofing)", () => {
     await page.goto("/antfu/vs/xsstest");
     const diff = await page.locator("table.diff").innerText();
     expect(diff).not.toMatch(BIDI);
-    const shell = page.locator("tr.changed").filter({ hasText: "shell" });
-    await expect(shell.locator(".yours")).toHaveText("zshevil");
-    const extras = await page.locator("table.extras-dim").innerText();
+    const shell = page.locator("tr.d").filter({ hasText: "shell" });
+    await expect(shell.locator(".mine")).toHaveText("zshevil");
+    const extras = await page.locator(".diff-extras").innerText();
     expect(extras).not.toMatch(BIDI);
     expect(extras).toContain("Bidilabel");
     expect(extras).toContain("https://evil com");
@@ -1447,14 +1486,14 @@ test.describe("bidi controls (Trojan-Source spoofing)", () => {
 });
 
 test.describe("fonts (Astro Fonts API)", () => {
-  test("self-hosts and preloads the three above-the-fold faces", async ({ page, request }) => {
+  test("self-hosts and preloads the two faces", async ({ page, request }) => {
     await page.goto("/antfu");
 
-    // Exactly three preloads: display (Martian Mono variable), mono (IBM Plex Mono 400 latin), serif
-    // (Instrument Serif italic). If a build-time provider fetch degrades a family it emits zero faces
-    // and its preload vanishes, so this count is the tripwire for a silent font-degradation build.
+    // Exactly two preloads: Geist and Geist Mono, latin each. If a build-time provider fetch
+    // degrades a family it emits zero faces and its preload vanishes, so this count is the
+    // tripwire for a silent font-degradation build.
     const preloads = page.locator('link[rel="preload"][as="font"]');
-    await expect(preloads).toHaveCount(3);
+    await expect(preloads).toHaveCount(2);
     const hrefs = await preloads.evaluateAll((ls) => ls.map((l) => l.getAttribute("href") ?? ""));
     expect(hrefs.every((h) => h.startsWith("/_astro/fonts/") && h.endsWith(".woff2"))).toBe(true);
 
@@ -1463,18 +1502,14 @@ test.describe("fonts (Astro Fonts API)", () => {
     expect(font.status()).toBe(200);
     expect(font.headers()["content-type"]).toContain("font/woff2");
 
-    // The Fonts API owns --font-display/-mono/-serif; ymmv.css consumes them. Verify the real families
+    // The Fonts API owns --font-sans/-mono; aurora.css consumes them. Verify the real families
     // are wired (a renamed cssVariable or a dropped <Font> would break this).
     const vars = await page.evaluate(() => {
       const r = getComputedStyle(document.documentElement);
-      return [
-        r.getPropertyValue("--font-display"),
-        r.getPropertyValue("--font-mono"),
-        r.getPropertyValue("--font-serif"),
-      ];
+      return [r.getPropertyValue("--font-sans"), r.getPropertyValue("--font-mono")];
     });
-    expect(vars[0]).toContain("Martian Mono");
-    expect(vars[1]).toContain("IBM Plex Mono");
-    expect(vars[2]).toContain("Instrument Serif");
+    expect(vars[0]).toContain("Geist");
+    expect(vars[0]).not.toContain("Geist Mono");
+    expect(vars[1]).toContain("Geist Mono");
   });
 });

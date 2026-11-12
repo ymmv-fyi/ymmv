@@ -1,7 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
   <title>ymmv</title>
-  <!-- the fork mark: two roads share a line, one diverges (amber on warm ink, per DESIGN.md).
-       No junction dot at icon sizes — it fattens the split into a blob. -->
-  <rect width="32" height="32" fill="#0e0c09" />
-  <path d="M3 21.5h26M10.5 21.5 17.5 11.5H29" fill="none" stroke="#ffab2e" stroke-width="2.4" />
+  <!-- the logo mark (DESIGN.md → Brand): the aurora ramp, light to deep, with one diagonal cut.
+       Mirrors .logo-mark in aurora.css. -->
+  <defs>
+    <linearGradient id="ramp" x1="0.33" y1="0" x2="0.67" y2="1">
+      <stop offset="0" stop-color="#d6ffef" />
+      <stop offset="0.55" stop-color="#3ee6a8" />
+      <stop offset="1" stop-color="#0e4f6b" />
+    </linearGradient>
+    <clipPath id="tile"><rect width="32" height="32" rx="9" /></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="32" height="32" fill="url(#ramp)" />
+    <path d="M34 -2 -2 34" stroke="#050607" stroke-width="3.6" />
+  </g>
 </svg>

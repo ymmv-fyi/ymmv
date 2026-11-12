@@ -1,0 +1,1741 @@
+/*
+ * ymmv.fyi design system: "Aurora". Canonical source: DESIGN.md (repo root).
+ * Geist on near-black, solid hairlines, one white primary action, and one mint accent that marks
+ * only what changed or differs. Dark only.
+ */
+
+:root {
+  /* Font vars (--font-sans, --font-mono) come from Astro's Fonts API; see astro.config.mjs and the
+     <Font> tags in Layout.astro, which also emit metric-matched fallbacks. */
+  --sans: var(--font-sans), system-ui, sans-serif;
+  --mono: var(--font-mono), ui-monospace, monospace;
+
+  /* surfaces, back to front */
+  --bg: #050607; /* = Layout's theme-color meta and the hero palette in src/gpu/aurora-hero.ts */
+  --bg-2: #0a0c0d;
+  --panel: #0c0f10;
+  --term: #070909;
+  /* solid hairlines: alpha borders glow on near-black */
+  --line: #1c2022;
+  --line-2: #2a3033;
+  --line-3: #3d4549;
+  /* text, WCAG contrast on --bg / --panel (computed 2026-11-11): fg 17.3/16.4, fg-2 8.5/8.1,
+     fg-3 5.9/5.6 (the floor for real content), mint 12.6/12.0 */
+  --fg: #ededed;
+  --fg-hi: #ffffff;
+  --fg-2: #a3a9ab;
+  --fg-3: #858c8e;
+  /* on the white primary */
+  --on-light: #0a0a0a;
+  --on-light-2: #5e6568;
+  /* the aurora: the logo mark's ramp and the one accent */
+  --aurora-hi: #d6ffef;
+  --aurora-deep: #0e4f6b;
+  --mint: #3ee6a8; /* what changed or differs. Nothing else. */
+  --mint-ink: #0a7a55; /* the copied check on the white primary */
+  --danger: #ff8a80; /* a form error: 8.9 on --bg, 8.4 on --panel */
+
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-semibold: 600;
+  --z-hero: 1;
+  --z-shot: 2;
+  --z-nav: 20;
+
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --wrap: 1180px;
+  --read: 760px;
+  --gut: max(clamp(20px, 4vw, 40px), env(safe-area-inset-left), env(safe-area-inset-right));
+  --nav-h: 64px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  color-scheme: dark;
+  background: var(--bg);
+}
+
+body {
+  position: relative;
+  /* the small viewport: a short page doesn't scroll by a phone's URL bar */
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* never let the browser fabricate a weight or style the Fonts API didn't ship */
+  font-synthesis: none;
+  overflow-x: clip;
+}
+
+::selection {
+  background: rgb(255 255 255 / 0.18);
+  color: var(--fg-hi);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+ul {
+  list-style: none;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+}
+
+/* a link in running text carries an underline, never the accent. :where() keeps every context at
+   one specificity, so later rules on these links override in source order. */
+:where(.live-link, .stack td, .extras-rows dd, .diff-x-row dd, .doc p, .doc li) a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line-3);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  transition: text-decoration-color 150ms ease;
+}
+/* inline padding: a 44px target without moving the line */
+:where(.live-link, .stack td, .extras-row dd, .diff-x-row dd) a {
+  padding-block: 11px;
+}
+/* the diff's extras values are 15px, so 12px makes the same 44px */
+:where(.diff-x-row dd) a {
+  padding-block: 12px;
+}
+@media (hover: hover) and (pointer: fine) {
+  :where(.live-link, .stack td, .extras-rows dd, .diff-x-row dd, .doc p, .doc li) a:hover {
+    text-decoration-color: var(--fg);
+  }
+}
+
+/* one focus ring for every link and control: neutral, and an outline (the only focus cue that
+   survives forced-colors mode) */
+a:focus-visible,
+button:focus-visible,
+.install[data-copy-ready]:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* controls with their own press scale don't also take the browser's tap flash */
+.install[data-copy-ready],
+.compare-btn,
+.compare-clear {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* visually hidden, but read by screen readers (non-color cue for the diff, etc.) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* the inline arrow glyph (Arrow.astro) rides the copy's baseline */
+.arrow {
+  vertical-align: -0.125em;
+}
+
+/* prompts are scaffolding: a drag-select copies commands, not "$ " */
+.prompt,
+.t-p {
+  user-select: none;
+}
+
+/* ---- site nav ---- */
+.nav-sentinel {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 8px;
+  pointer-events: none;
+}
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
+}
+/* clear at the top of the page; a backdrop only once content scrolls under it */
+.site-nav[data-scrolled] {
+  background: rgb(5 6 7 / 0.72);
+  border-bottom-color: var(--line);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.nav-in {
+  max-width: var(--wrap);
+  height: var(--nav-h);
+  margin: 0 auto;
+  padding: 0 var(--gut);
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-weight: var(--w-semibold);
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+.logo-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background:
+    linear-gradient(135deg, transparent 46%, var(--bg) 46% 54%, transparent 54%),
+    linear-gradient(160deg, var(--aurora-hi), var(--mint) 55%, var(--aurora-deep));
+  pointer-events: none;
+}
+.nav-links {
+  display: flex;
+  gap: 4px;
+  font-size: 14px;
+}
+.nav-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.nav-links a,
+.nav-icon {
+  color: var(--fg-2);
+  padding: 10px 12px;
+  border-radius: 8px;
+  transition: color 150ms ease;
+}
+.nav-r {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nav-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .nav-links a:hover,
+  .nav-icon:hover {
+    color: var(--fg);
+  }
+}
+/* the landing's nav command appears only once the hero's own copy has scrolled away, and takes no
+   space until then */
+.nav-cmd {
+  display: none;
+}
+.site-nav[data-cta-away] .nav-cmd {
+  display: block;
+  animation: show 150ms ease-out;
+}
+@keyframes show {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---- page ---- */
+.page {
+  flex: 1;
+  width: 100%;
+  max-width: var(--read);
+  margin: 0 auto;
+  padding: 48px var(--gut) 0;
+}
+.page-wide {
+  max-width: none;
+  padding: 0;
+}
+
+/* ---- the copyable command (InstallCommand.astro) ----
+   A plain <span> that the Layout script promotes to an ARIA button ([data-copy-ready]). The copy
+   affordance and press/focus feedback appear only once wired, so it is never a dead control. */
+.install {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    scale 150ms var(--ease);
+  touch-action: manipulation;
+}
+.install .prompt {
+  color: var(--fg-3);
+  white-space: pre;
+}
+/* the command is its own flex item so it can shrink and wrap: a 39-char handle's view command
+   must not push a phone sideways */
+.install .cmd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 40px to the eye, 44px to the thumb (sm widens this to its own 44) */
+.install::after {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+}
+.install[data-copy-ready] {
+  gap: 12px;
+  padding-right: 6px;
+  cursor: pointer;
+}
+/* :active covers pointer presses; [data-pressed] mirrors it for keyboard Enter/Space (a
+   role=button span never enters :active from the keyboard) */
+.install[data-copy-ready]:active,
+.install[data-copy-ready][data-pressed] {
+  scale: 0.96;
+}
+@media (hover: hover) and (pointer: fine) {
+  .install[data-copy-ready]:hover {
+    border-color: var(--line-3);
+  }
+}
+/* the copy glyph box, concentric with the command: 40px tall, 6px inset, so 10px - 6px = 4px */
+.copy-hint {
+  display: none;
+}
+.install[data-copy-ready] .copy-hint {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.06);
+}
+.copy-hint .ch {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 150ms ease,
+    scale 150ms var(--ease);
+}
+.copy-hint .ch-idle {
+  color: var(--fg-2);
+}
+.copy-hint .ch-done,
+.install[data-copied] .ch-idle {
+  opacity: 0;
+  scale: 0.6;
+}
+.install[data-copied] .ch-done {
+  opacity: 1;
+  scale: 1;
+}
+/* primary: the page's one white button (the landing's install command) */
+.install.primary {
+  border-color: transparent;
+  background: var(--fg);
+  color: var(--on-light);
+}
+.install.primary .prompt {
+  color: var(--on-light-2);
+}
+.install.primary .copy-hint {
+  background: rgb(0 0 0 / 0.06);
+}
+.install.primary .ch-idle {
+  color: var(--on-light-2);
+}
+.install.primary .ch-done {
+  color: var(--mint-ink);
+}
+@media (hover: hover) and (pointer: fine) {
+  .install.primary[data-copy-ready]:hover {
+    background: var(--fg-hi);
+  }
+}
+.install.primary,
+.install.lg {
+  min-height: 44px;
+}
+.install.primary[data-copy-ready] .copy-hint {
+  width: 32px;
+  height: 32px;
+}
+/* sm (the nav): 34px to the eye, 44px to the thumb; 5px inset, so 8px - 5px = 3px */
+.install.sm {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.install.sm[data-copy-ready] {
+  gap: 10px;
+  padding-right: 5px;
+}
+.install.sm[data-copy-ready] .copy-hint {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+}
+.install.sm::after {
+  content: "";
+  position: absolute;
+  inset: -5px 0;
+}
+/* lg (the closing CTA): 52px tall, 10px inset, so 12px - 10px = 2px */
+.install.lg {
+  min-height: 52px;
+  padding: 0 20px;
+  border-radius: 12px;
+  font-size: 16px;
+}
+.install.lg[data-copy-ready] {
+  padding-right: 10px;
+}
+.install.lg[data-copy-ready] .copy-hint {
+  border-radius: 2px;
+}
+
+/* ---- landing: the hero ---- */
+.hero {
+  position: relative;
+  isolation: isolate;
+  margin-top: calc(-1 * var(--nav-h));
+  min-height: min(860px, 100svh);
+  display: flex;
+  align-items: center;
+  padding: 120px 0 200px;
+  /* no WebGPU: a still glow where the curtains hang */
+  background:
+    radial-gradient(40% 70% at 72% 30%, rgb(34 211 160 / 0.16), transparent 70%),
+    radial-gradient(35% 40% at 88% 90%, rgb(14 79 107 / 0.3), transparent 70%), var(--bg);
+  overflow: hidden;
+}
+.hero-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+/* the sky fades into the page instead of ending on an edge */
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 220px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
+.hero-in {
+  position: relative;
+  z-index: var(--z-hero);
+  width: 100%;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0 var(--gut);
+}
+.claim {
+  max-width: 11.5em;
+  font-weight: var(--w-semibold);
+  font-size: clamp(44px, 6.4vw, 80px);
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+.sub {
+  margin-top: 24px;
+  max-width: 36em;
+  font-size: clamp(17px, 1.4vw, 19px);
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.sub b {
+  color: var(--fg);
+  font-weight: var(--w-medium);
+}
+.ctas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  margin-top: 36px;
+  scroll-margin-top: 120px;
+}
+.live-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.fine {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+/* ---- landing: the product window, rising out of the sky ---- */
+.shot {
+  position: relative;
+  z-index: var(--z-shot);
+  max-width: var(--wrap);
+  margin: -150px auto 0;
+  padding: 0 var(--gut);
+}
+/* one depth cue: the border, plus the one shadow that lifts it off the sky */
+.window {
+  border-radius: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  box-shadow: 0 24px 48px -12px rgb(0 0 0 / 0.7);
+  overflow: hidden;
+}
+/* the bar shares the body's columns, so its divider runs on into the panes */
+.window-bar {
+  display: grid;
+  height: 44px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+.pane-label {
+  display: flex;
+  align-items: center;
+  padding-inline: 24px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--fg-3);
+}
+.pane-label-page {
+  display: none;
+}
+.window-body {
+  display: grid;
+}
+@media (min-width: 900px) {
+  .window-bar,
+  .window-body {
+    grid-template-columns: 1.15fr 1fr;
+  }
+  .pane-label-page {
+    display: flex;
+    padding-inline: 28px;
+    border-left: 1px solid var(--line);
+  }
+}
+/* the transcript (TerminalRun.astro): a static illustration of the real publish flow, copy
+   mirroring the CLI. Real terminals wrap: pre-wrap, so nothing clips on a phone. */
+.term {
+  padding: 24px 24px 28px;
+  background: var(--term);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.term .tl {
+  display: block;
+  min-height: 1.75em;
+}
+.term .type {
+  display: inline-block;
+  vertical-align: top;
+}
+.t-p,
+.t-dim {
+  color: var(--fg-3);
+}
+.t-link,
+.t-a {
+  color: var(--mint);
+}
+.t-k {
+  color: var(--fg-2);
+}
+/* the intro, only while the demo carries data-play (TerminalRun's script: once per session, never
+   under reduced motion). Without it, the server markup is the finished run. */
+.demo[data-play] .term .tl {
+  opacity: 0;
+  animation: run-in 120ms ease-out forwards;
+  animation-delay: calc(var(--t) + 400ms);
+}
+.demo[data-play] .term .type {
+  clip-path: inset(0 100% 0 0);
+  animation: run-type 900ms steps(var(--n, 19)) 400ms forwards;
+}
+@keyframes run-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes run-type {
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+.page-pane {
+  min-width: 0;
+  padding: 24px 28px 28px;
+  border-top: 1px solid var(--line);
+}
+@media (min-width: 900px) {
+  .page-pane {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+}
+
+/* ---- landing: sections ---- */
+.sec {
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: clamp(96px, 11vw, 144px) var(--gut) 0;
+}
+.sec-head {
+  max-width: 620px;
+}
+.h2,
+.end-h {
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+.h2 {
+  font-size: clamp(32px, 4vw, 48px);
+  line-height: 1.08;
+}
+.lead {
+  margin-top: 16px;
+  font-size: 17px;
+  color: var(--fg-2);
+  text-wrap: pretty;
+}
+.textlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-top: 16px;
+  font-weight: var(--w-medium);
+}
+.textlink .arrow {
+  transition: translate 150ms var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .textlink:hover .arrow {
+    translate: 2px 0;
+  }
+}
+
+/* how it works: the hairline grid, with crosshair marks at its outer corners */
+.grid {
+  position: relative;
+  display: grid;
+  margin-top: 56px;
+  /* top and left here; each cell draws its own right and bottom hairline */
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+@media (min-width: 820px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.grid::before,
+.grid::after {
+  content: "";
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  background:
+    linear-gradient(var(--fg-3), var(--fg-3)) center / 1px 100% no-repeat,
+    linear-gradient(var(--fg-3), var(--fg-3)) center / 100% 1px no-repeat;
+  pointer-events: none;
+}
+.grid::before {
+  top: -8px;
+  left: -8px;
+}
+.grid::after {
+  bottom: -8px;
+  right: -8px;
+}
+.cell {
+  min-width: 0;
+  padding: 32px;
+  box-shadow: inset -1px -1px 0 var(--line);
+}
+.h3 {
+  font-weight: var(--w-semibold);
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.p {
+  margin-top: 8px;
+  max-width: 44ch;
+  color: var(--fg-2);
+  font-size: 15px;
+  text-wrap: pretty;
+}
+/* static labels, so a quiet fill instead of a button-like outline */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}
+.chips li {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.chips li::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mint);
+}
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-top: 24px;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+.keys span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg-2);
+  font-size: 12px;
+  color: var(--fg);
+}
+.keys kbd {
+  min-width: 26px;
+  height: 26px;
+  font-size: 13px;
+}
+.mini {
+  margin-top: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--term);
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* text beside a panel */
+.split {
+  display: grid;
+  gap: 48px;
+  align-items: center;
+}
+@media (min-width: 960px) {
+  .split {
+    grid-template-columns: 5fr 7fr;
+    gap: 72px;
+  }
+  .split.flip .sec-head {
+    order: 2;
+  }
+}
+.cmd-ref {
+  display: grid;
+  gap: 8px;
+  margin-top: 28px;
+  font-size: 14px;
+}
+.cmd-ref div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+}
+.cmd-ref dt {
+  width: 72px;
+  color: var(--fg-3);
+}
+.cmd-ref code {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.panel {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.code {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the last line is the brand's */
+.end {
+  max-width: var(--wrap);
+  margin: clamp(120px, 14vw, 192px) auto 0;
+  padding: 0 var(--gut);
+}
+.end-h {
+  font-size: clamp(36px, 5vw, 60px);
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+}
+.end .lead {
+  margin-top: 12px;
+}
+.end .install {
+  margin-top: 32px;
+}
+
+/* ---- the diff (DESIGN.md → Pages → Diff): the profile's compared table, grown into a page ---- */
+/* "how X differs from Y": the CLI's words, connectives recede, the handles lead. 1.2, not 1.1: when
+   the two handle links stack on a phone, each one's hit area stops at its own line. */
+.diff-h {
+  font-size: clamp(32px, 5vw, 48px);
+  font-weight: var(--w-semibold);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+  color: var(--fg-3);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.diff-h b {
+  color: var(--fg);
+  font-weight: inherit;
+}
+.diff-h a {
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.12em;
+  transition: text-decoration-color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .diff-h a:hover {
+    text-decoration-color: var(--fg-3);
+  }
+}
+/* The label column's width, read by the table's head AND the extras grid, so extras values start
+   on the table's value edge. 30% is the split; under 400px it is narrower than "Multiplexer" (the
+   longest one-word label: ~75px of 14px Geist + the dot's 16px + the 16px gutter), so it becomes a
+   length there. 112px is also what 30% comes to at 400px, so nothing jumps at the breakpoint. */
+.diff-page {
+  --diff-label: 30%;
+}
+@media (max-width: 400px) {
+  .diff-page {
+    --diff-label: 112px;
+  }
+}
+.diff-cmd {
+  margin-top: 24px;
+}
+.diff-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 20px;
+  margin-top: 28px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+/* `N only <handle>` carries a handle up to 39 characters with no hyphen: wrap it anywhere */
+.diff-counts > span {
+  overflow-wrap: anywhere;
+}
+.diff-counts b {
+  color: var(--fg);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+}
+.diff-counts a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-block: 11px;
+  color: var(--fg);
+  font-weight: var(--w-medium);
+  text-decoration: underline;
+  text-decoration-color: var(--line-3);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 150ms ease;
+}
+.diff-counts a .arrow {
+  transition: translate 150ms var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .diff-counts a:hover {
+    text-decoration-color: var(--fg);
+  }
+  .diff-counts a:hover .arrow {
+    translate: 2px 0;
+  }
+}
+/* The table: the profile's compared stack (.stack.is-compared), at page size. Fixed layout takes
+   the column widths from the head row: the label column is sized, the two value columns share the
+   rest, and a long handle ellipsizes in its head (the full handle stays in the h1 and the title). */
+.diff {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin-top: 8px;
+}
+table.diff th,
+table.diff td {
+  padding: 15px 16px 15px 0;
+  border-top: 1px solid var(--line);
+  text-align: start;
+  vertical-align: baseline;
+  font-weight: var(--w-regular);
+  overflow-wrap: anywhere;
+}
+table.diff td:last-child {
+  padding-right: 0;
+}
+.diff thead th {
+  border-top: 0;
+  padding-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff thead th:first-child {
+  width: var(--diff-label);
+}
+/* the label carries the dot's space (16px), so a wrapped label hangs under its first word */
+.diff tbody th {
+  padding-left: 16px;
+  text-indent: -16px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.diff tbody td {
+  font-size: 17px;
+  font-weight: var(--w-medium);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.diff-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 10px;
+  border-radius: 50%;
+  vertical-align: 0.15em;
+  background: var(--mint);
+}
+/* presence of the dot and the accent mark a difference (WCAG 1.4.1); shared rows recede by color.
+   The hidden dot keeps its space so every label starts on one edge. */
+.diff tr.s .diff-dot {
+  visibility: hidden;
+}
+/* a row only one side filled in: not a different tool, so no accent; a grey dot, since the row is
+   not a shared one either */
+.diff tr.o .diff-dot {
+  background: var(--fg-3);
+}
+/* the state rules end on the cells' own classes, not th/td, so they never outrank the profile's
+   table rules further down (Biome noDescendingSpecificity) */
+.d > .diff-k {
+  color: var(--fg);
+}
+.d > .diff-v {
+  color: var(--mint);
+}
+.s > .diff-v,
+.o > .diff-v {
+  color: var(--fg-3);
+  font-weight: var(--w-regular);
+}
+.diff-missing {
+  color: var(--fg-3);
+}
+/* three columns on a phone: values step down so a URL breaks at its slashes, not per letter */
+@media (max-width: 600px) {
+  .diff tbody td {
+    font-size: 15px;
+  }
+}
+/* neither side has a stack: said in place of the table, on the table's first rule */
+.diff-empty {
+  margin-top: 28px;
+  padding: 32px 0;
+  border-top: 1px solid var(--line);
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* extras: free labels don't diff, so they sit under the table, grouped by owner, dimmed and a step
+   smaller than the compared values, never in the accent. Values start on the table's value edge. */
+.diff-extras {
+  margin-top: 56px;
+}
+.diff-extras-h {
+  font-size: 16px;
+  font-weight: var(--w-semibold);
+  text-wrap: balance;
+}
+.diff-extras-note {
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.diff-x {
+  margin-top: 20px;
+}
+.diff-x-who {
+  padding-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: var(--w-regular);
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.diff-x-row {
+  display: grid;
+  grid-template-columns: var(--diff-label) minmax(0, 1fr);
+  align-items: baseline;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.diff-x-row dt {
+  padding: 0 16px;
+  font-size: 14px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.diff-x-row dd {
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* the landing preview's honest marker for the rows it leaves out (Profile.astro example) */
+.spec-more {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+/* ---- the profile: the compare is the hero (DESIGN.md → Pages → Profile) ---- */
+.profile-domain {
+  font-size: 15px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.profile-domain a {
+  color: inherit;
+  /* inline padding: a 44px target without moving the line */
+  padding-block: 12.5px;
+  transition: color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .profile-domain a:hover {
+    color: var(--fg);
+  }
+}
+.profile .handle {
+  font-size: clamp(40px, 6.4vw, 60px);
+  font-weight: var(--w-semibold);
+  line-height: 1;
+  letter-spacing: -0.045em;
+  overflow-wrap: anywhere;
+}
+.profile-meta {
+  margin-top: 14px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.profile-empty {
+  margin-top: 32px;
+  padding: 28px 24px;
+  border: 1px dashed var(--line-2);
+  border-radius: 16px;
+}
+.profile-empty-h {
+  font-size: 20px;
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.02em;
+}
+.profile-empty-p {
+  margin-top: 4px;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* the compare form: the page's primary action */
+.compare {
+  margin-top: 32px;
+  padding: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--panel);
+}
+.compare-label {
+  display: block;
+  margin-bottom: 14px;
+  font-size: 20px;
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.compare-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compare-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  /* ≥16px kills iOS Safari's focus auto-zoom */
+  font-size: 16px;
+  transition: border-color 150ms ease;
+}
+.compare-input::placeholder {
+  color: var(--fg-3);
+}
+.compare-input:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+  border-color: var(--line-3);
+}
+.compare-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.compare-btn,
+.compare-clear {
+  flex: none;
+  height: 44px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.compare-btn {
+  /* holds its width through the "Comparing…" label */
+  min-width: 124px;
+  padding: 0 18px;
+  border: 0;
+  background: var(--fg);
+  color: var(--on-light);
+  font-weight: var(--w-medium);
+  transition:
+    background-color 150ms ease,
+    scale 150ms var(--ease);
+}
+.compare-btn[aria-disabled="true"] {
+  cursor: progress;
+  background: var(--fg-2);
+}
+.compare-clear {
+  padding: 0 16px;
+  border: 1px solid var(--line-2);
+  background: none;
+  color: var(--fg-2);
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    scale 150ms var(--ease);
+}
+.compare-btn:not([aria-disabled="true"]):active,
+.compare-clear:active {
+  scale: 0.96;
+}
+@media (hover: hover) and (pointer: fine) {
+  .compare-btn:not([aria-disabled="true"]):hover {
+    background: var(--fg-hi);
+  }
+  .compare-clear:hover {
+    color: var(--fg);
+    border-color: var(--line-3);
+  }
+}
+.compare-clear[hidden] {
+  display: none;
+}
+.compare-msg {
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+.compare-msg:empty {
+  /* not display:none: the live region stays in the tree, so its first message is announced */
+  margin-top: 0;
+}
+/* an error carries three signals: the input's border, an icon, and the text */
+.compare-msg[data-kind="error"] {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--danger);
+}
+.compare-msg[data-kind="error"]::before {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transform: translateY(2px);
+  background: currentColor;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9.5'/%3E%3Cpath d='M12 7.5v5.5M12 16.5v.01'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.compare-miss {
+  margin-top: 12px;
+}
+.compare-miss[hidden] {
+  display: none;
+}
+.compare-result {
+  margin-top: 16px;
+}
+/* the counts and the full-diff link, once compared */
+.compare-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 20px;
+  padding: 12px 0;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.compare-status[hidden] {
+  display: none;
+}
+/* "N only <handle>": a 39-character handle wraps instead of running off a phone */
+.compare-status > span {
+  overflow-wrap: anywhere;
+}
+.compare-status b {
+  color: var(--fg);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+}
+.compare-status a {
+  margin-left: auto;
+  padding-block: 11px;
+  color: var(--fg);
+  font-weight: var(--w-medium);
+  text-decoration: underline;
+  text-decoration-color: var(--line-3);
+  text-underline-offset: 3px;
+}
+.compare-status a .arrow {
+  margin-left: 6px;
+  transition: translate 150ms var(--ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  .compare-status a:hover .arrow {
+    translate: 2px 0;
+  }
+}
+/* the stack: on its own it takes full weight (17px values in ink); compared, it gains a column */
+.stack {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+table.stack th,
+table.stack td {
+  padding: 15px 16px 15px 0;
+  border-top: 1px solid var(--line);
+  text-align: start;
+  vertical-align: baseline;
+  font-weight: var(--w-regular);
+  overflow-wrap: anywhere;
+}
+.stack thead th {
+  border-top: 0;
+  padding-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* the label carries the dot's space (16px), so a wrapped label hangs under its first word */
+.stack tbody th {
+  padding-left: 16px;
+  text-indent: -16px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.stack tbody td {
+  font-size: 17px;
+  font-weight: var(--w-medium);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.stack thead th:first-child {
+  /* the floor keeps "Multiplexer" on one line on a phone, as on the diff page */
+  width: max(34%, 112px);
+}
+.stack-you[hidden] {
+  display: none;
+}
+.stack-missing {
+  color: var(--fg-3);
+}
+.stack-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 10px;
+  border-radius: 50%;
+  vertical-align: 0.15em;
+  background: var(--mint);
+  visibility: hidden;
+}
+/* compared: presence of the dot and the accent mark a difference; shared rows recede by color only */
+.is-compared tr.d .stack-dot {
+  visibility: visible;
+}
+.is-compared tr.o .stack-dot {
+  visibility: visible;
+  background: var(--fg-3);
+}
+.is-compared tr.d th {
+  color: var(--fg);
+}
+.is-compared tr.d td {
+  color: var(--mint);
+}
+.is-compared tr.s td,
+.is-compared tr.o td {
+  color: var(--fg-3);
+}
+.is-compared .stack-you {
+  animation: show 200ms var(--ease) backwards;
+}
+/* three columns on a phone: values step down so a URL breaks at its slashes, not per letter */
+@media (max-width: 600px) {
+  .stack.is-compared tbody td {
+    font-size: 15px;
+  }
+  .is-compared thead th:first-child {
+    width: max(30%, 112px);
+  }
+}
+/* the person's own lines: labelled as theirs, never compared */
+.extras {
+  margin-top: 44px;
+}
+.extras-h {
+  font-size: 16px;
+  font-weight: var(--w-semibold);
+  text-wrap: balance;
+}
+.extras-note {
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+.extras-rows {
+  margin-top: 12px;
+}
+.extras-row {
+  display: grid;
+  grid-template-columns: max(34%, 112px) minmax(0, 1fr);
+  align-items: baseline;
+  padding: 15px 0;
+  border-top: 1px solid var(--line);
+}
+/* labels start on the stack's label edge (past the dot's 16px) */
+.extras-row dt {
+  padding: 0 16px;
+  font-size: 14px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.extras-row dd {
+  font-size: 17px;
+  font-weight: var(--w-medium);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.profile-foot {
+  display: grid;
+  gap: 20px;
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
+}
+@media (min-width: 700px) {
+  .profile-foot {
+    grid-template-columns: auto auto;
+    justify-content: start;
+    gap: 40px;
+  }
+}
+.profile-foot-k {
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--fg-3);
+}
+/* the landing's page pane: the address and a compact stack, no compare */
+.is-example .profile-domain {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+:where(.is-example) .profile-domain b {
+  color: var(--fg);
+  font-weight: var(--w-medium);
+}
+.is-example .stack {
+  margin-top: 12px;
+}
+.profile.is-example .stack th,
+.profile.is-example .stack td {
+  padding: 7px 16px 7px 0;
+  border-top: 0;
+  font-size: 14px;
+}
+.profile.is-example .stack tbody th {
+  width: 40%;
+  padding-left: 0;
+  text-indent: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-compared .stack-you {
+    animation: none;
+  }
+  .compare-btn:not([aria-disabled="true"]):active,
+  .compare-clear:active {
+    scale: none;
+  }
+}
+
+/* ---- empty / 404 / nudge ---- */
+.empty {
+  padding-top: 24px;
+}
+.empty .handle {
+  font-size: clamp(40px, 8vw, 56px);
+  font-weight: var(--w-semibold);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+}
+.empty .empty-msg {
+  margin: 12px 0 28px;
+  font-size: 17px;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+/* the URL-derived handle: text, isolated so a bidi control can't reorder the sentence */
+.empty-msg .h {
+  color: var(--fg);
+  unicode-bidi: isolate;
+}
+/* the /vs/ page when the viewer hasn't published: a callout above the viewed profile, the reason
+   there's no diff and the command that makes one. 16px radius and 24px padding, like the compare
+   form below it, so the two panels read as one family. */
+.nudge {
+  margin-bottom: 48px;
+  padding: 24px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--panel);
+}
+.nudge-h {
+  font-size: 20px;
+  font-weight: var(--w-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.nudge-p {
+  margin: 4px 0 16px;
+  font-size: 15px;
+  color: var(--fg-2);
+}
+
+/* ---- privacy: a reading page ---- */
+/* the privacy page's address is its title: the domain recedes, the page name (the h1) leads */
+.url {
+  margin-top: 24px;
+  font-size: clamp(32px, 6vw, 48px);
+  font-weight: var(--w-semibold);
+  line-height: 1.1;
+  letter-spacing: -0.04em;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.url a {
+  color: inherit;
+  transition: color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .url a:hover {
+    color: var(--fg);
+  }
+}
+.url .handle {
+  display: inline;
+  color: var(--fg);
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+}
+.doc {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--fg-2);
+}
+.doc .url {
+  margin-top: 0;
+}
+.doc-lede {
+  margin-top: 24px;
+  font-size: 18px;
+  text-wrap: pretty;
+}
+.doc h2 {
+  margin: 48px 0 12px;
+  font-size: 22px;
+  font-weight: var(--w-semibold);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  text-wrap: balance;
+}
+.doc ul {
+  padding-left: 1.2em;
+  list-style: disc;
+}
+.doc li::marker {
+  color: var(--fg-3);
+}
+.doc p + p,
+.doc p + ul,
+.doc ul + p {
+  margin-top: 1em;
+}
+.doc li + li {
+  margin-top: 0.5em;
+}
+.doc code {
+  font-size: 0.88em;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+.doc b {
+  color: var(--fg);
+  font-weight: var(--w-medium);
+}
+
+/* ---- footer: one row ---- */
+.site-foot {
+  width: 100%;
+  max-width: var(--wrap);
+  margin: clamp(96px, 12vw, 160px) auto 0;
+  padding: 24px var(--gut) calc(48px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 32px;
+  border-top: 1px solid var(--line);
+}
+.site-foot .logo {
+  font-size: 15px;
+}
+.foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  font-size: 14px;
+}
+.foot-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 8px;
+  color: var(--fg-3);
+  transition: color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .foot-links a:hover {
+    color: var(--fg);
+  }
+}
+
+/* the landing's diff example sits inside a panel: smaller */
+.panel .diff-h {
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.panel .diff-counts {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.panel .diff-k,
+.panel .diff-v {
+  padding-block: 8px;
+}
+.panel .diff-v {
+  font-size: 14px;
+}
+
+/* ---- phones ---- */
+@media (max-width: 720px) {
+  .nav-links {
+    display: none;
+  }
+  /* the logo and the nav command fit one line at 360px */
+  .nav-in {
+    gap: 16px;
+  }
+  /* the nav command replaces the GitHub icon on a phone; GitHub stays in the footer */
+  .site-nav[data-cta-away] .nav-icon {
+    display: none;
+  }
+  /* portrait: the curtains fan down from the top, so the copy starts below a band of sky */
+  .hero {
+    align-items: flex-end;
+    padding: clamp(176px, 34svh, 300px) 0 180px;
+    min-height: 0;
+  }
+  .cell {
+    padding: 24px;
+  }
+  .page-pane,
+  .term {
+    padding-inline: 16px;
+  }
+  .panel {
+    padding: 20px 16px;
+  }
+  .foot-links {
+    margin-inline: -8px;
+  }
+}
+
+@media (forced-colors: active), print {
+  .hero-canvas {
+    display: none;
+  }
+}
+
+/* reduced motion: fewer and gentler, not zero. No intro, no press scales; color feedback stays. */
+@media (prefers-reduced-motion: reduce) {
+  .demo[data-play] .term .tl,
+  .demo[data-play] .term .type {
+    animation: none;
+    opacity: 1;
+    clip-path: none;
+  }
+  .site-nav[data-cta-away] .nav-cmd {
+    animation: none;
+  }
+  .textlink .arrow,
+  .diff-counts a .arrow,
+  .compare-status a .arrow {
+    transition: none;
+  }
+  .textlink:hover .arrow,
+  .diff-counts a:hover .arrow,
+  .compare-status a:hover .arrow {
+    translate: none;
+  }
+  .install[data-copy-ready]:active,
+  .install[data-copy-ready][data-pressed] {
+    scale: none;
+  }
+  .copy-hint .ch {
+    transition: opacity 150ms ease;
+  }
+  .copy-hint .ch-done,
+  .install[data-copied] .ch-idle {
+    scale: none;
+  }
+}

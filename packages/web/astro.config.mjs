@@ -1,6 +1,7 @@
 // @ts-check
 import cloudflare from "@astrojs/cloudflare";
 import { defineConfig, fontProviders, sessionDrivers } from "astro/config";
+import typegpu from "unplugin-typegpu/vite";
 
 // One unified Cloudflare Worker (Astro 7 + @astrojs/cloudflare 14): SSR site + API + static
 // assets, one D1 binding. The real /[handle] profile + 3-column diff UI (per DESIGN.md) lives here.
@@ -18,44 +19,34 @@ export default defineConfig({
   session: { driver: sessionDrivers.memory() },
   // Self-hosted webfonts via Astro's Fonts API (DESIGN.md → Typography → Loading). Providers fetch +
   // subset at BUILD time and emit hashed, immutable /_astro/fonts/* assets served same-origin — no
-  // runtime third-party request. cssVariables match the --font-* vars ymmv.css already consumes; the
-  // API also generates size-matched fallback @font-face (optimizedFallbacks, on by default) to cut CLS.
+  // runtime third-party request. The API also generates size-matched fallback @font-face
+  // (optimizedFallbacks, on by default) to cut CLS.
   fonts: [
     {
-      // Display voice: wordmark, handles, headings. Variable wght sliced to the used range -> one
-      // small file. Default width only: unifont 0.7.4 drops font-stretch from Google css2 responses,
-      // so a wdth-axis request would silently clamp to 100% — don't request the axis.
+      // The site's voice: headings, body, UI. Variable wght, sliced to the range the design uses.
       provider: fontProviders.google(),
-      name: "Martian Mono",
-      cssVariable: "--font-display",
-      weights: ["400 800"],
+      name: "Geist",
+      cssVariable: "--font-sans",
+      weights: ["400 600"],
       styles: ["normal"],
-      subsets: ["latin"],
-      fallbacks: ["ui-monospace", "monospace"],
+      subsets: ["latin", "latin-ext"],
+      fallbacks: ["system-ui", "sans-serif"],
     },
     {
-      // Body / data / UI / code. Static weights on Google (no variable face), so request exactly the
-      // three the design uses. Only 400@latin is preloaded (see Layout.astro).
+      // Commands, transcripts, code and the readout's small labels.
       provider: fontProviders.google(),
-      name: "IBM Plex Mono",
+      name: "Geist Mono",
       cssVariable: "--font-mono",
-      weights: [400, 500, 600],
+      weights: ["400 500"],
       styles: ["normal"],
       subsets: ["latin", "latin-ext"],
       fallbacks: ["ui-monospace", "monospace"],
     },
-    {
-      // Editorial voice, used sparingly (taglines/asides). Italic ONLY — every rule using
-      // --font-serif must set font-style: italic or the browser synthesizes a roman.
-      provider: fontProviders.google(),
-      name: "Instrument Serif",
-      cssVariable: "--font-serif",
-      weights: [400],
-      styles: ["italic"],
-      subsets: ["latin"],
-      fallbacks: ["Georgia", "serif"],
-    },
   ],
+  // The landing's hero animation is TypeGPU: the plugin compiles its 'use gpu' functions to WGSL.
+  vite: {
+    plugins: [typegpu()],
+  },
   adapter: cloudflare({
     // `compile` pre-optimizes images at build time, so no Cloudflare Images binding is needed.
     imageService: "compile",

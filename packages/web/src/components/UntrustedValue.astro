@@ -18,7 +18,7 @@
 // at a slash, so in a narrow column `overflow-wrap: anywhere` cuts "github.com/antfu/dotfiles"
 // mid-word; with the <wbr> it wraps between path segments, and a segment longer than the column
 // still breaks. A <wbr> is not text: textContent, the copied string and what a screen reader
-// reads are unchanged. Opt-in (the diff extras pass it) so the profile page renders as before.
+// reads are unchanged. Opt-in: the profile stack, its extras and the diff extras pass it.
 import { displayUrl } from "@ymmv/shared";
 import { slashSegments, urlTitle } from "../lib/display-value.ts";
 import { safeHref } from "../lib/safe-href.ts";

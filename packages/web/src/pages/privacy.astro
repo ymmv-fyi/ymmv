@@ -2,7 +2,7 @@
 import Layout from "../components/Layout.astro";
 import { readCacheControl } from "../lib/profile-read.ts";
 
-// What the server keeps, written from the code (DESIGN.md → Components & States → Data page). Each
+// What the server keeps, written from the code (DESIGN.md → Pages → Privacy). Each
 // statement describes code as it is today. Change any of it, re-read this page:
 //   web, from packages/web: the schema (migrations/), sign-in and revoke (src/lib/auth.ts,
 //     src/lib/github.ts, src/lib/users.ts, src/pages/api/v1/auth/*), publish and delete
@@ -11,8 +11,9 @@ import { readCacheControl } from "../lib/profile-read.ts";
 //     src/pages/[handle]/vs/[viewer].astro), what a page shows (src/components/Profile.astro,
 //     src/components/Diff.astro), the log lines (every console.error, and wrangler.jsonc's
 //     observability), the rate limits (src/lib/rate-limit.ts, and infra/waf-ratelimit.sh at the
-//     repo root), browser storage (src/components/Layout.astro, src/components/TerminalRun.astro),
-//     fonts and no sessions (astro.config.mjs);
+//     repo root), browser storage (src/components/Profile.astro, src/components/TerminalRun.astro),
+//     the home page's WebGPU sky (src/pages/index.astro, src/gpu/), fonts and no sessions
+//     (astro.config.mjs);
 //   cli, from packages/cli/src: the local files (token-store.ts, update-check.ts,
 //     dismissals.ts), sign-in, revoke and logout (device-flow.ts, auth-http.ts, index.ts),
 //     detection (detect.ts), what a publish sends and when it asks (api.ts, commands.ts), the CI
@@ -30,7 +31,7 @@ Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 
 const REPO = "https://github.com/ymmv-fyi/ymmv";
 const DESCRIPTION =
-  "What the ymmv.fyi server stores when you sign in and publish, what it doesn't store, and what ymmv delete removes.";
+  "What the ymmv.fyi server stores when you sign in and publish, what it doesn’t store, and what ymmv delete removes.";
 ---
 
 <Layout
@@ -67,34 +68,34 @@ const DESCRIPTION =
       </li>
     </ul>
     <p>
-      Tokens don't expire. Each one works until its row is revoked or deleted:{" "}
+      Tokens don’t expire. Each one works until its row is revoked or deleted:{" "}
       <code>ymmv logout</code> revokes the one on that machine, signing in again revokes the one it
       replaces, and <code>ymmv delete</code> deletes every token row on your account, live or
       revoked. A revoked row stays in the table until <code>ymmv delete</code> deletes it.
     </p>
 
-    <h2>What the server doesn't store</h2>
+    <h2>What the server doesn’t store</h2>
     <ul>
       <li>
         <b>Your GitHub access token.</b> During sign-in the CLI gets one from GitHub and sends it to
         the server once. The server asks GitHub which account it belongs to, keeps the id and
-        username from the answer, and drops the token. The CLI doesn't save it either.
+        username from the answer, and drops the token. The CLI doesn’t save it either.
       </li>
       <li>
         <b>Your email address, name or avatar.</b> The server keeps only your account id and
-        username from GitHub's answer.
+        username from GitHub’s answer.
       </li>
       <li>
         <b>Your IP address, browser or referrer.</b> None of them goes into the database or into
-        the server's own log lines.
+        the server’s own log lines.
       </li>
     </ul>
     <p>
       Sign-in asks GitHub for no OAuth scopes, which limits that GitHub token to read-only access
-      to public information. Neither the CLI nor the server revokes it afterwards. To remove ymmv's
-      access on GitHub's side, revoke it at{" "}
+      to public information. Neither the CLI nor the server revokes it afterwards. To remove ymmv’s
+      access on GitHub’s side, revoke it at{" "}
       <a href="https://github.com/settings/applications">github.com/settings/applications</a>. That
-      doesn't sign you out of ymmv. <code>ymmv logout</code> signs out the machine you run it on.
+      doesn’t sign you out of ymmv. <code>ymmv logout</code> signs out the machine you run it on.
     </p>
 
     <h2>Logs and rate limits</h2>
@@ -102,11 +103,11 @@ const DESCRIPTION =
       The server writes a log line only when a request fails. A few of those lines name the handle
       or GitHub account id involved, and none contains a token. They go to Cloudflare Workers Logs,
       which <code>wrangler.jsonc</code> turns on. Workers Logs also keeps its own record of each
-      request, and this code doesn't set what Cloudflare puts in that record or how long it keeps
+      request, and this code doesn’t set what Cloudflare puts in that record or how long it keeps
       it.
     </p>
     <p>
-      To rate-limit requests, Cloudflare counts sign-ins and the CLI's signed-in calls per IP
+      To rate-limit requests, Cloudflare counts sign-ins and the CLI’s signed-in calls per IP
       address, and sign-ins, publishes and deletes per GitHub account id. The counters live in
       Cloudflare, not in the database.
     </p>
@@ -117,7 +118,7 @@ const DESCRIPTION =
       at <code>ymmv.fyi/api/v1/u/&lt;handle&gt;</code>, which any website can fetch. Both show your
       handle, your stack, your extra lines and when you last published. Neither shows your GitHub
       account id. A diff page, <code>ymmv.fyi/&lt;handle&gt;/vs/&lt;you&gt;</code>, shows your
-      values next to someone else's.
+      values next to someone else’s.
     </p>
 
     <h2>What deleting your profile removes</h2>
@@ -140,16 +141,16 @@ const DESCRIPTION =
       the same as a first sign-in.
     </p>
     <p>
-      The delete doesn't reach Cloudflare's backups. Cloudflare keeps point-in-time backups of the
+      The delete doesn’t reach Cloudflare’s backups. Cloudflare keeps point-in-time backups of the
       database, which it calls Time Travel and describes at{" "}
       <a href="https://developers.cloudflare.com/d1/reference/time-travel/">developers.cloudflare.com/d1/reference/time-travel</a>.
       A restore puts the whole database back to a chosen moment, rows deleted since then included.
-      In October 2026 Cloudflare's docs put the limit at 7 days back on the Workers Free plan and 30
+      In October 2026 Cloudflare’s docs put the limit at 7 days back on the Workers Free plan and 30
       days on Workers Paid, so 30 days is the longest a deleted row could come back. Nothing in this
       code runs a restore. A maintainer would have to run one by hand.
     </p>
     <p>
-      It doesn't reach outside the database either. The server's failure log lines and Cloudflare's
+      It doesn’t reach outside the database either. The server’s failure log lines and Cloudflare’s
       rate-limit counters stay as they are. The CLI removes the <code>token.json</code> it signed in
       with on the machine you run the delete on. Your other machines keep theirs, holding a token
       that no longer works, and <code>update-check.json</code> and{" "}
@@ -159,7 +160,7 @@ const DESCRIPTION =
       Nothing purges a cache on delete. Pages, JSON and rename redirects go out with{" "}
       <code>s-maxage=30, stale-while-revalidate=86400</code>, so a cache that follows those
       headers can serve the old copy for up to a day. Copies someone already saved are out of the
-      site's reach.
+      site’s reach.
     </p>
     <p>
       <code>ymmv logout</code> does less. It revokes the token on that machine and deletes the local
@@ -172,10 +173,13 @@ const DESCRIPTION =
       downloaded when the site is built and served from ymmv.fyi.
     </p>
     <p>
-      The site keeps two keys in <code>localStorage</code>: <code>ymmv-theme</code>, your light or
-      dark choice, and <code>ymmv-you</code>, the last handle you submitted in a diff form. When the
-      home page plays its intro, it sets <code>ymmv-landing-run</code> in{" "}
-      <code>sessionStorage</code> so the intro plays once per visit.
+      The site keeps one key in <code>localStorage</code>: <code>ymmv-you</code>, the last handle
+      you compared with on a profile page. Comparing reads that handle’s public page data from
+      ymmv.fyi, the same JSON anyone can fetch, and keeps the comparison in the page. When the
+      home page plays its intro, it sets{" "}
+      <code>ymmv-landing-run</code> in <code>sessionStorage</code> so the intro plays once per
+      visit. The animated sky on the home page is drawn by your own graphics card (WebGPU), from
+      code served by ymmv.fyi, and sends nothing anywhere.
     </p>
 
     <h2>On your machine</h2>
@@ -215,7 +219,7 @@ const DESCRIPTION =
     <h2>Questions</h2>
     <p>
       Ask in a GitHub issue at <a href={`${REPO}/issues`}>github.com/ymmv-fyi/ymmv/issues</a>. For
-      anything sensitive, such as a security problem or something you'd rather not post in public,
+      anything sensitive, such as a security problem or something you’d rather not post in public,
       use the private advisory form at{" "}
       <a href={`${REPO}/security/advisories/new`}>github.com/ymmv-fyi/ymmv/security/advisories/new</a>.
     </p>

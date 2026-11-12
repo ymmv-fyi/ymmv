@@ -11,10 +11,12 @@
 -- page render: the only way to exercise the thrown-render 500 through the built Worker without
 -- a test hook in production code. longhandlewithnohyphenstobreakatanywher (8008) is a 39-character handle, the longest
 -- GitHub allows, with no hyphen to break at: the diff's `N only <handle>` count must wrap it on a
--- phone instead of letting it run off the page.
+-- phone instead of letting it run off the page. extrasonly (9009, extras but no stack) and
+-- blankslate (9010, nothing at all) are published profiles with no stack rows: a diff between them
+-- has no rows to compare, the diff page's empty state.
 
-DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008);
-DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008);
+DELETE FROM profile_entries WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008, 9009, 9010);
+DELETE FROM handle_history WHERE github_id IN (1001, 2002, 3003, 4004, 5005, 6006, 7007, 8008, 9009, 9010);
 
 INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_at, created_at) VALUES
   (1001, 'antfu', 'antfu',
@@ -38,7 +40,11 @@ INSERT OR REPLACE INTO users (github_id, handle, handle_lower, extras, updated_a
   (7007, 'corruptrow', 'corruptrow', '[]',
    '2026-06-28T15:00:00.000Z', '2026-06-26T00:00:00.000Z'),
   (8008, 'longhandlewithnohyphenstobreakatanywher', 'longhandlewithnohyphenstobreakatanywher', '[]',
-   '2026-06-28T16:00:00.000Z', '2026-06-27T00:00:00.000Z');
+   '2026-06-28T16:00:00.000Z', '2026-06-27T00:00:00.000Z'),
+  (9009, 'extrasonly', 'extrasonly', '[{"label":"Keyboard","value":"Corne v4"}]',
+   '2026-06-28T17:00:00.000Z', '2026-06-28T00:00:00.000Z'),
+  (9010, 'blankslate', 'blankslate', '[]',
+   '2026-06-28T18:00:00.000Z', '2026-06-28T00:00:00.000Z');
 
 INSERT INTO profile_entries (github_id, key, value) VALUES
   (1001, 'editor', 'VS Code'),
