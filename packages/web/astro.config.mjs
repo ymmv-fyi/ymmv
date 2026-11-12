@@ -1,7 +1,6 @@
 // @ts-check
 import cloudflare from "@astrojs/cloudflare";
 import { defineConfig, fontProviders, sessionDrivers } from "astro/config";
-import typegpu from "unplugin-typegpu/vite";
 
 // One unified Cloudflare Worker (Astro 7 + @astrojs/cloudflare 14): SSR site + API + static
 // assets, one D1 binding. The real /[handle] profile + 3-column diff UI (per DESIGN.md) lives here.
@@ -43,10 +42,6 @@ export default defineConfig({
       fallbacks: ["ui-monospace", "monospace"],
     },
   ],
-  // The landing's hero animation is TypeGPU: the plugin compiles its 'use gpu' functions to WGSL.
-  vite: {
-    plugins: [typegpu()],
-  },
   adapter: cloudflare({
     // `compile` pre-optimizes images at build time, so no Cloudflare Images binding is needed.
     imageService: "compile",
