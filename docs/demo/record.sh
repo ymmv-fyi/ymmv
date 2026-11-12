@@ -20,14 +20,14 @@ for tool in vhs ttyd ffmpeg node pnpm curl; do
   command -v "$tool" >/dev/null || { echo "demo: $tool is not installed" >&2; exit 1; }
 done
 
-# The tape's font, IBM Plex Mono from docs/demo/fonts. A browser that can't find it draws the gif in
+# The tape's font, Geist Mono from docs/demo/fonts. A browser that can't find it draws the gif in
 # another monospace without a word, so it's checked before anything starts. VHS's browser finds
 # fonts through fontconfig on Linux and WSL, and fonts.conf adds that directory to the system's.
 # On macOS the browser doesn't read fontconfig, so the font has to be installed.
 fontconfig=$root/docs/demo/fonts/fonts.conf
 if [ "$(uname)" = Darwin ]; then
   # Not grep -q: under pipefail, a grep that quits at the first match can fail the pipe.
-  system_profiler SPFontsDataType 2>/dev/null | grep 'Family: IBM Plex Mono$' >/dev/null || {
+  system_profiler SPFontsDataType 2>/dev/null | grep 'Family: Geist Mono$' >/dev/null || {
     echo "demo: install the fonts in docs/demo/fonts (open each .ttf in Font Book)" >&2
     exit 1
   }
@@ -36,10 +36,10 @@ else
     echo "demo: fc-match is not installed (it comes with fontconfig)" >&2
     exit 1
   }
-  case "$(FONTCONFIG_FILE=$fontconfig fc-match -f '%{family}' 'IBM Plex Mono')" in
-    "IBM Plex Mono"*) ;;
+  case "$(FONTCONFIG_FILE=$fontconfig fc-match -f '%{family}' 'Geist Mono')" in
+    "Geist Mono"*) ;;
     *)
-      echo "demo: fontconfig can't find IBM Plex Mono through $fontconfig" >&2
+      echo "demo: fontconfig can't find Geist Mono through $fontconfig" >&2
       exit 1
       ;;
   esac

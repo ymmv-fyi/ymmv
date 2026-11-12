@@ -224,7 +224,7 @@ const TAPE_COLUMNS = 67;
 /** The settings TAPE_COLUMNS was measured at. */
 const TAPE_GEOMETRY = [
   "Set Width 960",
-  'Set FontFamily "IBM Plex Mono"',
+  'Set FontFamily "Geist Mono"',
   "Set FontSize 19",
   "Set Padding 24",
   "Set Margin 24",
