@@ -108,7 +108,8 @@ landing's "Update with the same command" tile shows a sample of it.
   rendered from the same mark; the OG card is the live hero (claim + sky + `ymmv.fyi`), rendered at
   1200×630.
 - **The sky**: the landing hero's Borealis canvas (`src/gpu/`), palette deep cyan → mint → near
-  white on `--bg`. It thins out behind the hero copy (the harness measures the copy every frame).
+  white on `--bg`; the shaders are plain WGSL in `src/gpu/aurora.wgsl`. It thins out behind the hero
+  copy (`aurora-hero.ts` measures the copy every frame).
 
 ## Layout
 

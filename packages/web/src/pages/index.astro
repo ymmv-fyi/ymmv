@@ -238,13 +238,20 @@ Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 </Layout>
 
 <script>
-  // The sky: only where WebGPU exists. The module (and TypeGPU with it) is a separate chunk, so a
-  // browser without WebGPU never downloads it. Any failure leaves the CSS glow under the canvas.
+  // The sky: only where WebGPU exists. The module (and its shaders) is a separate chunk, so a
+  // browser without WebGPU never downloads it. Getting a GPU device takes about as long as the
+  // download, so both start now and run side by side. Any failure leaves the CSS glow under the
+  // canvas. No powerPreference: a hero background belongs on the battery-friendly GPU, and Chrome
+  // on Windows ignores the hint with a console warning anyway.
   const canvas = document.querySelector<HTMLCanvasElement>(".hero-canvas");
   const copy = document.querySelector<HTMLElement>("[data-hero-copy]");
-  if (canvas && copy && "gpu" in navigator) {
-    import("../gpu/aurora-hero.ts")
-      .then((m) => m.startAuroraHero(canvas, copy))
+  if (canvas && copy && navigator.gpu) {
+    const device = navigator.gpu.requestAdapter().then((adapter) => {
+      if (!adapter) throw new Error("no WebGPU adapter");
+      return adapter.requestDevice();
+    });
+    Promise.all([import("../gpu/aurora-hero.ts"), device])
+      .then(([m, gpu]) => m.startAuroraHero(canvas, copy, gpu))
       .catch(() => canvas.remove());
   }
 
