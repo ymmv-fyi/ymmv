@@ -1,16 +1,21 @@
 ---
-// The page shell: head + design-system CSS + self-hosted fonts + the dark-primary theme system.
-// Every page renders inside this. User-controlled text is passed through Astro's auto-escaping
-// {expression} interpolation — NEVER set:html on a profile field.
+// The page shell (DESIGN.md): head, the site stylesheet, self-hosted fonts, the site nav
+// and footer. Every page renders inside this. Dark only: there is no theme toggle. User-controlled
+// text is passed through Astro's auto-escaping {expression} interpolation — NEVER set:html on a
+// profile field.
 import { Font } from "astro:assets";
 import "../styles/ymmv.css";
+import InstallCommand from "./InstallCommand.astro";
 
 interface Props {
   title: string;
   description?: string;
-  /* wide: the landing's display grid (--content-wide). Reading pages (profile/diff) stay at the
-     680px document column. */
+  /* wide: the landing's full-bleed sections. Reading pages (profile/diff/privacy/404) sit in the
+     760px column. */
   wide?: boolean;
+  /* navCommand: the nav carries the install command, shown once the hero's own copy of it has
+     scrolled away (the landing's script sets data-cta-away). */
+  navCommand?: boolean;
   /* canonicalPath: the RESOLVED path this page is canonical for ("/", "/<handle>", …). Pages
      must pass it explicitly — deriving it from Astro.url.pathname let every alias spelling
      (/OctoCat, trailing slash, percent-encoding) self-canonicalize, and a crafted //host path
@@ -23,45 +28,22 @@ const {
   title,
   description = "Terminal-native developer tool-stack profiles. Your mileage may vary.",
   wide = false,
+  navCommand = false,
   canonicalPath,
   noindex = false,
 } = Astro.props;
+const REPO = "https://github.com/ymmv-fyi/ymmv";
+const API_DOCS = `${REPO}/blob/main/docs/api.md`;
 ---
 
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="darkreader-lock" />
-    {/* Browser-UI color (mobile toolbar/overscroll). Hexes mirror the --bg tokens in ymmv.css;
-        JS-synced (not media-attr metas) because the stored choice overrides prefers-color-scheme.
-        Must precede the no-FOUC script, which sets it to the resolved theme. */}
-    <meta name="theme-color" content="#0e0c09" />
-    {/* Set the theme before first paint (stored choice > system > dark) to avoid a flash. */}
-    <script is:inline>
-      (function () {
-        // localStorage gets its own guard: a storage-blocked browser must still fall
-        // through to the prefers-color-scheme check, not skip it via a shared catch.
-        var stored = null;
-        try {
-          stored = localStorage.getItem("ymmv-theme");
-        } catch (e) {}
-        // whitelist: arbitrary storage garbage must not become a token-less data-theme value
-        if (stored !== "light" && stored !== "dark") stored = null;
-        var theme = stored;
-        if (!theme) {
-          try {
-            theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-          } catch (e) {
-            theme = "dark";
-          }
-        }
-        document.documentElement.dataset.theme = theme;
-        var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute("content", theme === "light" ? "#f6f3ea" : "#0e0c09");
-      })();
-    </script>
+    {/* Browser-UI color (mobile toolbar/overscroll) = --bg in ymmv.css. */}
+    <meta name="theme-color" content="#050607" />
     <title>{title}</title>
     <meta name="description" content={description} />
     {/* Absolute via Astro.site (like og:image) — Astro.url.origin would bake localhost/www
@@ -73,109 +55,73 @@ const {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    {/* Fonts via Astro's Fonts API: each <Font> injects the inlined @font-face + size-matched fallback
-        + a preload for the above-the-fold file. Mono preload is scoped to 400@latin (the body face);
-        500/600 + latin-ext stay on demand via unicode-range. Exactly 3 preloads total (e2e-pinned). */}
-    <Font cssVariable="--font-display" preload />
-    <Font cssVariable="--font-mono" preload={[{ weight: 400, subset: "latin" }]} />
-    <Font cssVariable="--font-serif" preload />
+    {/* Fonts via Astro's Fonts API: each <Font> injects the inlined @font-face + size-matched
+        fallback + a preload for its latin file (latin-ext stays on demand via unicode-range).
+        Exactly 2 preloads total (e2e-pinned). */}
+    <Font cssVariable="--font-sans" preload={[{ subset: "latin" }]} />
+    <Font cssVariable="--font-mono" preload={[{ subset: "latin" }]} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    {/* static brand card (wordmark + fork motif). og:image must be absolute — Astro.site, never
-        Astro.url.origin (that would bake localhost/www variants per request). */}
+    {/* static brand card. og:image must be absolute — Astro.site, never Astro.url.origin (that
+        would bake localhost/www variants per request). */}
     <meta property="og:image" content={new URL("/og.png", Astro.site)} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ymmv.fyi. Your mileage may vary." />
+    <meta property="og:image:alt" content="ymmv.fyi. Your dev setup, published in one command." />
     <meta name="twitter:card" content="summary_large_image" />
     {/* page-specific head extras (e.g. the landing's JSON-LD) */}
     <slot name="head" />
   </head>
-  <body class:list={[wide && "wide"]}>
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark or light theme">
-      ◐ theme
-    </button>
-    <main class="page">
+  <body>
+    <div class="nav-sentinel" aria-hidden="true"></div>
+    <header class="site-nav">
+      <div class="nav-in">
+        <a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>ymmv</a>
+        <nav class="nav-links" aria-label="Site">
+          <a href={API_DOCS}>API docs</a>
+          <a href="/privacy">Privacy</a>
+        </nav>
+        <div class="nav-r">
+          <a class="nav-icon" href={REPO} aria-label="ymmv on GitHub">
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"
+              ><path
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+              ></path></svg
+            >
+          </a>
+          {navCommand && (
+            <div class="nav-cmd">
+              <InstallCommand tone="primary" size="sm" />
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
+    <main class:list={["page", wide && "page-wide"]}>
       <slot />
     </main>
+    <footer class="site-foot">
+      <a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>ymmv</a>
+      <nav class="foot-links" aria-label="Footer">
+        <a href={API_DOCS}>API docs</a>
+        <a href={REPO}>Source</a>
+        <a href={`${REPO}/issues`}>Issues</a>
+        <a href="https://www.npmjs.com/package/ymmv-cli">npm</a>
+        <a href={`${REPO}/blob/main/CHANGELOG.md`}>Changelog</a>
+        <a href="/privacy">Privacy</a>
+      </nav>
+    </footer>
+    {/* The nav takes its backdrop once content scrolls under it: a sentinel at the top of the
+        page, watched, instead of a scroll handler. */}
     <script is:inline>
       (function () {
-        var btn = document.getElementById("theme-toggle");
-        if (!btn) return;
-        var THEME_KEY = "ymmv-theme"; // the pre-paint head script keeps its own literal (self-contained)
-        function current() {
-          return document.documentElement.dataset.theme === "light" ? "light" : "dark";
-        }
-        function storedTheme() {
-          // Guarded read + whitelist, mirroring the pre-paint script: storage garbage (a stray
-          // value from another tab) and a storage-blocked browser both resolve to null (no choice).
-          var stored = null;
-          try {
-            stored = localStorage.getItem(THEME_KEY);
-          } catch (e) {}
-          return stored === "light" || stored === "dark" ? stored : null;
-        }
-        function syncPressed() {
-          // aria-pressed=true ⇒ the non-default (light) theme is active
-          btn.setAttribute("aria-pressed", String(current() === "light"));
-        }
-        function syncThemeColor() {
-          // Keep the browser UI (mobile toolbar/overscroll) on the active --bg. Read the token
-          // from CSS (this script runs after the stylesheet) so a palette change can't desync it;
-          // only the pre-paint head script keeps hex literals.
-          var meta = document.querySelector('meta[name="theme-color"]');
-          if (!meta) return;
-          var bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-          if (bg) meta.setAttribute("content", bg);
-        }
-        function setTheme(theme) {
-          // Apply a resolved theme to every surface: data-theme, the toggle state, the browser UI.
-          document.documentElement.dataset.theme = theme;
-          syncPressed();
-          syncThemeColor();
-        }
-        function applyTheme() {
-          // Resolve exactly as the pre-paint script does (stored choice > system > dark) and
-          // re-sync every surface. Single source of the whitelist + fallback for all the resync
-          // paths below (BFCache restore, cross-tab storage, system-preference change).
-          var theme = storedTheme();
-          if (!theme) {
-            try {
-              theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-            } catch (e) {
-              theme = "dark";
-            }
-          }
-          setTheme(theme);
-        }
-        syncPressed(); // expose the toggle state at load, not only after the first click
-        btn.addEventListener("click", function () {
-          var next = current() === "dark" ? "light" : "dark";
-          try {
-            localStorage.setItem(THEME_KEY, next);
-          } catch (e) {}
-          setTheme(next);
-        });
-        // BFCache restore: a page served from the back-forward cache never re-runs the pre-paint
-        // head script, so its data-theme can be stale. Re-resolve only on a persisted restore.
-        window.addEventListener("pageshow", function (e) {
-          if (e.persisted) applyTheme();
-        });
-        // Cross-tab: a toggle in another same-origin tab writes ymmv-theme; mirror it here. A
-        // removeItem fires with newValue null, which storedTheme() reads as no choice → system.
-        // key null = localStorage.clear() in another tab, which wiped the choice too.
-        window.addEventListener("storage", function (e) {
-          if (e.key === null || e.key === THEME_KEY) applyTheme();
-        });
-        try {
-          var mq = matchMedia("(prefers-color-scheme: light)");
-          mq.addEventListener("change", function () {
-            // Follow the system only when there is no stored choice; applyTheme owns the
-            // whitelist + fallback (and its own storage guard), so this stays one source of truth.
-            if (!storedTheme()) applyTheme();
-          });
-        } catch (e) {}
+        var nav = document.querySelector(".site-nav");
+        var sentinel = document.querySelector(".nav-sentinel");
+        if (!nav || !sentinel || !("IntersectionObserver" in window)) return;
+        new IntersectionObserver(function (entries) {
+          nav.toggleAttribute("data-scrolled", !entries[0].isIntersecting);
+        }).observe(sentinel);
       })();
     </script>
     {/* Click-to-copy for every command block: the landing's install CTA, the profile's view
@@ -239,59 +185,6 @@ const {
             // focus can leave with the key still held; never leave the pressed state stuck
             delete el.dataset.pressed;
           });
-        });
-      })();
-    </script>
-    {/* The profile page's inline "diff vs <you>" form. Navigates to /<handle>/vs/<you> and
-        remembers the entered handle (the input is the only write point — the web has no auth),
-        so return visits are prefilled. No-JS keeps the <noscript> URL-pattern hint instead. */}
-    <script is:inline>
-      (function () {
-        var form = document.querySelector("[data-diff-vs]");
-        if (!form) return;
-        var input = form.querySelector("input");
-        if (!input) return;
-        var hint = document.getElementById("diff-hint");
-        // the hint line is a polite live region: filling it announces the rule, and
-        // aria-describedby ties it to the input while it shows. Typing clears both.
-        function showHint(on) {
-          if (!hint) return;
-          hint.textContent = on ? hint.dataset.hint : "";
-          if (on) input.setAttribute("aria-describedby", hint.id);
-          else input.removeAttribute("aria-describedby");
-        }
-        input.addEventListener("input", function () {
-          showHint(false);
-        });
-        try {
-          var last = localStorage.getItem("ymmv-you");
-          // not under a server-rendered hint (a bad ?you=): a valid handle in the slot would
-          // contradict the line saying the submitted one wasn't
-          if (last && !input.value && !(hint && hint.textContent)) input.value = last;
-        } catch (e) {}
-        form.addEventListener("submit", function (ev) {
-          ev.preventDefault();
-          // The ?you= handler's normalization ([handle]/index.astro), step for step — keep the two
-          // identical: trim, leading @s, one pasted github.com/ or ymmv.fyi/ prefix (optionally
-          // http(s)://, any case), one trailing slash. Pasted profile URLs are the likeliest miss.
-          var you = input.value
-            .trim()
-            .replace(/^@+/, "")
-            .replace(/^(?:https?:\/\/)?(?:github\.com|ymmv\.fyi)\//i, "")
-            .replace(/\/$/, "");
-          // Mirror the server's isValidHandle (GitHub handle shape, ≤39). Without this, "." or
-          // ".." survive encodeURIComponent and the browser normalizes the dot-segments away
-          // (silent self-navigation), and garbage would be persisted + prefilled forever.
-          if (!/^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(you) || you.length > 39) {
-            showHint(true);
-            input.focus();
-            return;
-          }
-          try {
-            localStorage.setItem("ymmv-you", you);
-          } catch (e) {}
-          location.href =
-            "/" + encodeURIComponent(form.dataset.diffVs) + "/vs/" + encodeURIComponent(you);
         });
       })();
     </script>

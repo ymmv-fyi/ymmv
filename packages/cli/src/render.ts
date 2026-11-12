@@ -11,9 +11,10 @@ import {
   type Profile,
 } from "@ymmv/shared";
 
-// Terminal rendering — the CLI half of the design system. Mirrors the web surface (ymmv.css):
-// aligned key→value columns, amber on links + diff-differences ONLY (the load-bearing scarcity
-// rule, same as the web), muted for same. Two hard requirements live here:
+// Terminal rendering — the CLI half of the design system (DESIGN.md). Mirrors the web surface's
+// semantics, not its hue: aligned key→value columns, the CLI's accent (amber, ANSI bright yellow)
+// on links + diff-differences ONLY (the load-bearing accent rule; the web's accent is mint and
+// skips links), muted for same. Two hard requirements live here:
 //   • NO_COLOR (no-color.org): drop all ANSI and fall back to `~` (changed) / `=` (same) / `?` (one
 //     side only) symbols so the diff still reads on any terminal.
 //   • Output sanitization: every profile value is UNTRUSTED — strip ANSI/control sequences
@@ -35,7 +36,7 @@ type Env = Record<string, string | undefined>;
 const ESC = String.fromCharCode(27); // U+001B — the ANSI escape introducer
 const CSI = `${ESC}[`;
 const CODES = {
-  amber: `${CSI}93m`, // DESIGN: amber == ANSI bright-yellow
+  amber: `${CSI}93m`, // DESIGN: the CLI's accent == ANSI bright-yellow
   faint: `${CSI}90m`,
   bold: `${CSI}1m`,
   reset: `${CSI}0m`,
@@ -449,10 +450,10 @@ function extrasBlock(
   // The web's heading: extras are listed, never diffed, so two `Keyboard` lines are not a pair.
   const out: string[] = ["", `  ${c.faint}extras (not compared)${c.reset}`];
   // The owner sits in the rows' label column and `label = value` starts at the value column, one
-  // tab stop for the whole readout as on the web (`--label-col`) and the card. A longer owner
+  // tab stop for the whole readout as on the web (`--diff-label`) and the card. A longer owner
   // pushes it out for every extras line alike. Padded as plain text before the faint codes go
   // around it, or the codes would count. The whole line is faint: uncompared, so dimmed like the
-  // web's `.extras-dim` and never amber.
+  // web's diff extras (`.diff-extras`) and never amber.
   const whoW = Math.max(
     labelW,
     extras.theirs.length ? measure(theirsLabel) : 0,
@@ -460,7 +461,7 @@ function extrasBlock(
   );
   // A URL value is a link with color on, shortened as on the card, but faint like the rest of
   // the line: in the diff amber says "differs", and a terminal shows no underline to tell a link
-  // apart (the web's extras link is amber, but underlined).
+  // apart (the web's extras link is ink, but underlined).
   // On a terminal the value is cut to what the line leaves it, a URL shortened first as in a
   // cell; the owner and the label never are. Too little left (a long label) and nothing is cut.
   const line = (who: string, label: string, value: string): string => {

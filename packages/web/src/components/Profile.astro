@@ -1,141 +1,443 @@
 ---
-// The profile page as a terminal session ("Transcript", decided 2026-08-24 from the /proto/profile
-// prototype run — see DESIGN.md → Components & States): the command that produced the page sits on
-// top, the stack is its output on one shared tab stop, and the next prompt line is the diff. No
-// plate — the page IS the transcript. (The diff page followed on 2026-08-24 — "Session" — so no
-// live document wears a plate any more; on the landing, .win frames this as the page window.)
+// The profile page (DESIGN.md → Pages → Profile; decided 2026-11-11 from /proto/profile, direction
+// "Compare"): the diff is the page's hero. A visitor types their handle and this profile's own
+// stack becomes a side-by-side comparison in place (their profile fetched from the public JSON
+// API), with counts and a link to the full diff page. Before that, the stack stands on its own.
 // All values are user-controlled: they render through UntrustedValue (Astro escaping + bidi-control
-// stripping + safeHref scheme gate before any href); extras labels are bidi-stripped inline.
+// stripping + safeHref scheme gate before any href); extras labels are bidi-stripped inline; and
+// compared cells are built by lib/diff-cells.ts, exactly as the diff page builds them.
 //
-// `example`: when this is the landing-page sample (not the page's own profile), render the handle
-// as a non-heading so it doesn't pollute the document outline / emit a 2nd <h1>, keep the typed
-// command a plain line (no copy control inside the preview card), and omit the interactive foot.
+// `example`: the landing's page pane. Renders only the address and the stack (an honest "+ N more"
+// for the rows it leaves out): no h1, no compare form, no commands.
 import { KEY_LABELS, type Profile } from "@ymmv/shared";
 import { sanitizeText } from "../lib/sanitize.ts";
-import Arrow from "./Arrow.astro";
 import InstallCommand from "./InstallCommand.astro";
 import UntrustedValue from "./UntrustedValue.astro";
 
 interface Props {
   profile: Profile;
   example?: boolean;
-  /* more: landing preview only — the count of rows elided from the sample, rendered as an honest
-     "+ N more" marker under the readout. Never set on a real profile page. */
+  /* more: landing preview only — the count of rows elided from the sample */
   more?: number;
-  /* youHint: the page was reached by a native diff-form submit whose ?you= failed the handle
-     shape check — render the form's hint line already showing, so the no-JS path isn't silent */
+  /* youHint: the page was reached by a native compare-form submit whose ?you= failed the handle
+     shape check — render the form's error already showing, so the no-JS path isn't silent */
   youHint?: boolean;
 }
 const { profile, example = false, more = 0, youHint = false } = Astro.props;
 const { handle, entries, extras, updated_at } = profile;
 const hasStack = entries.length > 0;
 const hasExtras = extras.length > 0;
-// session revision stamp: date part only (the wire carries a full ISO timestamp)
-const revDate = updated_at?.slice(0, 10);
-// the diff form's one error line: what a handle is, never what was typed (no echo of input)
-const YOU_HINT = "a GitHub handle: letters, digits, single hyphens, up to 39";
-const hintShown = youHint ? YOU_HINT : "";
+// an absolute date: edge-cached pages must not serve stale relative times
+const updated = updated_at
+  ? new Date(updated_at).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    })
+  : null;
+// the form's error line: what a handle is, never what was typed (no echo of input)
+const YOU_HINT = "Enter a GitHub handle: letters, digits and single hyphens, up to 39.";
 ---
 
-<div class="session">
-  {/* the command that produced this page — on live pages it is also the copy control */}
-  <p class="cmdline">
-    {example ? (
-      <><span class="prompt">$ </span><b>npx ymmv-cli@latest {handle}</b></>
-    ) : (
-      <InstallCommand command={`npx ymmv-cli@latest ${handle}`} />
-    )}
-  </p>
-
-  {/* the output opens with the page's address; the handle IS the h1, in the shell's own register */}
-  {example ? (
-    <p class="url">ymmv.fyi/<b>{handle}</b></p>
-  ) : (
-    <div class="url"><a href="/">ymmv.fyi</a>/<h1 class="handle">{handle}</h1></div>
-  )}
-
-  {/* one grid for stack + extras, so every value shares a single tab stop (like the CLI's padEnd);
-      a blank line separates the groups — no group headers, transcripts don't have them */}
-  {(hasStack || hasExtras) && (
-    <div class="readout">
-      {hasStack && (
-        <dl class="rows">
+{
+  example ? (
+    <div class="profile is-example">
+      <p class="profile-domain">
+        ymmv.fyi/<b>{handle}</b>
+      </p>
+      <table class="stack">
+        <tbody>
           {entries.map((e) => (
-            <div class="row">
-              <dt>{KEY_LABELS[e.key]}</dt>
-              <dd>
-                <UntrustedValue value={e.value} />
-              </dd>
-            </div>
+            <tr>
+              <th scope="row">{KEY_LABELS[e.key]}</th>
+              <td>
+                <UntrustedValue value={e.value} breakAfterSlash />
+              </td>
+            </tr>
           ))}
-        </dl>
-      )}
-      {hasStack && hasExtras && <div class="readout-gap" aria-hidden="true"></div>}
-      {hasExtras && (
-        <dl class="rows">
-          {extras.map((x) => (
-            <div class="row">
-              <dt>{sanitizeText(x.label)}</dt>
-              <dd>
-                <UntrustedValue value={x.value} />
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
+        </tbody>
+      </table>
+      {more > 0 && <p class="spec-more">+ {more} more</p>}
     </div>
-  )}
-  {example && more > 0 && <p class="spec-more">+ {more} more</p>}
+  ) : (
+    <div class="profile" data-profile>
+      <header class="profile-head">
+        <p class="profile-domain">
+          <a href="/">ymmv.fyi</a>/
+        </p>
+        <h1 class="handle" id="profile-h">{handle}</h1>
+        {updated && (
+          <p class="profile-meta">
+            Updated <time datetime={updated_at}>{updated}</time>
+          </p>
+        )}
+      </header>
 
-  {!hasStack && !hasExtras && <p class="empty-msg">No stack published yet.</p>}
+      {!hasStack && !hasExtras && (
+        <div class="profile-empty">
+          <p class="profile-empty-h">Nothing to compare yet</p>
+          <p class="profile-empty-p">{handle} signed in but hasn’t published a stack.</p>
+        </div>
+      )}
 
-  {revDate && (
-    <p class="rev">updated <time datetime={updated_at}>{revDate}</time></p>
-  )}
-
-  {!example && (
-    <>
-      <div class="foot term-foot">
-        <p class="cmdline"><InstallCommand /><span class="cmt"># make yours</span></p>
-        {/* action → the profile page, whose ?you= handler 302s to the diff: a native
-            (script-failed) submit works from anywhere this form renders, including /vs/ nudges */}
-        <form class="diff-cta" action={`/${handle}`} data-diff-vs={handle}>
-          <label>
-            <span class="prompt">$ </span>diff vs{" "}
+      {hasStack && (
+        <form class="compare" action={`/${handle}`} data-compare={handle} novalidate>
+          <label class="compare-label" for="compare-you">
+            How does your setup compare with {handle}’s?
+          </label>
+          <div class="compare-row">
             {/* no maxlength: it would cut a pasted https://github.com/<handle> before the script
                 strips the prefix. The 39 cap lives in validation (script + ?you= handler). */}
             <input
-              class="you"
+              class="compare-input"
+              id="compare-you"
               name="you"
-              placeholder="<you>"
+              placeholder="Your GitHub handle"
               autocomplete="off"
               autocapitalize="off"
+              autocorrect="off"
               spellcheck="false"
-              aria-label={`your GitHub handle, to diff ${handle} against you`}
-              aria-describedby={youHint ? "diff-hint" : undefined}
+              enterkeyhint="go"
+              data-1p-ignore
+              data-lpignore="true"
+              aria-describedby="compare-msg"
+              aria-invalid={youHint ? "true" : undefined}
             />
-          </label>
-          <button class="go" type="submit" aria-label="view the diff"><Arrow size={18} /></button>
-        </form>
-        {/* inside the foot, ahead of the hint: without JS this line stands in for the form, and
-            the hint below it then explains its <you> */}
-        <noscript>
-          {/* is:inline — Astro must not hoist this out of the <noscript> gate */}
-          <style is:inline>
-            .diff-cta {
-              display: none;
-            }
-          </style>
-          <p class="cta">
-            diff <Arrow /> <b>ymmv.fyi/{handle}/vs/&lt;you&gt;</b>
+            <button class="compare-btn" type="submit">
+              <span class="compare-btn-t">Compare</span>
+            </button>
+            <button class="compare-clear" type="button" data-compare-clear hidden>
+              Clear
+            </button>
+          </div>
+          {/* A returning visitor finds their handle already in the box (the handle saved by their
+              last compare): one tap to compare. Inline, so the box never paints empty first. It
+              never compares on its own, and never fills over a server-rendered error. */}
+          <script is:inline>
+            (function () {
+              var input = document.getElementById("compare-you");
+              if (!input || input.getAttribute("aria-invalid") === "true") return;
+              try {
+                var last = localStorage.getItem("ymmv-you");
+                if (
+                  last &&
+                  !input.value &&
+                  last.length <= 39 &&
+                  /^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/.test(last)
+                ) {
+                  input.value = last;
+                }
+              } catch (e) {}
+            })();
+          </script>
+          {/* the polite live region is in the tree before any message, so the first one is read */}
+          <p
+            class="compare-msg"
+            id="compare-msg"
+            aria-live="polite"
+            data-compare-msg
+            data-kind={youHint ? "error" : ""}
+          >
+            {youHint ? YOU_HINT : ""}
           </p>
-        </noscript>
-        {/* the form's error line, outside the form so the <noscript> rule that hides the form
-            leaves a server-rendered hint visible. Always in the tree (empty until a miss) so the
-            polite live region is registered before the script fills it; the script reads the
-            copy from data-hint, so the text exists once. */}
-        <p class="diff-hint" id="diff-hint" aria-live="polite" data-hint={YOU_HINT}>{hintShown}</p>
-      </div>
-    </>
-  )}
-</div>
+          {/* the miss state: the command right where the visitor is reading */}
+          <div class="compare-miss" data-compare-miss hidden>
+            <InstallCommand />
+          </div>
+        </form>
+      )}
+
+      {hasStack && (
+        <div class="compare-result">
+          <div class="compare-status" data-compare-status hidden />
+          <table class="stack" data-stack aria-labelledby="profile-h">
+            <thead>
+              <tr>
+                <th scope="col">
+                  <span class="sr-only">Key</span>
+                </th>
+                <th scope="col" title={handle}>
+                  {handle}
+                </th>
+                <th scope="col" class="stack-you" data-stack-you hidden />
+              </tr>
+            </thead>
+            <tbody data-stack-body>
+              {entries.map((e) => (
+                <tr>
+                  <th scope="row">
+                    <span class="stack-dot" aria-hidden="true" />
+                    {KEY_LABELS[e.key]}
+                  </th>
+                  <td>
+                    <UntrustedValue value={e.value} breakAfterSlash />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {hasExtras && (
+        <section class="extras" aria-labelledby="extras-h">
+          <h2 class="extras-h" id="extras-h">
+            Extras
+          </h2>
+          <p class="extras-note">Lines added by hand. A diff doesn’t compare them.</p>
+          <dl class="extras-rows">
+            {extras.map((x) => (
+              <div class="extras-row">
+                <dt>{sanitizeText(x.label)}</dt>
+                <dd>
+                  <UntrustedValue value={x.value} breakAfterSlash />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+
+      <footer class="profile-foot">
+        <div class="make-cmd">
+          <p class="profile-foot-k">Publish your own</p>
+          <InstallCommand />
+        </div>
+        {(hasStack || hasExtras) && (
+          <div class="view-cmd">
+            <p class="profile-foot-k">View in your terminal</p>
+            <InstallCommand command={`npx ymmv-cli@latest ${handle}`} />
+          </div>
+        )}
+      </footer>
+    </div>
+  )
+}
+
+<script>
+  // The inline compare. The normalization is the ?you= handler's ([handle]/index.astro), step for
+  // step — keep the two identical: trim, leading @s, one pasted github.com/ or ymmv.fyi/ prefix
+  // (optionally http(s)://, any case), one trailing slash. e2e runs one input table through both.
+  import { diff, type Profile } from "@ymmv/shared";
+  import { pairCells } from "../lib/diff-cells.ts";
+
+  const root = document.querySelector<HTMLElement>("[data-profile]");
+  const form = root?.querySelector<HTMLFormElement>("[data-compare]");
+  if (root && form) {
+    const $ = <T extends HTMLElement>(sel: string) => root.querySelector<T>(sel) as T;
+    const theirsHandle = form.dataset.compare ?? "";
+    const input = $<HTMLInputElement>("#compare-you");
+    const submit = $<HTMLButtonElement>(".compare-btn");
+    const submitText = $(".compare-btn-t");
+    const clear = $<HTMLButtonElement>("[data-compare-clear]");
+    const msg = $("[data-compare-msg]");
+    const miss = $("[data-compare-miss]");
+    const status = $("[data-compare-status]");
+    const table = $("[data-stack]");
+    const body = $("[data-stack-body]");
+    const youHead = $("[data-stack-you]");
+    const original = [...body.childNodes].map((n) => n.cloneNode(true));
+    // the profile being viewed: its server markup shows values shortened, so the comparison reads
+    // it from the same public JSON the visitor's profile comes from (fetched once)
+    let theirs: Profile | null = null;
+
+    const HANDLE = /^[a-zA-Z0-9](?:-?[a-zA-Z0-9])*$/;
+    const normalize = (v: string) =>
+      v
+        .trim()
+        .replace(/^@+/, "")
+        .replace(/^(?:https?:\/\/)?(?:github\.com|ymmv\.fyi)\//i, "")
+        .replace(/\/$/, "");
+    const valid = (v: string) => HANDLE.test(v) && v.length <= 39;
+
+    async function fetchProfile(handle: string): Promise<Profile | null> {
+      const res = await fetch(`/api/v1/u/${encodeURIComponent(handle)}`, {
+        headers: { accept: "application/json" },
+        // a stalled request would hold "Comparing…" for minutes; give up and say so instead
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as Profile;
+    }
+
+    // aria-disabled, not disabled: a disabled button drops keyboard focus mid-compare
+    let busy = false;
+    function pending(on: boolean) {
+      busy = on;
+      submit.setAttribute("aria-disabled", String(on));
+      submit.setAttribute("aria-busy", String(on));
+      submitText.textContent = on ? "Comparing…" : "Compare";
+    }
+
+    function say(text: string, kind: "ok" | "error" | "miss" | "fail" | "") {
+      msg.textContent = text;
+      msg.dataset.kind = kind;
+      // success is announced, not shown: the counts above the table already say it on screen
+      msg.classList.toggle("sr-only", kind === "ok");
+      miss.hidden = kind !== "miss";
+      if (kind === "error") input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+    }
+
+    // A compared cell: the same cell the diff page renders — bidi stripped, shortened URLs with the
+    // full address in the title, path-segment break points, and two differing cells never shown as
+    // the same string.
+    function cell(c: ReturnType<typeof pairCells>[number], cls?: string) {
+      const td = document.createElement("td");
+      if (cls) td.className = cls;
+      if (!c) {
+        td.textContent = "—";
+        td.classList.add("stack-missing");
+        return td;
+      }
+      const span = document.createElement("span");
+      if (c.title) span.title = c.title;
+      c.segments.forEach((part, i) => {
+        if (i > 0) span.appendChild(document.createElement("wbr"));
+        span.appendChild(document.createTextNode(part));
+      });
+      td.appendChild(span);
+      return td;
+    }
+
+    function arrow() {
+      const NS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(NS, "svg");
+      for (const [k, v] of Object.entries({
+        class: "arrow",
+        width: "13",
+        height: "13",
+        viewBox: "0 0 18 18",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "1.7",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        "aria-hidden": "true",
+      }))
+        svg.setAttribute(k, v);
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", "M2.5 9h12M10 4.5 14.5 9 10 13.5");
+      svg.appendChild(path);
+      return svg;
+    }
+
+    function reset() {
+      body.replaceChildren(...original.map((n) => n.cloneNode(true)));
+      youHead.hidden = true;
+      status.hidden = true;
+      table.classList.remove("is-compared");
+      clear.hidden = true;
+      say("", "");
+    }
+
+    function compare(mine: Profile, theirsProfile: Profile) {
+      const result = diff(mine, theirsProfile);
+      const rows = result.rows.filter((r) => r.theirs !== null || r.mine !== null);
+      body.replaceChildren(
+        ...rows.map((r) => {
+          const [t, m] = pairCells(r.theirs, r.mine, r.status !== "same");
+          const tr = document.createElement("tr");
+          tr.className = r.status === "changed" ? "d" : r.status === "same" ? "s" : "o";
+          const th = document.createElement("th");
+          th.scope = "row";
+          const dot = document.createElement("span");
+          dot.className = "stack-dot";
+          dot.setAttribute("aria-hidden", "true");
+          const sr = document.createElement("span");
+          sr.className = "sr-only";
+          sr.textContent =
+            r.status === "changed"
+              ? "differs: "
+              : r.status === "same"
+                ? "same: "
+                : `only ${r.status === "only_theirs" ? theirsProfile.handle : mine.handle}: `;
+          th.appendChild(dot);
+          th.appendChild(sr);
+          th.appendChild(document.createTextNode(r.label));
+          tr.appendChild(th);
+          tr.appendChild(cell(t));
+          tr.appendChild(cell(m, "stack-you"));
+          return tr;
+        }),
+      );
+      youHead.textContent = mine.handle;
+      youHead.title = mine.handle;
+      youHead.hidden = false;
+      table.classList.add("is-compared");
+      const parts = [`${result.differ} differ`, `${result.shared} shared`];
+      if (result.onlyTheirs) parts.push(`${result.onlyTheirs} only ${theirsProfile.handle}`);
+      if (result.onlyMine) parts.push(`${result.onlyMine} only ${mine.handle}`);
+      status.replaceChildren(
+        ...parts.map((p) => {
+          const s = document.createElement("span");
+          const [n, ...rest] = p.split(" ");
+          const b = document.createElement("b");
+          b.textContent = n ?? "";
+          s.appendChild(b);
+          s.appendChild(document.createTextNode(` ${rest.join(" ")}`));
+          return s;
+        }),
+      );
+      const link = document.createElement("a");
+      link.href = `/${encodeURIComponent(theirsProfile.handle)}/vs/${encodeURIComponent(mine.handle)}`;
+      link.appendChild(document.createTextNode("Open the full diff"));
+      link.appendChild(arrow());
+      status.appendChild(link);
+      status.hidden = false;
+      clear.hidden = false;
+      say(`Compared with ${mine.handle}: ${parts.join(", ")}.`, "ok");
+    }
+
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (busy) return; // one request at a time
+      const you = normalize(input.value);
+      if (!valid(you)) {
+        say("Enter a GitHub handle: letters, digits and single hyphens, up to 39.", "error");
+        input.focus();
+        return;
+      }
+      pending(true);
+      try {
+        const [mine, viewed] = await Promise.all([
+          fetchProfile(you),
+          theirs ? Promise.resolve(theirs) : fetchProfile(theirsHandle),
+        ]);
+        if (viewed) theirs = viewed;
+        if (!mine) {
+          reset();
+          say(`No ymmv profile for ${you} yet. Publish yours, then compare:`, "miss");
+          return;
+        }
+        if (!theirs) throw new Error("profile gone");
+        compare(mine, theirs);
+        try {
+          localStorage.setItem("ymmv-you", you);
+        } catch (e) {}
+      } catch {
+        say("Couldn’t load that profile. Check your connection and try again.", "fail");
+      } finally {
+        pending(false);
+      }
+    });
+    // punish late, reward early: no error while typing a first attempt; once one shows, it clears
+    // the moment the value becomes a valid handle (and stays while it isn't)
+    input.addEventListener("input", () => {
+      if (input.getAttribute("aria-invalid") === "true" && valid(normalize(input.value))) say("", "");
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && table.classList.contains("is-compared")) {
+        ev.preventDefault();
+        reset();
+      }
+    });
+    clear.addEventListener("click", () => {
+      reset();
+      input.value = "";
+      input.focus();
+    });
+  }
+</script>

@@ -1,19 +1,19 @@
 ---
-import { type Profile, SCHEMA_VERSION } from "@ymmv/shared";
+import { diff, type Profile, SCHEMA_VERSION } from "@ymmv/shared";
 import Arrow from "../components/Arrow.astro";
+import Diff from "../components/Diff.astro";
 import InstallCommand from "../components/InstallCommand.astro";
 import Layout from "../components/Layout.astro";
 import ProfileExample from "../components/Profile.astro";
 import TerminalRun from "../components/TerminalRun.astro";
 import { readCacheControl } from "../lib/profile-read.ts";
 
-// Landing (decided 2026-09-14 from the /proto/landing rounds, direction "House" — DESIGN.md →
-// Landing layout): the solo pitch. What one developer gets today is one command that publishes
-// their setup in about ten seconds, so the page shows exactly that — the claim, the install
-// command, then the real run in a terminal window beside the page it produces. The diff needs
-// other people, so it is a footnote. The profile sample is static (clearly labelled) so the
-// landing always renders, independent of the DB.
-const octocatProfile: Profile = {
+// Landing (DESIGN.md → Landing; decided 2026-11-11 from the /proto/site run, the aurora-sky direction):
+// the claim and the install command over the Borealis sky, then the product itself in one window
+// (the real publish run beside the page it makes), how it works, a live-shaped diff, the API, and
+// the brand's own line. The samples are static (clearly fictional mascots) so the landing always
+// renders, independent of the DB.
+const octocat: Profile = {
   schema_version: SCHEMA_VERSION,
   handle: "octocat",
   entries: [
@@ -36,19 +36,57 @@ const octocatProfile: Profile = {
   updated_at: "2026-06-28T00:00:00.000Z",
 };
 
-// The page window is a PREVIEW, not the profile page reproduced: enough rows to show the shape
-// (including the one amber dotfiles link), an honest "+ N more" for the rest.
+// The page pane is a PREVIEW, not the profile page reproduced: enough rows to show the shape
+// (including the one dotfiles link), an honest "+ N more" for the rest.
 const PREVIEW_KEYS = new Set(["editor", "os", "shell", "terminal", "font", "dotfiles", "ai-tool"]);
 const octocatPreview: Profile = {
-  ...octocatProfile,
-  entries: octocatProfile.entries.filter((e) => PREVIEW_KEYS.has(e.key)),
+  ...octocat,
+  entries: octocat.entries.filter((e) => PREVIEW_KEYS.has(e.key)),
   extras: [],
 };
-const previewMore =
-  octocatProfile.entries.length - octocatPreview.entries.length + octocatProfile.extras.length;
+const previewMore = octocat.entries.length - octocatPreview.entries.length + octocat.extras.length;
 
-// A real, live profile to bridge the fictional sample to the product (octocat is a mascot).
+// The compare sample: hubot (GitHub's other mascot) against octocat, through the real diff, so the
+// panel shows exactly what a live /hubot/vs/octocat page would.
+const hubot: Profile = {
+  schema_version: SCHEMA_VERSION,
+  handle: "hubot",
+  entries: [
+    { key: "editor", value: "Helix" },
+    { key: "os", value: "macOS 15.2" },
+    { key: "shell", value: "fish" },
+    { key: "prompt", value: "Starship" },
+    { key: "terminal", value: "WezTerm" },
+    { key: "browser", value: "Firefox" },
+    { key: "window-manager", value: "Aerospace" },
+    { key: "font", value: "Berkeley Mono" },
+    { key: "theme", value: "Tokyo Night" },
+    { key: "multiplexer", value: "Zellij" },
+    { key: "version-manager", value: "mise" },
+    { key: "ai-tool", value: "Claude Code" },
+  ],
+  extras: [],
+  updated_at: "2026-06-28T00:00:00.000Z",
+};
+const sampleDiff = diff(octocat, hubot);
+
+// A real, live profile to bridge the fictional samples to the product.
 const LIVE_HANDLE = "bardisty";
+const CMD = "npx ymmv-cli@latest";
+const API_DOCS = "https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md";
+
+const DETECTED = [
+  "OS",
+  "Shell",
+  "Prompt",
+  "Terminal",
+  "Editor",
+  "Multiplexer",
+  "Version manager",
+  "Window manager",
+  "Browser",
+  "AI tool",
+];
 
 const jsonLd = JSON.stringify({
   "@context": "https://schema.org",
@@ -67,137 +105,157 @@ const jsonLd = JSON.stringify({
 Astro.response.headers.set("cache-control", readCacheControl("notfound"));
 ---
 
-<Layout title="ymmv.fyi: your stack, in the terminal" wide canonicalPath="/">
+<Layout title="ymmv.fyi: your stack, in the terminal" wide navCommand canonicalPath="/">
   <script type="application/ld+json" is:inline slot="head" set:html={jsonLd} />
 
-  <header class="site-top">
-    <a class="wordmark" href="/">ymmv<span class="dim">.fyi</span></a>
-    <nav class="site-nav" aria-label="Site">
-      <a href="https://github.com/ymmv-fyi/ymmv">source</a>
-      <a href="https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md">api</a>
-    </nav>
-  </header>
-
+  {/* The sky: a CSS glow on the section, the Borealis canvas over it once WebGPU starts. */}
   <section class="hero">
-    <h1 class="claim">Your dev setup. Published in about ten seconds.</h1>
-    <p class="vary">Your mileage may vary.</p>
-    <div class="lede">
-      <p class="tagline">
-        One command detects your editor, shell, terminal and seven more, shows you what it
-        found, and puts it at <code>ymmv.fyi/you</code>. Nothing publishes until you say so.
-      </p>
-      <div class="hero-cta">
-        <InstallCommand />
-        <p class="live-link">
-          or see a live one <Arrow /> <a href={`/${LIVE_HANDLE}`}>ymmv.fyi/{LIVE_HANDLE}</a>
+    <canvas class="hero-canvas" aria-hidden="true"></canvas>
+    <div class="hero-in">
+      <div class="hero-copy" data-hero-copy>
+        <h1 class="claim">Your dev setup, published in one command.</h1>
+        <p class="sub">
+          ymmv finds your editor, shell, terminal and seven more, shows you the list, and
+          publishes it to <b>ymmv.fyi/you</b> when you say yes.
         </p>
+        <div class="ctas" id="start">
+          <InstallCommand tone="primary" />
+          <p class="live-link">
+            or see a live one <Arrow /> <a href={`/${LIVE_HANDLE}`}>ymmv.fyi/{LIVE_HANDLE}</a>
+          </p>
+        </div>
+        <p class="fine">macOS, Linux, Windows and WSL. Node 22 or newer.</p>
       </div>
     </div>
   </section>
 
   {/* the run, and the page it makes. TerminalRun's script sets data-play here for the intro. */}
-  <section class="demo" aria-label="What a run looks like" data-demo>
-    <TerminalRun />
-    <figure class="win page-win">
-      <figcaption class="win-bar">
-        <span class="win-url">ymmv.fyi/{octocatPreview.handle}</span>
-      </figcaption>
-      <div class="win-page">
-        <ProfileExample profile={octocatPreview} example more={previewMore} />
+  <section class="shot demo" aria-label="A publish run and the page it makes" data-demo>
+    <div class="window">
+      <div class="window-bar">
+        <span class="pane-label">Terminal</span>
+        <span class="pane-label pane-label-page">ymmv.fyi/{octocatPreview.handle}</span>
       </div>
-    </figure>
+      <div class="window-body">
+        <TerminalRun />
+        <div class="page-pane">
+          <ProfileExample profile={octocatPreview} example more={previewMore} />
+        </div>
+      </div>
+    </div>
   </section>
 
-  <section class="get">
-    <h2 class="example-label">what you get</h2>
-    <dl class="get-list">
-      <div>
-        <dt>Auto-detection</dt>
-        <dd>
-          Ten values read from your environment and pre-filled: OS, shell, prompt, terminal,
-          editor, multiplexer, version manager, window manager, browser, AI tool. Font, theme
-          and dotfiles you type in once.
-        </dd>
-      </div>
-      <div>
-        <dt>Nothing publishes until you confirm</dt>
-        <dd>
-          Detection only pre-fills. Press <code>e</code> to edit any value, <code>n</code> to
-          walk away, <code>y</code> to publish. <code>ymmv delete</code> removes everything,
-          any time.
-        </dd>
-      </div>
-      <div>
-        <dt>Updating is the same command</dt>
-        <dd>
-          Run it again after you switch editors: the preview marks each value your environment
-          now detects differently, and <code>d</code> takes the ones you want. Or change one
-          value:{" "}
-          <code>ymmv set editor Neovim</code>. Add a line of your own:{" "}
-          <code>ymmv set -e "Keyboard=HHKB"</code>.
-        </dd>
-      </div>
-      <div>
-        <dt>Your page is data too</dt>
-        <dd>
-          <code>GET ymmv.fyi/api/v1/u/you</code> returns the same stack as JSON, for a README
-          badge or your own site.
-        </dd>
-      </div>
-    </dl>
-    <p class="get-note">Works on macOS, Linux, Windows and WSL. Node 22 or newer.</p>
+  <section class="sec" aria-labelledby="how-h">
+    <h2 class="h2" id="how-h">It asks before it publishes.</h2>
+    <ul class="grid">
+      <li class="cell">
+        <h3 class="h3">Ten values, detected</h3>
+        <p class="p">
+          ymmv reads them from your environment. It can’t guess your font, theme or dotfiles, so you
+          type those once.
+        </p>
+        <ul class="chips" aria-label="Detected values">
+          {DETECTED.map((d) => <li>{d}</li>)}
+        </ul>
+      </li>
+      <li class="cell">
+        <h3 class="h3">Review the draft</h3>
+        <p class="p">Detection only fills in a draft. You decide what happens to it.</p>
+        <div class="keys">
+          <span><kbd>e</kbd> edit a value</span>
+          <span><kbd>n</kbd> walk away</span>
+          <span><kbd>y</kbd> publish</span>
+        </div>
+      </li>
+      <li class="cell">
+        <h3 class="h3">Update with the same command</h3>
+        <p class="p">
+          Run it again after you switch editors. The preview marks each value your machine now
+          detects differently, and <kbd>d</kbd> takes the ones you want.
+        </p>
+        <pre
+          class="mini"><span class="t-a">~</span> Editor     <span class="t-dim">Neovim →</span> <span class="t-a">Helix</span>
+<span class="t-a">+</span> Font       <span class="t-a">Berkeley Mono</span>
+<span class="t-a">-</span> Theme      <span class="t-dim">Catppuccin Mocha</span></pre>
+      </li>
+      <li class="cell">
+        <h3 class="h3">Yours to change or delete</h3>
+        <p class="p">Change one value, add a line of your own, or delete your profile.</p>
+        <pre
+          class="mini"><span class="t-p">$ </span>ymmv set editor Neovim
+<span class="t-p">$ </span>ymmv set -e "Keyboard=HHKB"
+<span class="t-p">$ </span>ymmv delete</pre>
+      </li>
+    </ul>
   </section>
 
-  <aside class="later">
-    <p>
-      <b>Later, when someone you know publishes theirs:</b>{" "}
-      <code>npx ymmv-cli@latest {LIVE_HANDLE}</code> shows their stack in your terminal, and how it
-      differs from yours once you're signed in. On the web,{" "}
-      <code>ymmv.fyi/{LIVE_HANDLE}/vs/you</code>.
-    </p>
-  </aside>
+  <section class="sec split" aria-labelledby="cmp-h">
+    <div class="sec-head">
+      <h2 class="h2" id="cmp-h">See where your setups split.</h2>
+      <p class="lead">
+        When a friend publishes, one command lines your stacks up and highlights where they differ.
+      </p>
+      <dl class="cmd-ref">
+        <div><dt>Terminal</dt><dd><code>{CMD} {LIVE_HANDLE}</code></dd></div>
+        <div><dt>Web</dt><dd><code>ymmv.fyi/{LIVE_HANDLE}/vs/you</code></dd></div>
+      </dl>
+    </div>
+    <div class="panel">
+      <Diff result={sampleDiff} theirs="hubot" mine="octocat" example />
+    </div>
+  </section>
 
-  <footer class="site-foot">
-    <p class="foot-h">Reference</p>
-    <div class="fg">
-      <span class="g">terminal</span>
-      <div class="fl">
-        <code>npx ymmv-cli@latest</code>
-        <span class="n">publish your stack</span>
-      </div>
-      <div class="fl">
-        <code>npx ymmv-cli@latest &lt;handle&gt;</code>
-        <span class="n">view, or diff vs yours</span>
-      </div>
+  <section class="sec split flip" aria-labelledby="api-h">
+    <div class="sec-head">
+      <h2 class="h2" id="api-h">Your page is JSON too.</h2>
+      <p class="lead">
+        Every profile is also a public JSON endpoint. Use it in a README badge or on your own site.
+      </p>
+      <a class="textlink" href={API_DOCS}>Read the API docs <Arrow /></a>
     </div>
-    <div class="fg">
-      <span class="g">web</span>
-      <div class="fl">
-        <code>ymmv.fyi/&lt;handle&gt;</code>
-        <span class="n">a profile</span>
-      </div>
-      <div class="fl">
-        <code>ymmv.fyi/&lt;handle&gt;/vs/&lt;you&gt;</code>
-        <span class="n">the diff</span>
-      </div>
-    </div>
-    <div class="fg">
-      <span class="g">data</span>
-      <div class="fl">
-        <code>GET /api/v1/u/&lt;handle&gt;</code>
-        <span class="n"><a href="https://github.com/ymmv-fyi/ymmv/blob/main/docs/api.md">json, documented</a></span>
-      </div>
-      <div class="fl">
-        <a href="/privacy">ymmv.fyi/privacy</a>
-        <span class="n">what ymmv keeps</span>
-      </div>
-    </div>
-    <div class="fg">
-      <span class="g">source</span>
-      <div class="fl">
-        <a href="https://github.com/ymmv-fyi/ymmv">github.com/ymmv-fyi/ymmv</a>
-        <span class="n">code + issues</span>
-      </div>
-    </div>
-  </footer>
+    <pre
+      class="panel code"><span class="t-p">$ </span>curl https://ymmv.fyi/api/v1/u/&lt;handle&gt;
+
+{"{"}
+  <span class="t-k">"schema_version"</span>: {SCHEMA_VERSION},
+  <span class="t-k">"handle"</span>: "octocat",
+  <span class="t-k">"entries"</span>: [
+    {"{"} <span class="t-k">"key"</span>: "editor", <span class="t-k">"value"</span>: "Neovim" {"}"},
+    {"{"} <span class="t-k">"key"</span>: "os", <span class="t-k">"value"</span>: "macOS 15.2" {"}"},
+    {"{"} <span class="t-k">"key"</span>: "shell", <span class="t-k">"value"</span>: "fish" {"}"},
+    <span class="t-dim">…</span>
+  ],
+  <span class="t-k">"extras"</span>: [{"{"} <span class="t-k">"label"</span>: "Keyboard", <span class="t-k">"value"</span>: "HHKB Pro 2" {"}"}],
+  <span class="t-k">"updated_at"</span>: "2026-06-28T00:00:00.000Z"
+{"}"}</pre>
+  </section>
+
+  <section class="end" aria-labelledby="end-h">
+    <h2 class="end-h" id="end-h">Your mileage may vary.</h2>
+    <p class="lead">Run it and see how your setup compares.</p>
+    <InstallCommand tone="primary" size="lg" />
+  </section>
 </Layout>
+
+<script>
+  // The sky: only where WebGPU exists. The module (and TypeGPU with it) is a separate chunk, so a
+  // browser without WebGPU never downloads it. Any failure leaves the CSS glow under the canvas.
+  const canvas = document.querySelector<HTMLCanvasElement>(".hero-canvas");
+  const copy = document.querySelector<HTMLElement>("[data-hero-copy]");
+  if (canvas && copy && "gpu" in navigator) {
+    import("../gpu/aurora-hero.ts")
+      .then((m) => m.startAuroraHero(canvas, copy))
+      .catch(() => canvas.remove());
+  }
+
+  // The nav carries the install command once the hero's own copy of it has scrolled away: one
+  // primary action, always in reach, never shown twice.
+  const nav = document.querySelector<HTMLElement>(".site-nav");
+  const start = document.getElementById("start");
+  if (nav && start) {
+    new IntersectionObserver(
+      ([entry]) => nav.toggleAttribute("data-cta-away", !(entry?.isIntersecting ?? true)),
+      { rootMargin: "-64px 0px 0px 0px" },
+    ).observe(start);
+  }
+</script>
