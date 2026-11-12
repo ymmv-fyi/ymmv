@@ -2,21 +2,21 @@
 # starts a local Worker with a demo account that has never published, and writes docs/demo.gif.
 
 Set Shell bash
-# The site's terminal window (the --term-* colors in packages/web/src/styles/ymmv.css): its ink, its
-# faint for the CLI's faint (bright black) and its amber for the CLI's amber (bright yellow). The
-# other colors are warm neighbors the demo never prints.
-Set Theme {"name":"ymmv","background":"#16130e","foreground":"#ece7dc","cursor":"#c4bdae","selection":"#352e22","black":"#272219","red":"#e0735f","green":"#a3b86c","yellow":"#d9a441","blue":"#7f9fc2","magenta":"#c492b8","cyan":"#82b5a9","white":"#c4bdae","brightBlack":"#8a8272","brightRed":"#ef8a76","brightGreen":"#b7cc80","brightYellow":"#ffab2e","brightBlue":"#97b4d4","brightMagenta":"#d6a8ca","brightCyan":"#99c9bd","brightWhite":"#ece7dc"}
-# The site's body face, from docs/demo/fonts: record.sh checks the browser can find it.
-Set FontFamily "IBM Plex Mono"
+# The landing's terminal window (packages/web/src/styles/ymmv.css): --term behind --fg ink, --fg-3
+# for the CLI's faint (bright black), and mint for the CLI's accent (bright yellow), as the landing's
+# transcript draws it. The other colors are cool neighbors the demo never prints.
+Set Theme {"name":"ymmv","background":"#070909","foreground":"#ededed","cursor":"#a3a9ab","selection":"#2a3033","black":"#1c2022","red":"#ff8a80","green":"#6fd3a6","yellow":"#d6c27a","blue":"#7fb0d6","magenta":"#c79bd6","cyan":"#6fd0d0","white":"#a3a9ab","brightBlack":"#858c8e","brightRed":"#ffaaa2","brightGreen":"#8fe8c0","brightYellow":"#3ee6a8","brightBlue":"#9cc6e6","brightMagenta":"#dab4e6","brightCyan":"#8fe2e2","brightWhite":"#ededed"}
+# The site's mono face, from docs/demo/fonts: record.sh checks the browser can find it.
+Set FontFamily "Geist Mono"
 Set FontSize 19
 Set TypingSpeed 55ms
 Set Width 960
 # Tall enough that the last frame shows the whole diff, its command included.
-Set Height 666
+Set Height 694
 Set Padding 24
 Set Margin 24
-# The page's ground: amber marks only links and differences (DESIGN.md).
-Set MarginFill "#0e0c09"
+# The page's ground (--bg): the accent marks only what changed or differs (DESIGN.md).
+Set MarginFill "#050607"
 Set BorderRadius 8
 Set CursorBlink false
 Set WaitTimeout 30s
