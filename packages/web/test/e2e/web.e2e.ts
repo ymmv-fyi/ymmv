@@ -1502,7 +1502,7 @@ test.describe("fonts (Astro Fonts API)", () => {
     expect(font.status()).toBe(200);
     expect(font.headers()["content-type"]).toContain("font/woff2");
 
-    // The Fonts API owns --font-sans/-mono; aurora.css consumes them. Verify the real families
+    // The Fonts API owns --font-sans/-mono; ymmv.css consumes them. Verify the real families
     // are wired (a renamed cssVariable or a dropped <Font> would break this).
     const vars = await page.evaluate(() => {
       const r = getComputedStyle(document.documentElement);

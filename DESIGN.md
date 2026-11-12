@@ -1,4 +1,4 @@
-# ymmv design system — "Aurora"
+# ymmv design system
 
 Canonical source for the web UI (`packages/web`) and the conventions the CLI mirrors. The code
 cites this file; keep it truthful when tokens or rules change (the e2e spec pins the values below).
@@ -32,7 +32,7 @@ font-degradation build. Metric-matched fallbacks are generated (optimizedFallbac
 
 ## Color
 
-Tokens live on `:root` in `packages/web/src/styles/aurora.css`. `--bg` is mirrored in three
+Tokens live on `:root` in `packages/web/src/styles/ymmv.css`. `--bg` is mirrored in three
 places that must agree: the token, Layout's `theme-color` meta, and the hero palette in
 `src/gpu/aurora-hero.ts` (so the canvas meets the page with no seam). The e2e spec pins `--bg` and
 `--mint`.
@@ -53,7 +53,7 @@ Ratios are WCAG contrast against `--bg` (computed 2026-11-11; all clear AA on `-
 
 ### The accent rule (load-bearing)
 
-Decided 2026-11-12, after the Aurora run left it open: mint marks differences only, and links stay
+Decided 2026-11-12, after the landing run left it open: mint marks differences only, and links stay
 ink. Mint marks ONLY what changed or differs: both values of a differing diff row plus its dot, the
 update preview's `~ + -` marks and incoming values, and the published link
 in the landing's transcript (the CLI prints it in its accent). Links are never mint: a link in
@@ -123,8 +123,8 @@ landing's "Update with the same command" tile shows a sample of it.
 
 ## Landing
 
-Decided 2026-11-11 from `/proto/site` (five directions, then four rounds on the winner, direction
-"Aurora"). Top to bottom:
+Decided 2026-11-11 from `/proto/site` (five directions, then four rounds on the winner, the aurora-sky
+direction). Top to bottom:
 
 - **Hero**: the claim is the h1 (`.claim`, "Your dev setup, published in one command."), the
   sub-line (detects ten values, shows the list, publishes when you say yes), the install command
@@ -154,7 +154,7 @@ is the only other motion.
 Rejected in the run. Round 1, five directions: "Band" (the previous House landing with the
 embers as a hero band — a restyle, not a redesign), "Film" (a serif title card and end credits),
 "Room" (the embers fixed behind a one-session transcript column), "Lens" (a camera viewfinder
-with a real focus ring, Archivo condensed) and "Aurora" (chosen). Within Aurora: section kickers
+with a real focus ring, Archivo condensed) and the aurora sky (chosen). Within it: section kickers
 above each heading (repeated their headings), Geist Mono headings and the fork logo (both pulled
 from the old Divergence system — the fork read as git), a three-column "How it works" without
 tiles (the 2×2 tiles read better), an "Open source CLI" eyebrow with a live dot (decoration posing

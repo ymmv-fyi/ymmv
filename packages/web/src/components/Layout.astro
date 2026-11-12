@@ -1,10 +1,10 @@
 ---
-// The page shell (DESIGN.md → Aurora): head, the site stylesheet, self-hosted fonts, the site nav
+// The page shell (DESIGN.md): head, the site stylesheet, self-hosted fonts, the site nav
 // and footer. Every page renders inside this. Dark only: there is no theme toggle. User-controlled
 // text is passed through Astro's auto-escaping {expression} interpolation — NEVER set:html on a
 // profile field.
 import { Font } from "astro:assets";
-import "../styles/aurora.css";
+import "../styles/ymmv.css";
 import InstallCommand from "./InstallCommand.astro";
 
 interface Props {
@@ -42,7 +42,7 @@ const API_DOCS = `${REPO}/blob/main/docs/api.md`;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="darkreader-lock" />
-    {/* Browser-UI color (mobile toolbar/overscroll) = --bg in aurora.css. */}
+    {/* Browser-UI color (mobile toolbar/overscroll) = --bg in ymmv.css. */}
     <meta name="theme-color" content="#050607" />
     <title>{title}</title>
     <meta name="description" content={description} />
